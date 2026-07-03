@@ -68,7 +68,7 @@ for (let i = 1; i < argv.length; i++) {
 
 async function apiFetch(
   path: string,
-  opts: { method?: string; body?: unknown; cfg: Config; auth?: boolean },
+  opts: { method?: string; body?: unknown; cfg: Config; auth?: boolean; raw?: boolean },
 ): Promise<any> {
   const { cfg } = opts;
   const authed = opts.auth !== false;
@@ -100,12 +100,23 @@ async function apiFetch(
     }
   }
 
+  // raw mode: hand the caller status + parsed body so it can branch on codes
+  // (e.g. 409 CHECKPOINT_PENDING retries) instead of dying on any non-2xx.
+  if (opts.raw) {
+    const body = res.status === 204 ? null : await res.json().catch(() => ({}));
+    return { status: res.status, statusText: res.statusText, body };
+  }
+
   if (!res.ok) {
     const b = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     die(`API ${res.status}: ${b.error ?? b.message ?? res.statusText}`);
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function prompt(question: string): Promise<string> {
@@ -130,8 +141,16 @@ Usage:
   braavo runs
   braavo run <pipelineId>
   braavo steer <runId> <message...>
+  braavo handoffs [--open]
+  braavo handoff <runId> [--reason <text>]
+  braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]
   braavo connections
   braavo logout
+
+Handoff — hand a live run to a different AI provider (cross-model handoff):
+  handoffs            list this tenant's handoff ledger (--open = OPEN only)
+  handoff <runId>     request a handoff; freezes a checkpoint, opens the ledger
+  continue <runId>    claim the OPEN handoff and resume on --provider (e.g. OLLAMA)
 
 Config: ~/.braavo/config.json
 Env:    BRAAVO_API_URL overrides the default API base.`;
@@ -209,6 +228,70 @@ async function main(): Promise<void> {
       await apiFetch(`/runs/${id}/steer`, { method: "POST", body: { content: message }, cfg });
       ok("Steering sent — the agent picks it up on its next turn.");
       return;
+    }
+
+    case "handoffs": {
+      requireAuth(cfg);
+      const openOnly = flags.open === "true";
+      const path = openOnly ? "/handoffs?status=OPEN" : "/handoffs";
+      const d = await apiFetch(path, { cfg });
+      const list: any[] = d.handoffs ?? [];
+      if (!list.length) {
+        console.log(openOnly ? "No open handoffs." : "No handoffs yet.");
+        return;
+      }
+      for (const h of list) {
+        const to = h.toProvider ? `→${h.toProvider}` : "";
+        console.log(
+          `${String(h.status ?? "").padEnd(9)}  ${h.id}  run=${h.runId}  from=${h.fromProvider ?? "?"}${to}  ${h.reason ?? ""}`,
+        );
+      }
+      return;
+    }
+
+    case "handoff": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo handoff <runId> [--reason <text>]");
+      const body: Record<string, unknown> = {};
+      if (flags.reason && flags.reason !== "true") body.reason = flags.reason;
+      const d = await apiFetch(`/runs/${id}/handoff`, { method: "POST", body, cfg });
+      ok(`Handoff opened: ${d.handoffId}  (run ${d.status})`);
+      if (d.checkpointPending) {
+        console.log("  Checkpoint is freezing at the next turn boundary — then run: braavo continue " + id + " --provider <P>");
+      } else {
+        console.log("  Ready to claim. Run: braavo continue " + id + " --provider <P>");
+      }
+      return;
+    }
+
+    case "continue": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      const provider = flags.provider && flags.provider !== "true" ? flags.provider : "";
+      if (!id || !provider) die("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
+      const body: Record<string, unknown> = { provider };
+      if (flags.model && flags.model !== "true") body.model = flags.model;
+      if (flags["base-url"] && flags["base-url"] !== "true") body.baseUrl = flags["base-url"];
+
+      // The takeover checkpoint may still be freezing on the live loop's next
+      // turn boundary — the API answers 409 CHECKPOINT_PENDING until it lands.
+      // Retry a few times with a short pause before giving up (plan §2.3a-3).
+      const MAX_ATTEMPTS = 5;
+      for (let attempt = 1; ; attempt++) {
+        const r = await apiFetch(`/runs/${id}/continue`, { method: "POST", body, cfg, raw: true });
+        if (r.status < 400) {
+          ok(`Handoff claimed: ${r.body.handoffId}  →  ${r.body.toProvider}/${r.body.toModel}  (run ${r.body.status})`);
+          return;
+        }
+        const errMsg = r.body?.error ?? r.body?.message ?? r.statusText;
+        if (r.status === 409 && attempt < MAX_ATTEMPTS) {
+          console.log(`  Checkpoint still freezing (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in 2s…`);
+          await sleep(2000);
+          continue;
+        }
+        die(`API ${r.status}: ${errMsg}`);
+      }
     }
 
     case "connections": {
