@@ -51,6 +51,8 @@ export interface KeyStore {
   add(provider: string, secret: string): void;
   list(): KeyEntry[];
   remove(provider: string): void;
+  /** Retrieve the raw secret for local use (e.g. `forge direct`). Never logged by callers. */
+  get(provider: string): string | undefined;
 }
 
 function defaultDeps(): KeyStoreDeps {
@@ -127,6 +129,13 @@ export function makeKeyStore(partial: Partial<KeyStoreDeps> = {}): KeyStore {
         const names = readJson<string[]>(indexPath, []).filter((n) => n !== provider);
         writeIndex(names);
       },
+      get(provider) {
+        try {
+          return deps.exec(["find-generic-password", "-a", provider, "-s", KEYCHAIN_SERVICE, "-w"]).trim();
+        } catch {
+          return undefined;
+        }
+      },
     };
   }
 
@@ -146,6 +155,10 @@ export function makeKeyStore(partial: Partial<KeyStoreDeps> = {}): KeyStore {
       const map = readJson<Record<string, string>>(filePath, {});
       delete map[provider];
       writeFallbackFile(map);
+    },
+    get(provider) {
+      const map = readJson<Record<string, string>>(filePath, {});
+      return map[provider];
     },
   };
 }

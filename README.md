@@ -14,6 +14,8 @@ Terminal interface for Braavolabs — two distinct binaries for agent operations
 - View cost & token savings over time
 - Store local provider API keys (macOS Keychain / chmod-600 file)
 - Keys never leave your machine
+- **Serverless modes (Lane-A):** `local` (keyless, offline, straight to Ollama) and
+  `direct` (BYOK, one-shot completion straight to a provider) — no Braavolabs server involved
 
 ## Installation
 
@@ -54,6 +56,15 @@ forge savings --days 7
 forge keys add anthropic --key "sk-ant-v0..."
 forge keys list
 forge keys rm anthropic
+
+# Serverless: talk straight to a local Ollama daemon (no key, no server)
+forge local "Explain OAuth 2.0"
+
+# Serverless: one-shot BYOK completion straight to a provider
+forge direct anthropic "Explain OAuth 2.0"
+
+# List local Ollama models + which BYOK providers have a stored key
+forge models
 ```
 
 ### braavo
@@ -175,6 +186,54 @@ Clear stored credentials and keys.
 ```bash
 forge logout
 ```
+
+### local
+
+Serverless, keyless, offline: send a question directly to a local [Ollama](https://ollama.com) daemon. No login, no BYOK key, no network call beyond `localhost`.
+
+```bash
+forge local "Explain OAuth 2.0"
+forge local "Explain OAuth 2.0" --model llama3.1
+forge local "..." --host http://192.168.1.50:11434
+```
+
+- Talks to Ollama's native API: `GET /api/tags` to discover installed models, `POST /api/chat` (`stream:false`) for the completion.
+- `--model` picks the model; if omitted, forge uses the first model returned by `/api/tags` (i.e. whatever you have installed — it never guesses a name that isn't there).
+- Base URL resolution: `--host` flag > `OLLAMA_HOST` env var > `http://localhost:11434`.
+- If Ollama isn't running (or unreachable at the resolved host), forge fails honestly: `Ollama not reachable — is it running?` — it does not retry silently or fabricate a response.
+
+### direct
+
+Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `forge keys`. The Braavolabs server is never contacted.
+
+```bash
+forge direct anthropic "Explain OAuth 2.0"
+forge direct openai "Explain OAuth 2.0" --model gpt-4o
+forge direct groq "Explain OAuth 2.0"
+```
+
+Supported providers (Lane-A v1): `anthropic`, `openai`, `groq`.
+
+| Provider | Endpoint | Auth | Default `--model` |
+|---|---|---|---|
+| `anthropic` | `POST https://api.anthropic.com/v1/messages` | `x-api-key` header | `claude-3-5-sonnet-20241022` |
+| `openai` | `POST https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `gpt-4o-mini` |
+| `groq` | `POST https://api.groq.com/openai/v1/chat/completions` (openai-compatible) | `Authorization: Bearer` | `llama-3.1-8b-instant` |
+
+Notes:
+- Requires a key stored via `forge keys add <provider>` first; otherwise forge tells you exactly that: `no key stored — run: forge keys add <provider>`.
+- The default models above are **documented, stable snapshots — not a claim that they're the newest available**. Check the provider's own model list and pass `--model <name>` to use something else.
+- The key is read from local storage, used only in that provider's own auth header for this one request, and is never printed, logged, or included in any error message.
+
+### models
+
+List what's available for the serverless modes: local Ollama models plus which BYOK providers have a key stored.
+
+```bash
+forge models
+```
+
+Shows the resolved Ollama host and its installed models (or a clear "not reachable" line if the daemon is down), followed by a per-provider row for `anthropic` / `openai` / `groq` showing whether a key is stored.
 
 ## braavo Commands
 

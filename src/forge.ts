@@ -22,6 +22,20 @@ import {
   savings,
 } from "./forge/client";
 import { makeKeyStore } from "./forge/keys";
+import {
+  resolveOllamaHost,
+  resolveOllamaModel,
+  listOllamaModels,
+  ollamaChat,
+  OllamaUnreachableError,
+} from "./forge/local";
+import {
+  DIRECT_PROVIDERS,
+  DIRECT_DEFAULT_MODEL,
+  DirectApiError,
+  directChat,
+  isDirectProvider,
+} from "./forge/direct";
 
 // ── arg parsing: forge <cmd> [positionals...] [--flag value | --flag] ─────────
 export interface ParsedArgs {
@@ -152,6 +166,30 @@ export function renderSavingsTable(ui: Ui, data: any): string[] {
   return out;
 }
 
+export function renderModelsTable(
+  ui: Ui,
+  data: { ollamaHost: string; ollamaReachable: boolean; ollamaModels: string[]; keyProviders: string[] },
+): string[] {
+  const out: string[] = [];
+  out.push(ui.primary("── local (Ollama) ──"));
+  out.push(ui.steel(`  host: ${data.ollamaHost}`));
+  if (!data.ollamaReachable) {
+    out.push(ui.dim("  not reachable — is it running?"));
+  } else if (!data.ollamaModels.length) {
+    out.push(ui.dim("  no models installed — run: ollama pull <model>"));
+  } else {
+    for (const m of data.ollamaModels) out.push(`  ${ui.primary(m)}`);
+  }
+  out.push("");
+  out.push(ui.primary("── direct (BYOK) ──"));
+  for (const provider of DIRECT_PROVIDERS) {
+    const has = data.keyProviders.includes(provider);
+    const label = has ? ui.primary("key stored") : ui.dim("no key — forge keys add " + provider);
+    out.push(`  ${provider.padEnd(10)} ${label}`);
+  }
+  return out;
+}
+
 // ── interactive helpers ───────────────────────────────────────────────────────
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -194,13 +232,19 @@ ${ui.steel("Usage")}
   ${p("forge cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
   ${p("forge savings")} [--days <1-90>]
   ${p("forge keys")}    add <provider> [--key <secret>] | list | rm <provider>
+  ${p("forge local")}   "<question>" [--model <name>] [--host <url>]
+  ${p("forge direct")}  <provider> "<question>" [--model <name>]
+  ${p("forge models")}  list local Ollama models + BYOK providers with a stored key
   ${p("forge logout")}
 
 ${ui.steel("ask")}      one question, several models, side-by-side (async compare + poll)
 ${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
 ${ui.steel("keys")}     LOCAL BYOK storage (macOS keychain / chmod-600 file) — never sent to the server
+${ui.steel("local")}    serverless, keyless — talks straight to a local Ollama daemon
+${ui.steel("direct")}   serverless BYOK — one-shot completion straight to ${DIRECT_PROVIDERS.join("/")}
 
-Config: ~/.forge/config.json   ·   Env: FORGE_API_URL overrides the API base.`;
+Config: ~/.forge/config.json   ·   Env: FORGE_API_URL overrides the API base.
+Ollama: OLLAMA_HOST overrides the local daemon base (default http://localhost:11434).`;
 };
 
 async function main(): Promise<void> {
@@ -321,6 +365,67 @@ async function main(): Promise<void> {
       const days = daysFlag ? Number(daysFlag) : undefined;
       const data = await savings(cfg, { days });
       for (const line of renderSavingsTable(ui, data)) console.log(line);
+      return;
+    }
+
+    case "local": {
+      const query = positionals.join(" ").trim();
+      if (!query) die('usage: forge local "<question>" [--model <name>] [--host <url>]');
+      const host = resolveOllamaHost(flag(flags, "host"));
+      const spin = ui.spinner("asking local model…");
+      try {
+        const model = await resolveOllamaModel(host, flag(flags, "model"));
+        spin.update(`asking ${model}…`);
+        const res = await ollamaChat(host, model, query);
+        spin.stop();
+        console.log(res.content);
+      } catch (e) {
+        spin.stop();
+        if (e instanceof OllamaUnreachableError) die(e.message);
+        throw e;
+      }
+      return;
+    }
+
+    case "direct": {
+      const provider = positionals[0];
+      const query = positionals.slice(1).join(" ").trim();
+      if (!provider || !query) die('usage: forge direct <provider> "<question>" [--model <name>]');
+      if (!isDirectProvider(provider)) {
+        die(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
+      }
+      const store = makeKeyStore();
+      const apiKey = store.get(provider);
+      if (!apiKey) die(`no key stored — run: forge keys add ${provider}`);
+      const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
+      const spin = ui.spinner(`asking ${provider}/${model}…`);
+      try {
+        const res = await directChat(provider, apiKey, model, query);
+        spin.stop();
+        console.log(res.content);
+      } catch (e) {
+        spin.stop();
+        if (e instanceof DirectApiError) die(`${e.provider} ${e.status}: ${e.message}`);
+        throw e;
+      }
+      return;
+    }
+
+    case "models": {
+      const host = resolveOllamaHost(flag(flags, "host"));
+      let ollamaReachable = true;
+      let ollamaModels: string[] = [];
+      try {
+        ollamaModels = await listOllamaModels(host);
+      } catch (e) {
+        if (e instanceof OllamaUnreachableError) ollamaReachable = false;
+        else throw e;
+      }
+      const store = makeKeyStore();
+      const keyProviders = store.list().map((k) => k.provider);
+      for (const line of renderModelsTable(ui, { ollamaHost: host, ollamaReachable, ollamaModels, keyProviders })) {
+        console.log(line);
+      }
       return;
     }
 
