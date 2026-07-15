@@ -46,6 +46,27 @@ import {
   type SpawnVendor,
   type VendorStatus,
 } from "./forge/spawn";
+import { collectRepoContext, prependRepoContext } from "./forge/repo";
+import {
+  SUGGESTION_NOTE,
+  defaultRunCmd,
+  runFix,
+  type AskFn,
+  type FixOutcome,
+} from "./forge/fix";
+import {
+  loadMcpConfig,
+  saveMcpConfig,
+  addMcpServer,
+  removeMcpServer,
+  parseMcpAdd,
+  listServerTools,
+  callServerTool,
+  defaultMcpSpawn,
+  type McpConfig,
+  type McpTool,
+  type McpCallResult,
+} from "./forge/mcp";
 
 // ── arg parsing: forge <cmd> [positionals...] [--flag value | --flag] ─────────
 export interface ParsedArgs {
@@ -228,6 +249,70 @@ export function renderSpawnList(ui: Ui, statuses: VendorStatus[]): string[] {
   return out;
 }
 
+// ── fix (P-C4) renderers ──────────────────────────────────────────────────────
+/** Suggestion-only output; green short-circuit prints an arc line and no model text. */
+export function renderFixLines(ui: Ui, outcome: FixOutcome): string[] {
+  if (outcome.green) {
+    return [ui.primary("✓ tests already green")];
+  }
+  return [
+    ui.steel(`· ${SUGGESTION_NOTE}`),
+    ui.dim(`  (exit ${outcome.code} — forge never applies changes)`),
+    "",
+    String(outcome.suggestion ?? ""),
+  ];
+}
+
+// ── mcp (P-C4) renderers ──────────────────────────────────────────────────────
+export function renderMcpList(ui: Ui, cfg: McpConfig): string[] {
+  const names = Object.keys(cfg).sort();
+  if (!names.length) {
+    return [ui.dim("No MCP servers. Add one: forge mcp add <name> -- <command> [args...]")];
+  }
+  const out = [ui.primary("── mcp servers ──")];
+  for (const name of names) {
+    const def = cfg[name];
+    out.push(`  ${ui.primary(name.padEnd(16))} ${ui.steel(`${def.command} ${def.args.join(" ")}`.trim())}`);
+  }
+  return out;
+}
+
+export function renderMcpTools(ui: Ui, server: string, tools: McpTool[]): string[] {
+  const out = [ui.primary(`── ${server} · tools (${tools.length}) ──`)];
+  if (!tools.length) {
+    out.push(ui.dim("  (server exposed no tools)"));
+    return out;
+  }
+  const width = Math.min(28, Math.max(...tools.map((t) => t.name.length)));
+  for (const t of tools) {
+    const desc = (t.description ?? "").split("\n")[0];
+    out.push(`  ${ui.primary(t.name.padEnd(width))}  ${ui.steel(desc)}`.trimEnd());
+  }
+  return out;
+}
+
+export function renderMcpCallResult(ui: Ui, result: McpCallResult): string[] {
+  const texts = result.content.filter((c) => typeof c.text === "string").map((c) => String(c.text));
+  const body = texts.length ? texts.join("\n") : "(no textual content)";
+  if (result.isError) {
+    return [ui.fail("tool reported an error:"), body];
+  }
+  return [body];
+}
+
+/**
+ * Resolve the optional --repo context block. `enabled` is presence of --repo.
+ * Dies with an honest error when --repo is set but cwd is not a git repo, so we
+ * never silently drop the context the user asked for.
+ */
+function resolveRepoBlock(enabled: boolean, die: (msg: string) => never, ui: Ui): string | undefined {
+  if (!enabled) return undefined;
+  const res = collectRepoContext({ cwd: process.cwd() });
+  if (!res.ok) die(res.error);
+  if (res.truncated) console.error(ui.dim("· repo context exceeded 4KB — truncated"));
+  return res.text;
+}
+
 // ── interactive helpers ───────────────────────────────────────────────────────
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -266,12 +351,14 @@ const HELP = (ui: Ui): string => {
 ${ui.steel("Usage")}
   ${p("forge login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
   ${p("forge use")}     <companyId>                 set the default company
-  ${p("forge ask")}     "<question>" [--company <id>] [--models a,b,c]
+  ${p("forge ask")}     "<question>" [--company <id>] [--models a,b,c] [--repo]
   ${p("forge cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
   ${p("forge savings")} [--days <1-90>]
   ${p("forge keys")}    add <provider> [--key <secret>] | list | rm <provider>
-  ${p("forge local")}   "<question>" [--model <name>] [--host <url>]
-  ${p("forge direct")}  <provider> "<question>" [--model <name>]
+  ${p("forge local")}   "<question>" [--model <name>] [--host <url>] [--repo]
+  ${p("forge direct")}  <provider> "<question>" [--model <name>] [--repo]
+  ${p("forge fix")}     --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]
+  ${p("forge mcp")}     add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']
   ${p("forge spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet]  |  --list
   ${p("forge models")}  list local Ollama models + BYOK providers with a stored key
   ${p("forge logout")}
@@ -281,6 +368,9 @@ ${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
 ${ui.steel("keys")}     LOCAL BYOK storage (macOS keychain / chmod-600 file) — never sent to the server
 ${ui.steel("local")}    serverless, keyless — talks straight to a local Ollama daemon
 ${ui.steel("direct")}   serverless BYOK — one-shot completion straight to ${DIRECT_PROVIDERS.join("/")}
+${ui.steel("fix")}      runs YOUR test command; on failure asks a model for a fix (suggestion-only, never applied)
+${ui.steel("mcp")}      dep-free Model Context Protocol stdio client — register servers, list & call their tools
+${ui.steel("--repo")}   ask/local/direct/fix: prepend git branch + status + recent commits + diff --stat (≤4KB)
 ${ui.steel("spawn")}    runs YOUR own authenticated ${SPAWN_VENDORS.join("/")} CLI as a child — opaque passthrough, no vendor OAuth
 
 Config: ~/.forge/config.json   ·   Env: FORGE_API_URL overrides the API base.
@@ -342,8 +432,10 @@ async function main(): Promise<void> {
 
     case "ask": {
       requireAuth(cfg);
-      const query = positionals.join(" ").trim();
-      if (!query) die('usage: forge ask "<question>" [--company <id>] [--models a,b,c]');
+      let query = positionals.join(" ").trim();
+      if (!query) die('usage: forge ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
+      const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
+      if (repoBlock) query = prependRepoContext(repoBlock, query);
       const companyId = flag(flags, "company") ?? cfg.defaultCompany;
       if (!companyId) die("No company. Run: forge use <companyId>  (or pass --company <id>)");
 
@@ -409,8 +501,10 @@ async function main(): Promise<void> {
     }
 
     case "local": {
-      const query = positionals.join(" ").trim();
-      if (!query) die('usage: forge local "<question>" [--model <name>] [--host <url>]');
+      let query = positionals.join(" ").trim();
+      if (!query) die('usage: forge local "<question>" [--model <name>] [--host <url>] [--repo]');
+      const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
+      if (repoBlock) query = prependRepoContext(repoBlock, query);
       const host = resolveOllamaHost(flag(flags, "host"));
       const spin = ui.spinner("asking local model…");
       try {
@@ -429,11 +523,13 @@ async function main(): Promise<void> {
 
     case "direct": {
       const provider = positionals[0];
-      const query = positionals.slice(1).join(" ").trim();
-      if (!provider || !query) die('usage: forge direct <provider> "<question>" [--model <name>]');
+      let query = positionals.slice(1).join(" ").trim();
+      if (!provider || !query) die('usage: forge direct <provider> "<question>" [--model <name>] [--repo]');
       if (!isDirectProvider(provider)) {
         die(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
       }
+      const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
+      if (repoBlock) query = prependRepoContext(repoBlock, query);
       const store = makeKeyStore();
       const apiKey = store.get(provider);
       if (!apiKey) die(`no key stored — run: forge keys add ${provider}`);
@@ -511,6 +607,138 @@ async function main(): Promise<void> {
         // Spawn itself failed (binary vanished / not executable) → graceful fallback.
         for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
         process.exit(1);
+      }
+      return;
+    }
+
+    case "fix": {
+      const testCmd = flag(flags, "cmd");
+      if (!testCmd) {
+        die('usage: forge fix --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]');
+      }
+      const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
+      const via = flag(flags, "via") ?? "ask";
+      // Resolve the backend that turns a failure payload into a suggestion.
+      // Only ever invoked when the command FAILS (cost honesty lives in runFix).
+      let ask: AskFn;
+      if (via === "local") {
+        const host = resolveOllamaHost(flag(flags, "host"));
+        ask = async (p) => {
+          const model = await resolveOllamaModel(host, flag(flags, "model"));
+          return (await ollamaChat(host, model, p)).content;
+        };
+      } else if (via === "direct") {
+        const provider = flag(flags, "provider");
+        if (!provider || !isDirectProvider(provider)) {
+          die(`--via direct needs --provider <${DIRECT_PROVIDERS.join("|")}>`);
+        }
+        const store = makeKeyStore();
+        const apiKey = store.get(provider);
+        if (!apiKey) die(`no key stored — run: forge keys add ${provider}`);
+        const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
+        ask = async (p) => (await directChat(provider, apiKey, model, p)).content;
+      } else if (via === "ask") {
+        requireAuth(cfg);
+        ask = async (p) => String((await cascade(cfg, { prompt: p }))?.answer ?? "");
+      } else {
+        die(`unknown --via "${via}". Use: local | direct | ask`);
+      }
+
+      const spin = ui.spinner(`running: ${testCmd}`);
+      try {
+        const outcome = await runFix(testCmd, { run: defaultRunCmd, ask, repoBlock });
+        spin.stop();
+        for (const line of renderFixLines(ui, outcome)) console.log(line);
+        if (!outcome.green) process.exitCode = outcome.code;
+      } catch (e) {
+        spin.stop();
+        if (e instanceof DirectApiError) die(`${e.provider} ${e.status}: ${e.message}`);
+        if (e instanceof OllamaUnreachableError) die(e.message);
+        throw e;
+      }
+      return;
+    }
+
+    case "mcp": {
+      const sub = positionals[0];
+      switch (sub) {
+        case "add": {
+          // Parse from raw argv — the "--" separator is deliberately handled here
+          // (parseArgs treats "--" as a flag), so the server command is verbatim.
+          const afterAdd = process.argv.slice(2).slice(2); // tokens after "mcp add"
+          const parsed = parseMcpAdd(afterAdd);
+          if ("error" in parsed) die(parsed.error);
+          const next = addMcpServer(loadMcpConfig(), parsed.name, parsed.command, parsed.args);
+          saveMcpConfig(next);
+          ui.ok(`Added MCP server "${parsed.name}" → ${parsed.command} ${parsed.args.join(" ")}`.trim());
+          return;
+        }
+        case "list": {
+          for (const line of renderMcpList(ui, loadMcpConfig())) console.log(line);
+          return;
+        }
+        case "rm": {
+          const name = positionals[1];
+          if (!name) die("usage: forge mcp rm <name>");
+          const conf = loadMcpConfig();
+          if (!conf[name]) die(`no such MCP server: ${name}`);
+          saveMcpConfig(removeMcpServer(conf, name));
+          ui.ok(`Removed MCP server "${name}".`);
+          return;
+        }
+        case "tools": {
+          const name = positionals[1];
+          if (!name) die("usage: forge mcp tools <name>");
+          const def = loadMcpConfig()[name];
+          if (!def) die(`no such MCP server: ${name}  (add it: forge mcp add ${name} -- <command>)`);
+          const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
+          const spin = ui.spinner(`${name}: initializing…`);
+          try {
+            const tools = await listServerTools(def, defaultMcpSpawn, {
+              timeoutMs,
+              onStderr: (c) => process.stderr.write(ui.steel(c)),
+            });
+            spin.stop();
+            for (const line of renderMcpTools(ui, name, tools)) console.log(line);
+          } catch (e) {
+            spin.stop();
+            throw e;
+          }
+          return;
+        }
+        case "call": {
+          const name = positionals[1];
+          const tool = positionals[2];
+          if (!name || !tool) die("usage: forge mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
+          const def = loadMcpConfig()[name];
+          if (!def) die(`no such MCP server: ${name}`);
+          let toolArgs: Record<string, unknown> = {};
+          const jsonFlag = flag(flags, "json");
+          if (jsonFlag) {
+            try {
+              toolArgs = JSON.parse(jsonFlag);
+            } catch {
+              die(`--json is not valid JSON: ${jsonFlag}`);
+            }
+          }
+          const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
+          const spin = ui.spinner(`${name}: calling ${tool}…`);
+          try {
+            const result = await callServerTool(def, tool, toolArgs, defaultMcpSpawn, {
+              timeoutMs,
+              onStderr: (c) => process.stderr.write(ui.steel(c)),
+            });
+            spin.stop();
+            for (const line of renderMcpCallResult(ui, result)) console.log(line);
+            if (result.isError) process.exitCode = 1;
+          } catch (e) {
+            spin.stop();
+            throw e;
+          }
+          return;
+        }
+        default:
+          die("usage: forge mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']");
       }
       return;
     }

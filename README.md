@@ -18,6 +18,12 @@ Terminal interface for Braavolabs — two distinct binaries for agent operations
   `direct` (BYOK, one-shot completion straight to a provider) — no Braavolabs server involved
 - **Safe-spawn (Lane-B):** `spawn` runs your own already-authenticated `claude`/`codex` CLI
   as an opaque child process — no vendor OAuth, output never parsed, token files never touched
+- **Repo-aware prompting:** `--repo` prepends a compact git snapshot (branch, status, recent
+  commits, diff --stat, ≤4KB) to `ask`/`local`/`direct`/`fix`
+- **Suggest-a-fix:** `fix` runs your own test command and, only on failure, asks a model for a
+  fix — suggestion-only, never applied
+- **MCP client:** `mcp` is a dependency-free Model Context Protocol stdio client (register
+  servers, list & call their tools)
 
 ## Installation
 
@@ -68,6 +74,17 @@ forge direct anthropic "Explain OAuth 2.0"
 # Run your OWN authenticated vendor CLI as an opaque child (no vendor OAuth)
 forge spawn claude "refactor this module"
 forge spawn --list
+
+# Prepend a compact git snapshot (branch/status/commits/diff --stat, ≤4KB) to the prompt
+forge ask "why is CI red?" --repo
+
+# Run YOUR test command; on failure, get a suggested fix (never auto-applied)
+forge fix --cmd "pnpm test" --repo
+
+# Dependency-free Model Context Protocol stdio client
+forge mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+forge mcp tools fs
+forge mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
 
 # List local Ollama models + which BYOK providers have a stored key
 forge models
@@ -268,6 +285,64 @@ forge spawn --list                             # which vendor CLIs are installed
 - Touch OAuth **token/cookie files** (`~/.claude*`, `~/.codex*`, credentials, `auth.json`) — **not even to read them**. Binary discovery looks only at `PATH` and neutral bin dirs, never inside a vendor config directory. `spawn --list` reports *installed-or-not only*; it deliberately does **not** probe login state.
 - Impose directory isolation the user didn't ask for.
 - Add a runtime dependency — the adapter stays dependency-free (Node built-ins only).
+
+### --repo (structured git context)
+
+`ask`, `local`, `direct`, and `fix` accept `--repo`. When set, forge gathers a compact, factual snapshot of the **current git work tree** and prepends it to the prompt so the model reasons about your actual state instead of guessing:
+
+```bash
+forge ask "why is CI failing?" --repo
+forge local "suggest a commit message" --repo
+forge direct anthropic "review my staged changes" --repo
+forge fix --cmd "pnpm test" --repo
+```
+
+The block contains: current **branch**, `git status --porcelain`, the **last 5 commits** (`git log -5 --oneline`), and both **staged** and **unstaged** `diff --stat`.
+
+- Every git call is an **execFile arg-array** — no shell, no injection seam (`src/forge/repo.ts`).
+- The block is capped at **~4KB**. On overflow it is cut and marked with an honest `[truncated …]` line — forge tells you it dropped context rather than silently trimming.
+- If the current directory is **not** a git repository, forge stops with an honest error (`not a git repository: <cwd>`) rather than fabricating a "clean tree".
+
+### fix
+
+Run **your own** test command; if it fails, send the failing output (plus optional `--repo` context) to a model and print a **suggested** fix. Forge **never edits a file or applies a patch** — the suggestion is yours to review and apply.
+
+```bash
+forge fix --cmd "pnpm test"                              # backend defaults to --via ask (server cascade)
+forge fix --cmd "pnpm test" --via local                  # local Ollama
+forge fix --cmd "pnpm test" --via direct --provider anthropic
+forge fix --cmd "vitest run packages/cli" --repo         # include git context in the payload
+```
+
+- **Security:** `--cmd` is **your own command**, executed with `sh -c` exactly as written. Forge adds nothing to it — treat it like any shell command you'd run yourself, and don't paste a command you wouldn't run by hand.
+- **Cost honesty:** if the command exits **0**, forge prints `✓ tests already green` and **never calls a model** — no spend on a passing suite.
+- **Suggestion-only:** on failure the output is prefixed with a steel `suggestion only — review before applying` note; forge prints the model's proposed change and exits with the command's own exit code. It does not write to disk.
+- **`--via`** selects the backend that turns the failure into a suggestion: `ask` (Braavolabs server cascade, needs login), `local` (Ollama), or `direct` (BYOK, needs `--provider`). Only the tail (~80 lines) of the output is sent.
+
+### mcp
+
+A **dependency-free Model Context Protocol stdio client**. Register MCP servers, list their tools, and call a tool — all over line-delimited JSON-RPC 2.0 spoken to the server's stdin/stdout, built only on Node built-ins.
+
+```bash
+# Register a server. The "--" separator is MANDATORY; everything after it is the
+# server command + args, stored as a discrete array (no shell, no injection).
+forge mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+
+forge mcp list                       # registered servers
+forge mcp rm fs                      # remove one
+
+forge mcp tools fs                   # spawn, handshake, tools/list — tabulated
+forge mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
+forge mcp call fs read_file --json '{"path":"…"}' --timeout 30000
+```
+
+- **Config** lives in `~/.forge/mcp.json` as `{ "<name>": { "command": "...", "args": [...] } }`. The command is always an **argument array** — never a joined string — so there is no shell-injection seam when the server is later spawned.
+- **Handshake:** `initialize` (protocolVersion `2024-11-05`, `clientInfo: { name: "forge" }`) → `notifications/initialized` → `tools/list` | `tools/call`.
+- **Timeout:** every request has a timeout (default **10s**, override with `--timeout <ms>`) so a wedged server can't hang the CLI.
+- **stderr** from the server is streamed through verbatim in steel for debugging, and is **never** parsed as JSON-RPC — only stdout carries protocol messages.
+- A tool result with `isError: true` is printed through the molten error line and forge exits non-zero.
+
+> **Scope note (deliberately narrow).** This P-C4 slice ships `--repo` context, `fix`, and an MCP stdio client. **Sandbox/isolation parity** for spawned commands and MCP servers (containerized execution, filesystem/network confinement) is **not** in this CLI slice — it is deferred to the **desktop app, Phase D**. Until then, `fix --cmd` and MCP servers run with your own user's privileges; run only commands and servers you trust.
 
 ### models
 
