@@ -36,6 +36,16 @@ import {
   directChat,
   isDirectProvider,
 } from "./forge/direct";
+import {
+  SPAWN_VENDORS,
+  VENDOR_SPECS,
+  findBinary,
+  spawnVendor,
+  probeVendor,
+  isSpawnVendor,
+  type SpawnVendor,
+  type VendorStatus,
+} from "./forge/spawn";
 
 // ── arg parsing: forge <cmd> [positionals...] [--flag value | --flag] ─────────
 export interface ParsedArgs {
@@ -190,6 +200,34 @@ export function renderModelsTable(
   return out;
 }
 
+// ── spawn (Lane-B) renderers ──────────────────────────────────────────────────
+/** One-line, steel ToS-risk note shown before a spawn (suppressible via --quiet). */
+export function spawnRiskLine(ui: Ui, vendor: SpawnVendor): string {
+  return ui.steel(`· ${VENDOR_SPECS[vendor].risk}`);
+}
+
+/** Honest "not installed" message + the graceful API-key fallback (rule g). */
+export function spawnFallbackLines(ui: Ui, vendor: SpawnVendor): string[] {
+  return [
+    ui.fail(`${vendor} CLI not found. Log in with the official ${vendor} binary first, or use API-key mode:`),
+    `  ${ui.primary(VENDOR_SPECS[vendor].fallback)}`,
+  ];
+}
+
+/** `spawn --list`: installed-or-not + version, per vendor. Never probes login state. */
+export function renderSpawnList(ui: Ui, statuses: VendorStatus[]): string[] {
+  const out: string[] = [];
+  out.push(ui.primary("── spawn vendors (your own authenticated CLI) ──"));
+  for (const s of statuses) {
+    const state = s.installed
+      ? ui.primary(`installed${s.version ? ` · ${s.version}` : ""}`)
+      : ui.dim("not installed");
+    out.push(`  ${s.vendor.padEnd(8)} ${state}`);
+    out.push(`  ${" ".repeat(8)} ${ui.steel(s.risk)}`);
+  }
+  return out;
+}
+
 // ── interactive helpers ───────────────────────────────────────────────────────
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -234,6 +272,7 @@ ${ui.steel("Usage")}
   ${p("forge keys")}    add <provider> [--key <secret>] | list | rm <provider>
   ${p("forge local")}   "<question>" [--model <name>] [--host <url>]
   ${p("forge direct")}  <provider> "<question>" [--model <name>]
+  ${p("forge spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet]  |  --list
   ${p("forge models")}  list local Ollama models + BYOK providers with a stored key
   ${p("forge logout")}
 
@@ -242,6 +281,7 @@ ${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
 ${ui.steel("keys")}     LOCAL BYOK storage (macOS keychain / chmod-600 file) — never sent to the server
 ${ui.steel("local")}    serverless, keyless — talks straight to a local Ollama daemon
 ${ui.steel("direct")}   serverless BYOK — one-shot completion straight to ${DIRECT_PROVIDERS.join("/")}
+${ui.steel("spawn")}    runs YOUR own authenticated ${SPAWN_VENDORS.join("/")} CLI as a child — opaque passthrough, no vendor OAuth
 
 Config: ~/.forge/config.json   ·   Env: FORGE_API_URL overrides the API base.
 Ollama: OLLAMA_HOST overrides the local daemon base (default http://localhost:11434).`;
@@ -425,6 +465,52 @@ async function main(): Promise<void> {
       const keyProviders = store.list().map((k) => k.provider);
       for (const line of renderModelsTable(ui, { ollamaHost: host, ollamaReachable, ollamaModels, keyProviders })) {
         console.log(line);
+      }
+      return;
+    }
+
+    case "spawn": {
+      // --list: report installed-or-not (+ version) for each vendor. No token peeking.
+      if (flags["list"] === "true" || positionals[0] === "list") {
+        const statuses = SPAWN_VENDORS.map((v) => probeVendor(v));
+        for (const line of renderSpawnList(ui, statuses)) console.log(line);
+        return;
+      }
+      const vendor = positionals[0];
+      if (!vendor || !isSpawnVendor(vendor)) {
+        die(`usage: forge spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  forge spawn --list`);
+      }
+      // Everything after the vendor is passed VERBATIM to the child (arg array —
+      // no shell, no injection). --dir carves out its own working directory but
+      // is not forwarded to the vendor; every other token is.
+      const passthrough: string[] = [];
+      let cwd: string | undefined;
+      let quiet = false;
+      const rest = process.argv.slice(2);
+      const vIdx = rest.indexOf(vendor);
+      for (let i = vIdx + 1; i < rest.length; i++) {
+        const a = rest[i];
+        if (a === "--dir") {
+          cwd = rest[++i];
+        } else if (a === "--quiet") {
+          quiet = true;
+        } else {
+          passthrough.push(a);
+        }
+      }
+      const binPath = findBinary(vendor);
+      if (!binPath) {
+        for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+        process.exit(1);
+      }
+      if (!quiet) console.error(spawnRiskLine(ui, vendor));
+      try {
+        const code = await spawnVendor(binPath, passthrough, { cwd });
+        process.exit(code); // own the child's exit code verbatim
+      } catch {
+        // Spawn itself failed (binary vanished / not executable) → graceful fallback.
+        for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+        process.exit(1);
       }
       return;
     }

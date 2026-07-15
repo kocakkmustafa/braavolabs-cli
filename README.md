@@ -16,6 +16,8 @@ Terminal interface for Braavolabs — two distinct binaries for agent operations
 - Keys never leave your machine
 - **Serverless modes (Lane-A):** `local` (keyless, offline, straight to Ollama) and
   `direct` (BYOK, one-shot completion straight to a provider) — no Braavolabs server involved
+- **Safe-spawn (Lane-B):** `spawn` runs your own already-authenticated `claude`/`codex` CLI
+  as an opaque child process — no vendor OAuth, output never parsed, token files never touched
 
 ## Installation
 
@@ -62,6 +64,10 @@ forge local "Explain OAuth 2.0"
 
 # Serverless: one-shot BYOK completion straight to a provider
 forge direct anthropic "Explain OAuth 2.0"
+
+# Run your OWN authenticated vendor CLI as an opaque child (no vendor OAuth)
+forge spawn claude "refactor this module"
+forge spawn --list
 
 # List local Ollama models + which BYOK providers have a stored key
 forge models
@@ -224,6 +230,44 @@ Notes:
 - Requires a key stored via `forge keys add <provider>` first; otherwise forge tells you exactly that: `no key stored — run: forge keys add <provider>`.
 - The default models above are **documented, stable snapshots — not a claim that they're the newest available**. Check the provider's own model list and pass `--model <name>` to use something else.
 - The key is read from local storage, used only in that provider's own auth header for this one request, and is never printed, logged, or included in any error message.
+
+### spawn
+
+Run **your own, already-authenticated** vendor CLI (`claude` or `codex`) as a child process. Forge is a thin, opaque passthrough — it does **not** re-implement the vendor, and it does **not** perform any vendor OAuth. You must have logged in with the official binary beforehand.
+
+```bash
+forge spawn claude "refactor this module"      # anything after the vendor is passed verbatim
+forge spawn codex --model o4-mini "write tests"
+forge spawn claude --dir ./packages/api "..."  # run the session in a specific directory
+forge spawn claude --quiet "..."               # suppress the one-line risk note
+forge spawn --list                             # which vendor CLIs are installed (+ version)
+```
+
+- **`--dir <path>`** sets the working directory for the session (default: current cwd). This flag is consumed by forge and **not** forwarded to the vendor; every other token after the vendor name is passed through unchanged.
+- **`--quiet`** suppresses the one-line ToS-risk note printed before the session.
+- Before each run, forge prints a single steel line stating the vendor's ToS-risk level (`claude` = SAFE / volatile; `codex` = SAFE / lowest risk).
+- If the binary isn't found (or the spawn fails), forge degrades gracefully and points you at API-key mode, e.g. `forge direct anthropic "<question>"` — it never fabricates a result.
+- Forge exits with the child's own exit code.
+
+#### Lane-B safety contract
+
+`forge spawn` is a **SAFE-SPAWN adapter**, not an automation of someone else's account. The rules below are enforced by the implementation (`src/forge/spawn.ts`) and are non-negotiable:
+
+**MUST**
+- Run **only** the official vendor binary, discovered on `PATH` (or at a neutral bin dir such as `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
+- Pass all vendor arguments as an **argument array** (execFile/spawn semantics) — never via a shell — so there is no command-injection seam.
+- Treat the child's `stdout`/`stderr` as an **opaque stream**: `stdio: "inherit"`, rendered straight to your terminal, never captured.
+- Run each session in the user-provided working directory (`--dir`, or the current cwd).
+- Surface the per-vendor **ToS-risk level** before running.
+- Degrade gracefully to API-key mode when the binary is absent or the spawn fails.
+- Propagate the child's **exit code** verbatim.
+
+**MUST NOT**
+- Perform, initiate, or broker any **vendor OAuth / sign-in**. The user authenticates with the official binary themselves, out of band.
+- **Read, parse, or scrape** the child's output for tokens, identity, or anything else — and never write that output to disk, telemetry, or any server.
+- Touch OAuth **token/cookie files** (`~/.claude*`, `~/.codex*`, credentials, `auth.json`) — **not even to read them**. Binary discovery looks only at `PATH` and neutral bin dirs, never inside a vendor config directory. `spawn --list` reports *installed-or-not only*; it deliberately does **not** probe login state.
+- Impose directory isolation the user didn't ask for.
+- Add a runtime dependency — the adapter stays dependency-free (Node built-ins only).
 
 ### models
 
