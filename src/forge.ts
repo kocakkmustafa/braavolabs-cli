@@ -72,13 +72,17 @@ import {
 export interface ParsedArgs {
   cmd: string | undefined;
   positionals: string[];
-  flags: Record<string, string>;
+  // Bare boolean flags (`--quiet`) are stored as the boolean `true`; value
+  // flags (`--cmd foo`) as the string. Keeping them distinct is what lets a
+  // value that happens to be the literal string "true" (e.g. `--cmd true`,
+  // running the `true` command) survive — see `flag()` / `has()`.
+  flags: Record<string, string | boolean>;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const cmd = argv[0];
   const positionals: string[] = [];
-  const flags: Record<string, string> = {};
+  const flags: Record<string, string | boolean> = {};
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith("--")) {
@@ -88,7 +92,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         flags[key] = next;
         i++;
       } else {
-        flags[key] = "true";
+        flags[key] = true; // bare boolean flag
       }
     } else {
       positionals.push(a);
@@ -97,8 +101,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { cmd, positionals, flags };
 }
 
-const flag = (flags: Record<string, string>, key: string): string | undefined =>
-  flags[key] !== undefined && flags[key] !== "true" ? flags[key] : undefined;
+/** Value of a value-flag (`--k v` → "v"), or undefined for a bare/absent flag.
+ * A value that is literally "true" (`--cmd true`) is returned as-is — only a
+ * BARE `--k` (stored as boolean true) reads back as undefined. */
+const flag = (flags: Record<string, string | boolean>, key: string): string | undefined =>
+  typeof flags[key] === "string" ? (flags[key] as string) : undefined;
+
+/** True when a boolean flag is present, bare (`--list`) or as `--list true`. */
+const has = (flags: Record<string, string | boolean>, key: string): boolean =>
+  flags[key] === true || flags[key] === "true";
 
 // ── formatting helpers (money / tokens) ──────────────────────────────────────
 function usd(n: unknown): string {
@@ -475,7 +486,7 @@ async function main(): Promise<void> {
       const params: Parameters<typeof cascade>[1] = { prompt: promptText };
       const threshold = flag(flags, "threshold");
       if (threshold) params.confidenceThreshold = Number(threshold);
-      if (flags["second-opinion"] === "true") params.secondOpinion = true;
+      if (has(flags, "second-opinion")) params.secondOpinion = true;
       const budget = flag(flags, "budget");
       if (budget) params.budgetUsdCap = Number(budget);
 
@@ -567,7 +578,7 @@ async function main(): Promise<void> {
 
     case "spawn": {
       // --list: report installed-or-not (+ version) for each vendor. No token peeking.
-      if (flags["list"] === "true" || positionals[0] === "list") {
+      if (has(flags, "list") || positionals[0] === "list") {
         const statuses = SPAWN_VENDORS.map((v) => probeVendor(v));
         for (const line of renderSpawnList(ui, statuses)) console.log(line);
         return;
@@ -638,8 +649,13 @@ async function main(): Promise<void> {
         const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
         ask = async (p) => (await directChat(provider, apiKey, model, p)).content;
       } else if (via === "ask") {
-        requireAuth(cfg);
-        ask = async (p) => String((await cascade(cfg, { prompt: p }))?.answer ?? "");
+        // Cost-honesty: defer the auth requirement into the ask closure, which
+        // runFix only invokes when the command is RED. A green (exit-0) command
+        // spends nothing and must not demand a login (finding C-CLI-2).
+        ask = async (p) => {
+          requireAuth(cfg);
+          return String((await cascade(cfg, { prompt: p }))?.answer ?? "");
+        };
       } else {
         die(`unknown --via "${via}". Use: local | direct | ask`);
       }

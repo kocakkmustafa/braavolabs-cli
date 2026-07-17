@@ -13,16 +13,26 @@ describe("parseArgs", () => {
     expect(r.flags).toEqual({ company: "c1", models: "a,b" });
   });
 
-  it('treats a bare trailing --flag as "true"', () => {
+  it("stores a bare trailing --flag as boolean true (distinct from a string value)", () => {
     const r = parseArgs(["cascade", "hi", "--second-opinion"]);
     expect(r.positionals).toEqual(["hi"]);
-    expect(r.flags["second-opinion"]).toBe("true");
+    expect(r.flags["second-opinion"]).toBe(true);
   });
 
-  it('treats --flag followed by another --flag as "true"', () => {
+  it("stores --flag followed by another --flag as boolean true", () => {
     const r = parseArgs(["keys", "list", "--verbose", "--json"]);
-    expect(r.flags).toEqual({ verbose: "true", json: "true" });
+    expect(r.flags).toEqual({ verbose: true, json: true });
     expect(r.positionals).toEqual(["list"]);
+  });
+
+  it('preserves a value that is literally "true" (`--cmd true` must not collapse to undefined)', () => {
+    const r = parseArgs(["fix", "--cmd", "true", "--via", "ask"]);
+    // The string value "true" is kept as a string — NOT turned into the bare
+    // boolean — so `flag(flags,"cmd")` returns "true" and `forge fix --cmd true`
+    // actually runs the `true` command (regression guard for finding C-CLI-1).
+    expect(r.flags.cmd).toBe("true");
+    expect(typeof r.flags.cmd).toBe("string");
+    expect(r.flags.via).toBe("ask");
   });
 
   it("returns undefined cmd for empty argv", () => {
