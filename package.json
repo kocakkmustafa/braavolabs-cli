@@ -1,6 +1,7 @@
 {
   "name": "@ai-company-os/cli",
   "version": "0.1.0",
+  "packageManager": "pnpm.33.0",
   "private": true,
   "description": "Braavolabs CLI — terminal control of pipelines, runs, steering & connections (BYOK, self-host).",
   "bin": { "braavo": "./dist/index.js", "forge": "./dist/forge.js" },
