@@ -11,6 +11,7 @@
  * ai morghulis · ai dohaeris.
  */
 import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
 import { Config, loadConfig, saveConfig, clearConfig } from "./forge/config";
 import { makeUi, Ui } from "./forge/ui";
 import {
@@ -20,7 +21,21 @@ import {
   pollCompare,
   cascade,
   savings,
+  mediaPreview,
+  mediaGenerate,
+  mediaCatalog,
+  mediaKeyPut,
+  mediaKeyDelete,
 } from "./forge/client";
+import {
+  IMAGE_MODELS,
+  TTS_PROVIDERS,
+  parseSize,
+  estimateUsd,
+  renderMediaPreview,
+  renderImageResult,
+  decodeAudio,
+} from "./forge/media";
 import { makeKeyStore } from "./forge/keys";
 import {
   resolveOllamaHost,
@@ -508,6 +523,104 @@ async function main(): Promise<void> {
       const days = daysFlag ? Number(daysFlag) : undefined;
       const data = await savings(cfg, { days });
       for (const line of renderSavingsTable(ui, data)) console.log(line);
+      return;
+    }
+
+    case "media-key": {
+      // forge media-key <add|list|rm> — manage tenant-scoped media BYOK keys
+      // (server-side, encrypted). Separate from `forge keys` (direct-lane local
+      // keychain) because media generation bills the server-stored key.
+      requireAuth(cfg);
+      const sub = positionals[0];
+      if (sub === "list") {
+        const cat = await mediaCatalog(cfg);
+        console.log(ui.primary("── media provider keys ──"));
+        for (const p of cat?.providers ?? []) {
+          console.log(p?.configured ? `  ${ui.primary(p.provider)} ${ui.dim(p.keyMasked ?? "")}` : `  ${ui.dim(p.provider + " — no key")}`);
+        }
+        return;
+      }
+      const provider = (positionals[1] ?? "").toUpperCase();
+      if (!["FAL", "GOOGLE_TTS", "ELEVENLABS"].includes(provider)) {
+        die("usage: forge media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>  |  forge media-key rm <provider>  |  forge media-key list");
+      }
+      if (sub === "add") {
+        const secret = positionals[2];
+        if (!secret) die(`usage: forge media-key add ${provider} <secret>`);
+        const r = await mediaKeyPut(cfg, provider, secret);
+        console.log(ui.primary(`✓ ${provider} media key stored ${ui.dim(r?.keyMasked ?? "")}`));
+      } else if (sub === "rm") {
+        await mediaKeyDelete(cfg, provider);
+        console.log(ui.primary(`✓ ${provider} media key removed`));
+      } else {
+        die("usage: forge media-key <add|list|rm> …");
+      }
+      return;
+    }
+
+    case "image": {
+      requireAuth(cfg);
+      const prompt = positionals.join(" ").trim();
+      if (!prompt) die('usage: forge image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
+      const model = flag(flags, "model") ?? IMAGE_MODELS[0];
+      if (!(IMAGE_MODELS as readonly string[]).includes(model)) die(`--model must be one of: ${IMAGE_MODELS.join(", ")}`);
+      const n = Number(flag(flags, "n") ?? 1);
+      if (!Number.isInteger(n) || n < 1 || n > 4) die("--n must be an integer 1..4");
+      let size: { width: number; height: number };
+      try {
+        size = parseSize(flag(flags, "size"));
+      } catch (e) {
+        die((e as Error).message);
+        return;
+      }
+      const body = { kind: "image", model, prompt, n, width: size.width, height: size.height };
+      const preview = await mediaPreview(cfg, body);
+      const optedIn = has(flags, "yes");
+      for (const line of renderMediaPreview(ui, preview?.estimate, !!preview?.keyConfigured, optedIn)) console.log(line);
+      if (!optedIn) return;
+      const spin = ui.spinner("generating image…");
+      const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
+      spin.stop();
+      if (res.status === 402) die(res.body?.message ?? "no FAL media key — run: forge media-key add FAL <secret>");
+      if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
+        for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
+        die("cost changed since preview — re-run to acknowledge the new estimate");
+      }
+      if (res.status < 200 || res.status >= 300) die(`generate failed (${res.status}): ${res.body?.message ?? res.statusText}`);
+      for (const line of renderImageResult(ui, res.body?.result)) console.log(line);
+      return;
+    }
+
+    case "voice": {
+      requireAuth(cfg);
+      const text = positionals.join(" ").trim();
+      if (!text) die('usage: forge voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
+      const provider = (flag(flags, "provider") ?? TTS_PROVIDERS[0]).toUpperCase();
+      if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) die(`--provider must be one of: ${TTS_PROVIDERS.join(", ")}`);
+      const voice = flag(flags, "voice");
+      const model = flag(flags, "model");
+      const body: Record<string, unknown> = { kind: "tts", provider, text };
+      if (voice) body.voice = voice;
+      if (model) body.model = model;
+      const preview = await mediaPreview(cfg, body);
+      const optedIn = has(flags, "yes");
+      for (const line of renderMediaPreview(ui, preview?.estimate, !!preview?.keyConfigured, optedIn)) console.log(line);
+      if (!optedIn) return;
+      const spin = ui.spinner("synthesizing…");
+      const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
+      spin.stop();
+      if (res.status === 402) die(res.body?.message ?? `no ${provider} media key — run: forge media-key add ${provider} <secret>`);
+      if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
+        for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
+        die("cost changed since preview — re-run to acknowledge the new estimate");
+      }
+      if (res.status < 200 || res.status >= 300) die(`synthesis failed (${res.status}): ${res.body?.message ?? res.statusText}`);
+      const audioB64 = res.body?.result?.audioBase64;
+      if (!audioB64) die("no audio in response");
+      const out = flag(flags, "out") ?? "voice.mp3";
+      writeFileSync(out, decodeAudio(audioB64));
+      console.log(ui.primary("── saved ──"));
+      console.log(ui.steel(`  ${out} ${ui.dim(`(${res.body?.result?.chars ?? text.length} chars · ${res.body?.result?.mime ?? "audio/mpeg"})`)}`));
       return;
     }
 

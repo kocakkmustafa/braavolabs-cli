@@ -65,6 +65,14 @@ forge keys add anthropic --key "sk-ant-v0..."
 forge keys list
 forge keys rm anthropic
 
+# Media orchestration (BYOK — image via fal.ai FLUX, voice via Google/ElevenLabs).
+# Always previews the cost first; only spends when you pass --yes.
+forge media-key add FAL "key-..."             # server-side, tenant-scoped media key
+forge image "a fox in the snow" --model fal-ai/flux/dev --size 1024x768   # preview only
+forge image "a fox in the snow" --yes                                     # generate → CDN URL
+forge voice "hello world" --provider ELEVENLABS --voice Rachel --out hi.mp3 --yes
+forge media-key list
+
 # Serverless: talk straight to a local Ollama daemon (no key, no server)
 forge local "Explain OAuth 2.0"
 

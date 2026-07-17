@@ -205,3 +205,53 @@ export async function savings(
   const q = p.days !== undefined ? `?days=${encodeURIComponent(String(p.days))}` : "";
   return apiFetch(`/billing/savings${q}`, { cfg, fetchImpl: o.fetchImpl, save: o.save });
 }
+
+// ── Media orchestration (FAZ E backend: image via fal.ai FLUX, TTS via
+// Google/ElevenLabs). Contract: the server RE-computes the estimate and
+// rejects generate unless acknowledgedCostUsd ≥ it (honesty mandate), so the
+// CLI must always preview → show cost → send that exact estimate as the ack. ──
+
+/** POST /media/preview → { estimate:{usd,units,note,...}, keyConfigured, acknowledgementRequired }. No spend. */
+export async function mediaPreview(
+  cfg: Config,
+  body: Record<string, unknown>,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<any> {
+  return apiFetch("/media/preview", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
+}
+
+/** POST /media/generate (raw so the caller can branch on 400 COST_ACK_REQUIRED / 402 no-key). */
+export async function mediaGenerate(
+  cfg: Config,
+  body: Record<string, unknown>,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<RawResult> {
+  return apiFetch("/media/generate", { method: "POST", body, cfg, raw: true, fetchImpl: o.fetchImpl, save: o.save });
+}
+
+/** GET /media/catalog → provider key-status (masked) + model/price catalogue. */
+export async function mediaCatalog(
+  cfg: Config,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<any> {
+  return apiFetch("/media/catalog", { cfg, fetchImpl: o.fetchImpl, save: o.save });
+}
+
+/** PUT /media/keys/:provider — store a tenant-scoped media BYOK key (server encrypts). */
+export async function mediaKeyPut(
+  cfg: Config,
+  provider: string,
+  apiKey: string,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<any> {
+  return apiFetch(`/media/keys/${encodeURIComponent(provider)}`, { method: "PUT", body: { apiKey }, cfg, fetchImpl: o.fetchImpl, save: o.save });
+}
+
+/** DELETE /media/keys/:provider. */
+export async function mediaKeyDelete(
+  cfg: Config,
+  provider: string,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<RawResult> {
+  return apiFetch(`/media/keys/${encodeURIComponent(provider)}`, { method: "DELETE", cfg, raw: true, fetchImpl: o.fetchImpl, save: o.save });
+}
