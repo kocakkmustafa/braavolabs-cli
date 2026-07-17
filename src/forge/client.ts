@@ -95,11 +95,14 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
 
 // ── typed command wrappers ──────────────────────────────────────────────────
 
+/** Matches the server's auth response verbatim (auth.service.ts): login /
+ * register / refresh all return this exact shape, refreshToken always present.
+ * Aligned with the Desktop client + server truth (audit C3 drift fix). */
 export interface LoginResult {
   token: string;
-  refreshToken?: string;
-  user?: { email?: string };
-  tenant?: { name?: string; plan?: string };
+  refreshToken: string;
+  user: { id: string; email: string; name: string | null; role: string };
+  tenant: { id: string; name: string; slug: string; plan: string };
 }
 
 export async function login(
@@ -194,6 +197,16 @@ export async function cascade(
   if (p.secondOpinion !== undefined) body.secondOpinion = p.secondOpinion;
   if (p.budgetUsdCap !== undefined) body.budgetUsdCap = p.budgetUsdCap;
   return apiFetch("/research/cascade", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
+}
+
+/** POST /auth/logout — best-effort server-side refresh-token revocation. Raw so
+ * a failure (expired token, offline) is swallowed by the caller; local creds are
+ * cleared regardless. (audit C3: no surface was revoking the refresh token.) */
+export async function logout(
+  cfg: Config,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+): Promise<RawResult> {
+  return apiFetch("/auth/logout", { method: "POST", cfg, raw: true, fetchImpl: o.fetchImpl, save: o.save });
 }
 
 /** GET /billing/savings?days=N — tenant-scoped, no companyId. */

@@ -17,6 +17,7 @@ import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
   login,
+  logout,
   startCompare,
   pollCompare,
   cascade,
@@ -442,6 +443,15 @@ async function main(): Promise<void> {
     }
 
     case "logout": {
+      // Best-effort server-side refresh-token revocation before clearing local
+      // creds, so the token can't be reused (audit C3). Never blocks logout.
+      if (cfg.token) {
+        try {
+          await logout(cfg);
+        } catch {
+          /* offline / expired — local clear below still logs the user out */
+        }
+      }
       clearConfig();
       ui.ok("Logged out.");
       return;

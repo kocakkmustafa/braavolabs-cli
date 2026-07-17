@@ -6,6 +6,7 @@ import {
   pollCompare,
   cascade,
   savings,
+  logout,
 } from "../client";
 import type { Config } from "../config";
 
@@ -136,5 +137,21 @@ describe("command wrappers", () => {
     const cfg = { ...baseCfg(), token: "t" };
     await savings(cfg, { days: 30 }, { fetchImpl });
     expect(capturedUrl).toBe("https://host/api/v1/billing/savings?days=30");
+  });
+});
+
+describe("logout", () => {
+  it("POSTs /auth/logout with bearer auth (raw — swallows non-2xx)", async () => {
+    const calls: any[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      calls.push({ url, init });
+      return resp(200, { message: "Logged out successfully." });
+    });
+    const cfg = { ...baseCfg(), token: "tok" };
+    const r = await logout(cfg, { fetchImpl });
+    expect(calls[0].url).toBe("https://host/api/v1/auth/logout");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
+    expect(r.status).toBe(200);
   });
 });
