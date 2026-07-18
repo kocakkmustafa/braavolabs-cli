@@ -141,17 +141,20 @@ describe("command wrappers", () => {
 });
 
 describe("logout", () => {
-  it("POSTs /auth/logout with bearer auth (raw — swallows non-2xx)", async () => {
+  it("POSTs /auth/logout with bearer AND the refresh token in the body (raw — swallows non-2xx)", async () => {
     const calls: any[] = [];
     const fetchImpl = vi.fn(async (url: string, init: any) => {
       calls.push({ url, init });
       return resp(200, { message: "Logged out successfully." });
     });
-    const cfg = { ...baseCfg(), token: "tok" };
+    const cfg = { ...baseCfg(), token: "tok", refreshToken: "r1" };
     const r = await logout(cfg, { fetchImpl });
     expect(calls[0].url).toBe("https://host/api/v1/auth/logout");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
+    // audit #1: the refresh token in the body lets the server revoke even when
+    // the bearer has expired (the auth-optional logout falls back to it).
+    expect(JSON.parse(calls[0].init.body)).toEqual({ refreshToken: "r1" });
     expect(r.status).toBe(200);
   });
 });

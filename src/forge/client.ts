@@ -199,14 +199,18 @@ export async function cascade(
   return apiFetch("/research/cascade", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
 }
 
-/** POST /auth/logout — best-effort server-side refresh-token revocation. Raw so
- * a failure (expired token, offline) is swallowed by the caller; local creds are
- * cleared regardless. (audit C3: no surface was revoking the refresh token.) */
+/** POST /auth/logout — best-effort server-side refresh-token revocation. Sends
+ * the refresh token in the body so the server can revoke even when the ACCESS
+ * token has expired: the endpoint is auth-optional and falls back to the refresh
+ * token when the bearer is dead (audit #1 — without the body an expired bearer
+ * 401s and the refresh token survives sign-out). Raw so a failure (offline /
+ * already-expired) is swallowed by the caller; local creds are cleared
+ * regardless. Server replies 200 { message }. */
 export async function logout(
   cfg: Config,
   o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
 ): Promise<RawResult> {
-  return apiFetch("/auth/logout", { method: "POST", cfg, raw: true, fetchImpl: o.fetchImpl, save: o.save });
+  return apiFetch("/auth/logout", { method: "POST", body: { refreshToken: cfg.refreshToken }, cfg, raw: true, fetchImpl: o.fetchImpl, save: o.save });
 }
 
 /** GET /billing/savings?days=N — tenant-scoped, no companyId. */
