@@ -1,6 +1,6 @@
 /**
- * forge direct — single-shot BYOK completions straight to a provider's API,
- * bypassing the Braavolabs server entirely. Uses whatever key `forge keys
+ * braavo direct — single-shot BYOK completions straight to a provider's API,
+ * bypassing the Braavolabs server entirely. Uses whatever key `braavo keys
  * add <provider>` stored locally; the key never touches the network except
  * as that provider's own auth header, and is never logged or echoed.
  *

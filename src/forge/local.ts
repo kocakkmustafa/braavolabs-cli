@@ -1,5 +1,5 @@
 /**
- * forge local — talk directly to a local Ollama server. No keys, no server
+ * braavo local — talk directly to a local Ollama server. No keys, no server
  * round-trip, works fully offline. Base URL defaults to
  * http://localhost:11434 and is overridable via OLLAMA_HOST.
  *

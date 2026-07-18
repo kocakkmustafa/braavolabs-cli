@@ -1,5 +1,5 @@
 /**
- * `forge image` / `forge voice` — terminal front-end for the FAZ E media
+ * `braavo image` / `braavo voice` — terminal front-end for the FAZ E media
  * orchestration backend (fal.ai FLUX image, Google/ElevenLabs TTS). BYOK-only:
  * the server bills the tenant's own provider key and fail-closes with 402 when
  * none is set.
@@ -11,7 +11,7 @@
  * — never spends silently.
  *
  * Pure helpers here (parseSize / render / decodeAudio); the command wiring +
- * network live in forge.ts.
+ * network live in braavo.ts.
  */
 
 export const IMAGE_MODELS = ["fal-ai/flux/schnell", "fal-ai/flux/dev"] as const;
@@ -68,7 +68,7 @@ export function renderMediaPreview(
   if (estimate?.note) out.push(ui.dim(`  ${estimate.note}`));
   if (!keyConfigured) {
     out.push(ui.fail("  no provider key — generation will fail (402). Add one:"));
-    out.push(ui.dim("  forge keys add <FAL|GOOGLE_TTS|ELEVENLABS>  (media keys are provider-scoped)"));
+    out.push(ui.dim("  braavo keys add <FAL|GOOGLE_TTS|ELEVENLABS>  (media keys are provider-scoped)"));
   } else if (!optedIn) {
     out.push(ui.dim("  add --yes to generate (this spends on your provider key)"));
   }

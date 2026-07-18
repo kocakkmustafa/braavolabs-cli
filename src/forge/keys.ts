@@ -1,12 +1,12 @@
 /**
- * forge keys — LOCAL BYOK key storage. These keys are stored/listed/deleted
+ * braavo keys — LOCAL BYOK key storage. These keys are stored/listed/deleted
  * on this machine only; they are NEVER sent to the server (a future Lane-A
  * direct-provider mode will consume them). A key value is never printed or
  * logged — `list` shows a masked fingerprint (first4…last4) only.
  *
  * macOS: the login keychain via `security ...-generic-password` (service
- * "forge-cli"), with a names-only index file so `list` knows what to fetch.
- * Other OSes: a fallback ~/.forge/keys.json, chmod 600, with an honest warning.
+ * "braavo-cli"), with a names-only index file so `list` knows what to fetch.
+ * Other OSes: a fallback ~/.braavo/keys.json, chmod 600, with an honest warning.
  *
  * Dependencies (exec / fs / platform / paths) are injected so tests exercise
  * both the keychain and fallback branches without touching a real keychain.
@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync }
 import { join } from "node:path";
 import { CONFIG_DIR } from "./config";
 
-export const KEYCHAIN_SERVICE = "forge-cli";
+export const KEYCHAIN_SERVICE = "braavo-cli";
 
 /** Reveal nothing meaningful: first4…last4 for long keys, just … for short. */
 export function maskKey(secret: string): string {
@@ -51,7 +51,7 @@ export interface KeyStore {
   add(provider: string, secret: string): void;
   list(): KeyEntry[];
   remove(provider: string): void;
-  /** Retrieve the raw secret for local use (e.g. `forge direct`). Never logged by callers. */
+  /** Retrieve the raw secret for local use (e.g. `braavo direct`). Never logged by callers. */
   get(provider: string): string | undefined;
 }
 

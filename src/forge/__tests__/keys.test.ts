@@ -35,10 +35,10 @@ describe("maskKey", () => {
 });
 
 describe("keychain store (macOS)", () => {
-  it("add calls `security add-generic-password` with service forge-cli and records the name only", () => {
+  it("add calls `security add-generic-password` with service braavo-cli and records the name only", () => {
     const { files, fs } = fakeFs();
     const exec = vi.fn(() => "");
-    const store = makeKeyStore({ platform: "darwin", dir: "/home/.forge", exec, fs });
+    const store = makeKeyStore({ platform: "darwin", dir: "/home/.braavo", exec, fs });
     store.add("openai", "sk-secret-value-xyz");
 
     expect(store.secure).toBe(true);
@@ -53,7 +53,7 @@ describe("keychain store (macOS)", () => {
       "-U",
     ]);
     // index file holds the provider name, not the secret
-    const index = files.get("/home/.forge/keys-index.json")!;
+    const index = files.get("/home/.braavo/keys-index.json")!;
     expect(index).toContain("openai");
     expect(index).not.toContain("sk-secret-value-xyz");
   });
@@ -64,7 +64,7 @@ describe("keychain store (macOS)", () => {
       if (args[0] === "find-generic-password") return "sk-abcdEFGH1234wxyz";
       return "";
     });
-    const store = makeKeyStore({ platform: "darwin", dir: "/home/.forge", exec, fs });
+    const store = makeKeyStore({ platform: "darwin", dir: "/home/.braavo", exec, fs });
     store.add("anthropic", "sk-abcdEFGH1234wxyz");
     const list = store.list();
     expect(list).toEqual([{ provider: "anthropic", masked: "sk-a…wxyz" }]);
@@ -74,12 +74,12 @@ describe("keychain store (macOS)", () => {
   it("rm calls delete-generic-password and drops the name from the index", () => {
     const { files, fs } = fakeFs();
     const exec = vi.fn(() => "");
-    const store = makeKeyStore({ platform: "darwin", dir: "/home/.forge", exec, fs });
+    const store = makeKeyStore({ platform: "darwin", dir: "/home/.braavo", exec, fs });
     store.add("openai", "k1");
     store.add("groq", "k2");
     store.remove("openai");
     expect(exec).toHaveBeenCalledWith(["delete-generic-password", "-a", "openai", "-s", KEYCHAIN_SERVICE]);
-    const index = files.get("/home/.forge/keys-index.json")!;
+    const index = files.get("/home/.braavo/keys-index.json")!;
     expect(index).not.toContain("openai");
     expect(index).toContain("groq");
   });
@@ -88,20 +88,20 @@ describe("keychain store (macOS)", () => {
 describe("fallback file store (non-macOS)", () => {
   it("add writes keys.json and chmods it to 600", () => {
     const { files, chmods, fs } = fakeFs();
-    const store = makeKeyStore({ platform: "linux", dir: "/home/.forge", exec: () => "", fs });
+    const store = makeKeyStore({ platform: "linux", dir: "/home/.braavo", exec: () => "", fs });
     store.add("openai", "sk-linux-secret");
     expect(store.secure).toBe(false);
-    expect(files.get("/home/.forge/keys.json")).toContain("sk-linux-secret");
-    expect(chmods).toContainEqual({ path: "/home/.forge/keys.json", mode: 0o600 });
+    expect(files.get("/home/.braavo/keys.json")).toContain("sk-linux-secret");
+    expect(chmods).toContainEqual({ path: "/home/.braavo/keys.json", mode: 0o600 });
   });
 
   it("list masks fallback secrets and rm removes them", () => {
     const { files, fs } = fakeFs();
-    const store = makeKeyStore({ platform: "linux", dir: "/home/.forge", exec: () => "", fs });
+    const store = makeKeyStore({ platform: "linux", dir: "/home/.braavo", exec: () => "", fs });
     store.add("openai", "sk-abcd00001234wxyz");
     expect(store.list()).toEqual([{ provider: "openai", masked: "sk-a…wxyz" }]);
     store.remove("openai");
     expect(store.list()).toEqual([]);
-    expect(files.get("/home/.forge/keys.json")).not.toContain("sk-abcd00001234wxyz");
+    expect(files.get("/home/.braavo/keys.json")).not.toContain("sk-abcd00001234wxyz");
   });
 });

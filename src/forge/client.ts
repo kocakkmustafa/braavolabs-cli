@@ -1,5 +1,5 @@
 /**
- * forge API client — the same dep-free fetch + single-401-refresh pattern the
+ * braavo API client — the same dep-free fetch + single-401-refresh pattern the
  * braavo bin uses, but factored so tests can inject `fetchImpl` and `save`
  * (no disk, no network). Non-2xx throws `ApiError` (caller prints via ui.fail
  * + exit) instead of exiting inside the helper — keeps it unit-testable.

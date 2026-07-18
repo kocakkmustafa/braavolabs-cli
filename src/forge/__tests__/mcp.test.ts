@@ -15,7 +15,7 @@ import {
   type McpChildLike,
   type McpTool,
 } from "../mcp";
-import { renderMcpList, renderMcpTools, renderMcpCallResult } from "../../forge";
+import { renderMcpList, renderMcpTools, renderMcpCallResult } from "../../braavo";
 import { makeUi } from "../ui";
 
 const colorUi = makeUi({ tty: true });
@@ -42,7 +42,7 @@ describe("parseMcpAdd", () => {
 
 // ── config round-trip (arg-array preservation) ─────────────────────────────────
 describe("mcp config store", () => {
-  const path = join(tmpdir(), `forge-mcp-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const path = join(tmpdir(), `braavo-mcp-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
 
   it("add → save → load round-trips and preserves args as a discrete ARRAY", () => {
     const cfg = addMcpServer({}, "fs", "npx", ["-y", "@mcp/server-filesystem", "/tmp"]);
@@ -63,7 +63,7 @@ describe("mcp config store", () => {
   });
 
   it("returns {} for a missing config file", () => {
-    expect(loadMcpConfig(join(tmpdir(), "forge-mcp-nope.json"))).toEqual({});
+    expect(loadMcpConfig(join(tmpdir(), "braavo-mcp-nope.json"))).toEqual({});
   });
 });
 
@@ -147,7 +147,7 @@ describe("listServerTools — full JSON-RPC handshake", () => {
     const init = server.sent[0];
     expect(init.jsonrpc).toBe("2.0");
     expect(init.params.protocolVersion).toBe(MCP_PROTOCOL_VERSION);
-    expect(init.params.clientInfo.name).toBe("forge");
+    expect(init.params.clientInfo.name).toBe("braavo");
     // the initialized message is a NOTIFICATION (no id)
     expect(server.sent[1].id).toBeUndefined();
     // child was torn down

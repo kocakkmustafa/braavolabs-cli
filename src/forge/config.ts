@@ -1,8 +1,8 @@
 /**
- * forge config — token + defaults live in ~/.forge/config.json.
+ * braavo config — token + defaults live in ~/.braavo/config.json.
  *
- * Mirrors the braavo bin's config shape (apiUrl/token/refreshToken) so the
- * refresh-retry loop is identical, plus a `defaultCompany` set by `forge use`.
+ * The config shape (apiUrl/token/refreshToken) drives an identical
+ * refresh-retry loop everywhere, plus a `defaultCompany` set by `braavo use`.
  * Paths are injectable so tests round-trip against a tmp file, never real $HOME.
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
@@ -13,14 +13,14 @@ export interface Config {
   apiUrl: string;
   token?: string;
   refreshToken?: string;
-  /** Default company id used by `forge ask` when --company is omitted. */
+  /** Default company id used by `braavo ask` when --company is omitted. */
   defaultCompany?: string;
 }
 
-export const CONFIG_DIR = join(homedir(), ".forge");
+export const CONFIG_DIR = join(homedir(), ".braavo");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const DEFAULT_API =
-  process.env.FORGE_API_URL ?? process.env.BRAAVO_API_URL ?? "https://braavolabs.com/api/v1";
+  process.env.BRAAVO_API_URL ?? "https://braavolabs.com/api/v1";
 
 export function loadConfig(path: string = CONFIG_PATH): Config {
   try {

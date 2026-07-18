@@ -1,10 +1,11 @@
 {
-  "name": "@ai-company-os/cli",
+  "name": "@braavolabs/cli",
   "version": "0.1.0",
   "packageManager": "pnpm@10.33.0",
   "private": true,
-  "description": "Braavolabs CLI — terminal control of pipelines, runs, steering & connections (BYOK, self-host).",
-  "bin": { "braavo": "./dist/index.js", "forge": "./dist/forge.js" },
+  "description": "Braavolabs CLI — one terminal for the multi-model council (ask/cascade/savings, BYOK keys, local/direct, spawn, fix, MCP) and pipeline control (runs, steering, handoffs, connections). Dep-free, self-host capable.",
+  "main": "./dist/braavo.js",
+  "bin": { "braavo": "./dist/braavo.js" },
   "scripts": {
     "build": "tsc",
     "lint": "tsc --noEmit -p tsconfig.json",

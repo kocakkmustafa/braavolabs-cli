@@ -8,7 +8,7 @@ import { join } from "node:path";
  * DID: sign-out on Desktop used to clear local tokens WITHOUT calling
  * /auth/logout, so the refresh token stayed valid server-side (the exact hole
  * R3 closed on the CLI + web). This test pins the SHARED contract every
- * authenticated Forge surface must honour, so the next divergence fails CI
+ * authenticated braavo surface must honour, so the next divergence fails CI
  * instead of shipping silently. Keep this list byte-identical to the Desktop's
  * `contract.test.ts` — that duplication IS the guard: one canonical contract,
  * asserted independently in each repo. Surface-specific endpoints (media = CLI,

@@ -1,7 +1,7 @@
 /**
- * forge --repo — structured git context, prepended to a prompt.
+ * braavo --repo — structured git context, prepended to a prompt.
  *
- * When the caller passes `--repo` and the cwd is a git work tree, forge gathers
+ * When the caller passes `--repo` and the cwd is a git work tree, braavo gathers
  * a compact, factual snapshot (branch, porcelain status, last 5 commits, staged
  * and unstaged diff --stat) and prepends it to the prompt so a model reasons
  * about the ACTUAL working tree — not a guess.
