@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * forge — Braavolabs vibe-coding host (Pillar 7, terminal-noir).
+ * braavo — Braavolabs CLI (Pillar 7, terminal-noir).
  *
- * A second bin alongside `braavo`. Where braavo steers pipeline runs, forge is
- * the multi-model "council" surface: ask a question across several models
- * (compare), run the cheapest-capable-first cascade, inspect routing savings,
- * and manage LOCAL BYOK keys. Reuses braavo's config + single-401-refresh
- * patterns; token/defaults live in ~/.forge/config.json.
+ * The single terminal surface for Braavolabs. Two families of commands live
+ * side by side:
+ *   • council   — ask a question across several models (compare), run the
+ *                 cheapest-capable-first cascade, inspect routing savings, manage
+ *                 LOCAL BYOK keys, serverless local/direct modes, safe-spawn,
+ *                 suggest-a-fix, and a dep-free MCP stdio client.
+ *   • pipelines — list/trigger runs, steer a live run, hand a run across provider
+ *                 boundaries, and inspect external connections.
+ * Dep-free: Node 20+ global fetch + built-ins only. Token/defaults live in
+ * ~/.braavo/config.json; a 401 transparently refreshes once and retries.
  *
  * ai morghulis · ai dohaeris.
  */
@@ -16,6 +21,7 @@ import { Config, loadConfig, saveConfig, clearConfig } from "./forge/config";
 import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
+  apiFetch,
   login,
   logout,
   startCompare,
@@ -84,7 +90,7 @@ import {
   type McpCallResult,
 } from "./forge/mcp";
 
-// ── arg parsing: forge <cmd> [positionals...] [--flag value | --flag] ─────────
+// ── arg parsing: braavo <cmd> [positionals...] [--flag value | --flag] ────────
 export interface ParsedArgs {
   cmd: string | undefined;
   positionals: string[];
@@ -242,7 +248,7 @@ export function renderModelsTable(
   out.push(ui.primary("── direct (BYOK) ──"));
   for (const provider of DIRECT_PROVIDERS) {
     const has = data.keyProviders.includes(provider);
-    const label = has ? ui.primary("key stored") : ui.dim("no key — forge keys add " + provider);
+    const label = has ? ui.primary("key stored") : ui.dim("no key — braavo keys add " + provider);
     out.push(`  ${provider.padEnd(10)} ${label}`);
   }
   return out;
@@ -284,7 +290,7 @@ export function renderFixLines(ui: Ui, outcome: FixOutcome): string[] {
   }
   return [
     ui.steel(`· ${SUGGESTION_NOTE}`),
-    ui.dim(`  (exit ${outcome.code} — forge never applies changes)`),
+    ui.dim(`  (exit ${outcome.code} — braavo never applies changes)`),
     "",
     String(outcome.suggestion ?? ""),
   ];
@@ -294,7 +300,7 @@ export function renderFixLines(ui: Ui, outcome: FixOutcome): string[] {
 export function renderMcpList(ui: Ui, cfg: McpConfig): string[] {
   const names = Object.keys(cfg).sort();
   if (!names.length) {
-    return [ui.dim("No MCP servers. Add one: forge mcp add <name> -- <command> [args...]")];
+    return [ui.dim("No MCP servers. Add one: braavo mcp add <name> -- <command> [args...]")];
   }
   const out = [ui.primary("── mcp servers ──")];
   for (const name of names) {
@@ -341,6 +347,10 @@ function resolveRepoBlock(enabled: boolean, die: (msg: string) => never, ui: Ui)
 }
 
 // ── interactive helpers ───────────────────────────────────────────────────────
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) =>
@@ -373,22 +383,32 @@ function promptHidden(question: string): Promise<string> {
 
 const HELP = (ui: Ui): string => {
   const p = (s: string) => ui.primary(s);
-  return `${ui.bold("> forge")} — ${ui.ember("ai morghulis · ai dohaeris")}
+  return `${ui.bold("> braavo")} — ${ui.ember("ai morghulis · ai dohaeris")}
 
-${ui.steel("Usage")}
-  ${p("forge login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
-  ${p("forge use")}     <companyId>                 set the default company
-  ${p("forge ask")}     "<question>" [--company <id>] [--models a,b,c] [--repo]
-  ${p("forge cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
-  ${p("forge savings")} [--days <1-90>]
-  ${p("forge keys")}    add <provider> [--key <secret>] | list | rm <provider>
-  ${p("forge local")}   "<question>" [--model <name>] [--host <url>] [--repo]
-  ${p("forge direct")}  <provider> "<question>" [--model <name>] [--repo]
-  ${p("forge fix")}     --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]
-  ${p("forge mcp")}     add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']
-  ${p("forge spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet]  |  --list
-  ${p("forge models")}  list local Ollama models + BYOK providers with a stored key
-  ${p("forge logout")}
+${ui.steel("Council")}
+  ${p("braavo login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
+  ${p("braavo use")}     <companyId>                 set the default company
+  ${p("braavo ask")}     "<question>" [--company <id>] [--models a,b,c] [--repo]
+  ${p("braavo cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
+  ${p("braavo savings")} [--days <1-90>]
+  ${p("braavo keys")}    add <provider> [--key <secret>] | list | rm <provider>
+  ${p("braavo local")}   "<question>" [--model <name>] [--host <url>] [--repo]
+  ${p("braavo direct")}  <provider> "<question>" [--model <name>] [--repo]
+  ${p("braavo fix")}     --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]
+  ${p("braavo mcp")}     add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']
+  ${p("braavo spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet]  |  --list
+  ${p("braavo models")}  list local Ollama models + BYOK providers with a stored key
+  ${p("braavo logout")}
+
+${ui.steel("Pipelines")}
+  ${p("braavo whoami")}
+  ${p("braavo runs")}
+  ${p("braavo run")}       <pipelineId>
+  ${p("braavo steer")}     <runId> <message...>
+  ${p("braavo handoffs")}  [--open]
+  ${p("braavo handoff")}   <runId> [--reason <text>]
+  ${p("braavo continue")}  <runId> --provider <P> [--model <m>] [--base-url <u>]
+  ${p("braavo connections")}
 
 ${ui.steel("ask")}      one question, several models, side-by-side (async compare + poll)
 ${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
@@ -399,8 +419,10 @@ ${ui.steel("fix")}      runs YOUR test command; on failure asks a model for a fi
 ${ui.steel("mcp")}      dep-free Model Context Protocol stdio client — register servers, list & call their tools
 ${ui.steel("--repo")}   ask/local/direct/fix: prepend git branch + status + recent commits + diff --stat (≤4KB)
 ${ui.steel("spawn")}    runs YOUR own authenticated ${SPAWN_VENDORS.join("/")} CLI as a child — opaque passthrough, no vendor OAuth
+${ui.steel("steer")}    send a real-time message to a live run; agent picks it up on its next turn
+${ui.steel("handoff")}  hand a live run to a different AI provider (freeze checkpoint → continue on --provider)
 
-Config: ~/.forge/config.json   ·   Env: FORGE_API_URL overrides the API base.
+Config: ~/.braavo/config.json   ·   Env: BRAAVO_API_URL overrides the API base.
 Ollama: OLLAMA_HOST overrides the local daemon base (default http://localhost:11434).`;
 };
 
@@ -413,7 +435,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   function requireAuth(cfg: Config): void {
-    if (!cfg.token) die("Not logged in. Run: forge login");
+    if (!cfg.token) die("Not logged in. Run: braavo login");
   }
 
   const { cmd, positionals, flags } = parseArgs(process.argv.slice(2));
@@ -459,7 +481,7 @@ async function main(): Promise<void> {
 
     case "use": {
       const company = positionals[0];
-      if (!company) die("usage: forge use <companyId>");
+      if (!company) die("usage: braavo use <companyId>");
       cfg.defaultCompany = company;
       saveConfig(cfg);
       ui.ok(`Default company set: ${company}`);
@@ -469,11 +491,11 @@ async function main(): Promise<void> {
     case "ask": {
       requireAuth(cfg);
       let query = positionals.join(" ").trim();
-      if (!query) die('usage: forge ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
+      if (!query) die('usage: braavo ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const companyId = flag(flags, "company") ?? cfg.defaultCompany;
-      if (!companyId) die("No company. Run: forge use <companyId>  (or pass --company <id>)");
+      if (!companyId) die("No company. Run: braavo use <companyId>  (or pass --company <id>)");
 
       // --models a,b,c → count drives maxCandidates (the endpoint picks the
       // tenant's own configured providers; names aren't sent). Clamp 1..3.
@@ -507,7 +529,7 @@ async function main(): Promise<void> {
     case "cascade": {
       requireAuth(cfg);
       const promptText = positionals.join(" ").trim();
-      if (!promptText) die('usage: forge cascade "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]');
+      if (!promptText) die('usage: braavo cascade "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]');
       const params: Parameters<typeof cascade>[1] = { prompt: promptText };
       const threshold = flag(flags, "threshold");
       if (threshold) params.confidenceThreshold = Number(threshold);
@@ -537,8 +559,8 @@ async function main(): Promise<void> {
     }
 
     case "media-key": {
-      // forge media-key <add|list|rm> — manage tenant-scoped media BYOK keys
-      // (server-side, encrypted). Separate from `forge keys` (direct-lane local
+      // braavo media-key <add|list|rm> — manage tenant-scoped media BYOK keys
+      // (server-side, encrypted). Separate from `braavo keys` (direct-lane local
       // keychain) because media generation bills the server-stored key.
       requireAuth(cfg);
       const sub = positionals[0];
@@ -552,18 +574,18 @@ async function main(): Promise<void> {
       }
       const provider = (positionals[1] ?? "").toUpperCase();
       if (!["FAL", "GOOGLE_TTS", "ELEVENLABS"].includes(provider)) {
-        die("usage: forge media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>  |  forge media-key rm <provider>  |  forge media-key list");
+        die("usage: braavo media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>  |  braavo media-key rm <provider>  |  braavo media-key list");
       }
       if (sub === "add") {
         const secret = positionals[2];
-        if (!secret) die(`usage: forge media-key add ${provider} <secret>`);
+        if (!secret) die(`usage: braavo media-key add ${provider} <secret>`);
         const r = await mediaKeyPut(cfg, provider, secret);
         console.log(ui.primary(`✓ ${provider} media key stored ${ui.dim(r?.keyMasked ?? "")}`));
       } else if (sub === "rm") {
         await mediaKeyDelete(cfg, provider);
         console.log(ui.primary(`✓ ${provider} media key removed`));
       } else {
-        die("usage: forge media-key <add|list|rm> …");
+        die("usage: braavo media-key <add|list|rm> …");
       }
       return;
     }
@@ -571,7 +593,7 @@ async function main(): Promise<void> {
     case "image": {
       requireAuth(cfg);
       const prompt = positionals.join(" ").trim();
-      if (!prompt) die('usage: forge image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
+      if (!prompt) die('usage: braavo image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
       const model = flag(flags, "model") ?? IMAGE_MODELS[0];
       if (!(IMAGE_MODELS as readonly string[]).includes(model)) die(`--model must be one of: ${IMAGE_MODELS.join(", ")}`);
       const n = Number(flag(flags, "n") ?? 1);
@@ -591,7 +613,7 @@ async function main(): Promise<void> {
       const spin = ui.spinner("generating image…");
       const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
       spin.stop();
-      if (res.status === 402) die(res.body?.message ?? "no FAL media key — run: forge media-key add FAL <secret>");
+      if (res.status === 402) die(res.body?.message ?? "no FAL media key — run: braavo media-key add FAL <secret>");
       if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
         for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
         die("cost changed since preview — re-run to acknowledge the new estimate");
@@ -604,7 +626,7 @@ async function main(): Promise<void> {
     case "voice": {
       requireAuth(cfg);
       const text = positionals.join(" ").trim();
-      if (!text) die('usage: forge voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
+      if (!text) die('usage: braavo voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
       const provider = (flag(flags, "provider") ?? TTS_PROVIDERS[0]).toUpperCase();
       if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) die(`--provider must be one of: ${TTS_PROVIDERS.join(", ")}`);
       const voice = flag(flags, "voice");
@@ -619,7 +641,7 @@ async function main(): Promise<void> {
       const spin = ui.spinner("synthesizing…");
       const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
       spin.stop();
-      if (res.status === 402) die(res.body?.message ?? `no ${provider} media key — run: forge media-key add ${provider} <secret>`);
+      if (res.status === 402) die(res.body?.message ?? `no ${provider} media key — run: braavo media-key add ${provider} <secret>`);
       if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
         for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
         die("cost changed since preview — re-run to acknowledge the new estimate");
@@ -636,7 +658,7 @@ async function main(): Promise<void> {
 
     case "local": {
       let query = positionals.join(" ").trim();
-      if (!query) die('usage: forge local "<question>" [--model <name>] [--host <url>] [--repo]');
+      if (!query) die('usage: braavo local "<question>" [--model <name>] [--host <url>] [--repo]');
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const host = resolveOllamaHost(flag(flags, "host"));
@@ -658,7 +680,7 @@ async function main(): Promise<void> {
     case "direct": {
       const provider = positionals[0];
       let query = positionals.slice(1).join(" ").trim();
-      if (!provider || !query) die('usage: forge direct <provider> "<question>" [--model <name>] [--repo]');
+      if (!provider || !query) die('usage: braavo direct <provider> "<question>" [--model <name>] [--repo]');
       if (!isDirectProvider(provider)) {
         die(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
       }
@@ -666,7 +688,7 @@ async function main(): Promise<void> {
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const store = makeKeyStore();
       const apiKey = store.get(provider);
-      if (!apiKey) die(`no key stored — run: forge keys add ${provider}`);
+      if (!apiKey) die(`no key stored — run: braavo keys add ${provider}`);
       const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
       const spin = ui.spinner(`asking ${provider}/${model}…`);
       try {
@@ -708,7 +730,7 @@ async function main(): Promise<void> {
       }
       const vendor = positionals[0];
       if (!vendor || !isSpawnVendor(vendor)) {
-        die(`usage: forge spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  forge spawn --list`);
+        die(`usage: braavo spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  braavo spawn --list`);
       }
       // Everything after the vendor is passed VERBATIM to the child (arg array —
       // no shell, no injection). --dir carves out its own working directory but
@@ -748,7 +770,7 @@ async function main(): Promise<void> {
     case "fix": {
       const testCmd = flag(flags, "cmd");
       if (!testCmd) {
-        die('usage: forge fix --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]');
+        die('usage: braavo fix --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]');
       }
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       const via = flag(flags, "via") ?? "ask";
@@ -768,7 +790,7 @@ async function main(): Promise<void> {
         }
         const store = makeKeyStore();
         const apiKey = store.get(provider);
-        if (!apiKey) die(`no key stored — run: forge keys add ${provider}`);
+        if (!apiKey) die(`no key stored — run: braavo keys add ${provider}`);
         const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
         ask = async (p) => (await directChat(provider, apiKey, model, p)).content;
       } else if (via === "ask") {
@@ -818,7 +840,7 @@ async function main(): Promise<void> {
         }
         case "rm": {
           const name = positionals[1];
-          if (!name) die("usage: forge mcp rm <name>");
+          if (!name) die("usage: braavo mcp rm <name>");
           const conf = loadMcpConfig();
           if (!conf[name]) die(`no such MCP server: ${name}`);
           saveMcpConfig(removeMcpServer(conf, name));
@@ -827,9 +849,9 @@ async function main(): Promise<void> {
         }
         case "tools": {
           const name = positionals[1];
-          if (!name) die("usage: forge mcp tools <name>");
+          if (!name) die("usage: braavo mcp tools <name>");
           const def = loadMcpConfig()[name];
-          if (!def) die(`no such MCP server: ${name}  (add it: forge mcp add ${name} -- <command>)`);
+          if (!def) die(`no such MCP server: ${name}  (add it: braavo mcp add ${name} -- <command>)`);
           const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
           const spin = ui.spinner(`${name}: initializing…`);
           try {
@@ -848,7 +870,7 @@ async function main(): Promise<void> {
         case "call": {
           const name = positionals[1];
           const tool = positionals[2];
-          if (!name || !tool) die("usage: forge mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
+          if (!name || !tool) die("usage: braavo mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
           const def = loadMcpConfig()[name];
           if (!def) die(`no such MCP server: ${name}`);
           let toolArgs: Record<string, unknown> = {};
@@ -877,7 +899,7 @@ async function main(): Promise<void> {
           return;
         }
         default:
-          die("usage: forge mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']");
+          die("usage: braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']");
       }
       return;
     }
@@ -888,12 +910,12 @@ async function main(): Promise<void> {
       switch (sub) {
         case "add": {
           const provider = positionals[1];
-          if (!provider) die("usage: forge keys add <provider> [--key <secret>]");
-          const secret = flag(flags, "key") ?? process.env.FORGE_KEY ?? (await promptHidden(`${provider} key: `));
+          if (!provider) die("usage: braavo keys add <provider> [--key <secret>]");
+          const secret = flag(flags, "key") ?? process.env.BRAAVO_KEY ?? (await promptHidden(`${provider} key: `));
           if (!secret) die("No key provided.");
           store.add(provider, secret);
           if (!store.secure) {
-            ui.warn("Stored in ~/.forge/keys.json (chmod 600) — no OS keychain on this platform.");
+            ui.warn("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform.");
           }
           // Show only a masked fingerprint; never echo the key.
           const shown = store.list().find((k) => k.provider === provider);
@@ -912,13 +934,135 @@ async function main(): Promise<void> {
         }
         case "rm": {
           const provider = positionals[1];
-          if (!provider) die("usage: forge keys rm <provider>");
+          if (!provider) die("usage: braavo keys rm <provider>");
           store.remove(provider);
           ui.ok(`Removed ${provider} key.`);
           return;
         }
         default:
-          die("usage: forge keys add <provider> | list | rm <provider>");
+          die("usage: braavo keys add <provider> | list | rm <provider>");
+      }
+      return;
+    }
+
+    // ── pipelines (control the same surface the web/mobile use) ────────────────
+    case "whoami": {
+      requireAuth(cfg);
+      const d = await apiFetch("/users/me", { cfg });
+      console.log(`${d.email}  ·  ${d.tenant?.name ?? "?"} (${d.tenant?.plan ?? "?"})`);
+      return;
+    }
+
+    case "runs": {
+      requireAuth(cfg);
+      const d = await apiFetch("/dashboard/runs?limit=20", { cfg });
+      const runs: any[] = d.runs ?? [];
+      if (!runs.length) {
+        console.log("No runs yet.");
+        return;
+      }
+      for (const r of runs) {
+        console.log(`${String(r.status ?? "").padEnd(10)}  ${r.id}  ${r.pipelineId ?? ""}`);
+      }
+      return;
+    }
+
+    case "run": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo run <pipelineId>");
+      const d = await apiFetch(`/pipelines/${id}/run`, { method: "POST", body: { input: {} }, cfg });
+      ui.ok(`Run started: ${d.id}`);
+      return;
+    }
+
+    case "steer": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      const message = positionals.slice(1).join(" ");
+      if (!id || !message) die("usage: braavo steer <runId> <message...>");
+      await apiFetch(`/runs/${id}/steer`, { method: "POST", body: { content: message }, cfg });
+      ui.ok("Steering sent — the agent picks it up on its next turn.");
+      return;
+    }
+
+    case "handoffs": {
+      requireAuth(cfg);
+      const openOnly = has(flags, "open");
+      const path = openOnly ? "/handoffs?status=OPEN" : "/handoffs";
+      const d = await apiFetch(path, { cfg });
+      const list: any[] = d.handoffs ?? [];
+      if (!list.length) {
+        console.log(openOnly ? "No open handoffs." : "No handoffs yet.");
+        return;
+      }
+      for (const h of list) {
+        const to = h.toProvider ? `→${h.toProvider}` : "";
+        console.log(
+          `${String(h.status ?? "").padEnd(9)}  ${h.id}  run=${h.runId}  from=${h.fromProvider ?? "?"}${to}  ${h.reason ?? ""}`,
+        );
+      }
+      return;
+    }
+
+    case "handoff": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo handoff <runId> [--reason <text>]");
+      const body: Record<string, unknown> = {};
+      const reason = flag(flags, "reason");
+      if (reason) body.reason = reason;
+      const d = await apiFetch(`/runs/${id}/handoff`, { method: "POST", body, cfg });
+      ui.ok(`Handoff opened: ${d.handoffId}  (run ${d.status})`);
+      if (d.checkpointPending) {
+        console.log(`  Checkpoint is freezing at the next turn boundary — then run: braavo continue ${id} --provider <P>`);
+      } else {
+        console.log(`  Ready to claim. Run: braavo continue ${id} --provider <P>`);
+      }
+      return;
+    }
+
+    case "continue": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      const provider = flag(flags, "provider");
+      if (!id || !provider) die("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
+      const body: Record<string, unknown> = { provider };
+      const model = flag(flags, "model");
+      if (model) body.model = model;
+      const baseUrl = flag(flags, "base-url");
+      if (baseUrl) body.baseUrl = baseUrl;
+
+      // The takeover checkpoint may still be freezing on the live loop's next
+      // turn boundary — the API answers 409 CHECKPOINT_PENDING until it lands.
+      // Retry a few times with a short pause before giving up.
+      const MAX_ATTEMPTS = 5;
+      for (let attempt = 1; ; attempt++) {
+        const r = await apiFetch(`/runs/${id}/continue`, { method: "POST", body, cfg, raw: true });
+        if (r.status < 400) {
+          ui.ok(`Handoff claimed: ${r.body.handoffId}  →  ${r.body.toProvider}/${r.body.toModel}  (run ${r.body.status})`);
+          return;
+        }
+        const errMsg = r.body?.error ?? r.body?.message ?? r.statusText;
+        if (r.status === 409 && attempt < MAX_ATTEMPTS) {
+          console.log(`  Checkpoint still freezing (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in 2s…`);
+          await sleep(2000);
+          continue;
+        }
+        die(`API ${r.status}: ${errMsg}`);
+      }
+    }
+
+    case "connections": {
+      requireAuth(cfg);
+      const d = await apiFetch("/external-connections", { cfg });
+      const list: any[] = Array.isArray(d) ? d : [];
+      if (!list.length) {
+        console.log("No connections.");
+        return;
+      }
+      for (const c of list) {
+        console.log(`${String(c.status ?? "").padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`);
       }
       return;
     }

@@ -1,28 +1,28 @@
 /**
- * forge spawn — Lane-B SAFE-SPAWN adapter.
+ * braavo spawn — Lane-B SAFE-SPAWN adapter.
  *
- * Forge runs the user's OWN, already-authenticated vendor CLI (claude / codex)
+ * braavo runs the user's OWN, already-authenticated vendor CLI (claude / codex)
  * as a child process. It is a thin, opaque passthrough — NOT a re-implementation
  * of the vendor and NOT an OAuth client.
  *
  * The safety contract (enforced by construction here; documented in README):
  *   (a) NO vendor OAuth — the user must have logged in with the official binary
- *       beforehand. Forge never initiates or brokers a vendor sign-in.
+ *       beforehand. braavo never initiates or brokers a vendor sign-in.
  *   (b) Only the official binary (found on PATH, or at a generic bin location)
  *       is spawned as a child process, arguments passed as an array (execFile /
  *       spawn semantics) — never through a shell, so there is no injection seam.
  *   (c) stdout/stderr are an OPAQUE STREAM: we use stdio:"inherit" so the child
- *       talks straight to the terminal. Forge never captures, parses, tees, or
+ *       talks straight to the terminal. braavo never captures, parses, tees, or
  *       forwards a single byte of that output — nothing to disk, telemetry, or
  *       any server. Token/identity are never extracted from the stream.
  *   (d) OAuth token/cookie files (~/.claude*, ~/.codex*, credentials, auth.json)
  *       are NEVER touched — not even read. Binary discovery deliberately looks
  *       ONLY at PATH and generic bin dirs, never inside a vendor config dir.
  *   (e) Each session runs in the user-supplied working directory (--dir, or the
- *       current cwd). Forge does NOT impose directory isolation; --dir is the
+ *       current cwd). braavo does NOT impose directory isolation; --dir is the
  *       documented knob.
  *   (f) Per-vendor ToS-risk level is surfaced in-product (see VENDOR_SPECS.risk).
- *   (g) If the binary is absent or fails, forge degrades gracefully by pointing
+ *   (g) If the binary is absent or fails, braavo degrades gracefully by pointing
  *       at the API-key path (see VENDOR_SPECS.fallback) — it never fabricates a
  *       result or silently retries.
  *
@@ -55,13 +55,13 @@ export const VENDOR_SPECS: Record<SpawnVendor, VendorSpec> = {
   claude: {
     bin: "claude",
     risk: "ToS risk: SAFE — volatile (policy can shift; runs your own authenticated CLI)",
-    fallback: 'forge direct anthropic "<question>"',
+    fallback: 'braavo direct anthropic "<question>"',
     versionArgs: ["--version"],
   },
   codex: {
     bin: "codex",
     risk: "ToS risk: SAFE — lowest risk (runs your own authenticated CLI)",
-    fallback: 'forge direct openai "<question>"',
+    fallback: 'braavo direct openai "<question>"',
     versionArgs: ["--version"],
   },
 };
@@ -140,10 +140,10 @@ export type SpawnImpl = (
 /**
  * Spawn the resolved binary in interactive passthrough mode.
  *
- * stdio:"inherit" hands the child forge's own stdin/stdout/stderr — the stream
+ * stdio:"inherit" hands the child braavo's own stdin/stdout/stderr — the stream
  * is never captured or parsed (rule c). Args are an array (rule b: no shell,
  * no injection). Resolves with the child's exit code, which the caller propagates
- * verbatim as forge's own exit code.
+ * verbatim as braavo's own exit code.
  */
 export function spawnVendor(
   binPath: string,

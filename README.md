@@ -1,19 +1,15 @@
-# @ai-company-os/cli
+# @braavolabs/cli
 
-Terminal interface for Braavolabs — two distinct binaries for agent operations and multi-model orchestration.
+Braavolabs CLI — one terminal command, `braavo`, for both the multi-model council and pipeline control.
 
 ## Overview
 
-**`braavo`** — Run & pipeline steering (ops CLI)
-- Start runs, steer live agents, manage handoffs across provider boundaries
-- Dependency-free (Node 20+ only)
-- Self-host capable (custom API base)
+`braavo` is a single, dependency-free (Node 20+) CLI with two families of commands:
 
-**`forge`** — Multi-model council & BYOK keys (developer CLI)
+**Council** — multi-model orchestration & BYOK keys
 - Compare models side-by-side (`ask`), route cheapest-capable-first (`cascade`)
-- View cost & token savings over time
-- Store local provider API keys (macOS Keychain / chmod-600 file)
-- Keys never leave your machine
+- View cost & token savings over time (`savings`)
+- Store local provider API keys (macOS Keychain / chmod-600 file) — keys never leave your machine
 - **Serverless modes (Lane-A):** `local` (keyless, offline, straight to Ollama) and
   `direct` (BYOK, one-shot completion straight to a provider) — no Braavolabs server involved
 - **Safe-spawn (Lane-B):** `spawn` runs your own already-authenticated `claude`/`codex` CLI
@@ -25,86 +21,85 @@ Terminal interface for Braavolabs — two distinct binaries for agent operations
 - **MCP client:** `mcp` is a dependency-free Model Context Protocol stdio client (register
   servers, list & call their tools)
 
+**Pipelines** — run & agent steering (ops)
+- Start runs, steer live agents, manage handoffs across provider boundaries
+- Inspect external connections
+- Self-host capable (custom API base)
+
 ## Installation
 
 ```bash
-cd packages/cli
 pnpm build
-# Binaries are now at:
-#   ./dist/index.js    → symlink to ~/.local/bin/braavo (or use directly)
-#   ./dist/forge.js    → symlink to ~/.local/bin/forge (or use directly)
+# Binary is now at:
+#   ./dist/braavo.js    → symlink to ~/.local/bin/braavo (or use directly)
 
 # Or install globally:
 pnpm build && npm link
 ```
 
-Both binaries are zero-dependency; they run on Node 20+.
+`braavo` is zero-dependency; it runs on Node 20+.
 
 ## Quick Start
 
-### forge
+### Council
 
 ```bash
 # Log in (token or email/password)
-forge login --api https://your-api.com --token "eyJ..."
+braavo login --api https://your-api.com --token "eyJ..."
 
 # Set a default company (optional, can be overridden per-command)
-forge use coy_123abc
+braavo use coy_123abc
 
 # Ask a question to multiple models
-forge ask "Explain OAuth 2.0" --models claude,gpt4,gemini
+braavo ask "Explain OAuth 2.0" --models claude,gpt4,gemini
 
 # Cascade: cheapest model that meets your confidence threshold
-forge cascade "Summarize the Anthropic research paper" --threshold 0.9
+braavo cascade "Summarize the Anthropic research paper" --threshold 0.9
 
 # View cost savings over the last 7 days
-forge savings --days 7
+braavo savings --days 7
 
 # Manage local API keys (never sent to the server)
-forge keys add anthropic --key "sk-ant-v0..."
-forge keys list
-forge keys rm anthropic
+braavo keys add anthropic --key "sk-ant-v0..."
+braavo keys list
+braavo keys rm anthropic
 
 # Media orchestration (BYOK — image via fal.ai FLUX, voice via Google/ElevenLabs).
 # Always previews the cost first; only spends when you pass --yes.
-forge media-key add FAL "key-..."             # server-side, tenant-scoped media key
-forge image "a fox in the snow" --model fal-ai/flux/dev --size 1024x768   # preview only
-forge image "a fox in the snow" --yes                                     # generate → CDN URL
-forge voice "hello world" --provider ELEVENLABS --voice Rachel --out hi.mp3 --yes
-forge media-key list
+braavo media-key add FAL "key-..."             # server-side, tenant-scoped media key
+braavo image "a fox in the snow" --model fal-ai/flux/dev --size 1024x768   # preview only
+braavo image "a fox in the snow" --yes                                     # generate → CDN URL
+braavo voice "hello world" --provider ELEVENLABS --voice Rachel --out hi.mp3 --yes
+braavo media-key list
 
 # Serverless: talk straight to a local Ollama daemon (no key, no server)
-forge local "Explain OAuth 2.0"
+braavo local "Explain OAuth 2.0"
 
 # Serverless: one-shot BYOK completion straight to a provider
-forge direct anthropic "Explain OAuth 2.0"
+braavo direct anthropic "Explain OAuth 2.0"
 
 # Run your OWN authenticated vendor CLI as an opaque child (no vendor OAuth)
-forge spawn claude "refactor this module"
-forge spawn --list
+braavo spawn claude "refactor this module"
+braavo spawn --list
 
 # Prepend a compact git snapshot (branch/status/commits/diff --stat, ≤4KB) to the prompt
-forge ask "why is CI red?" --repo
+braavo ask "why is CI red?" --repo
 
 # Run YOUR test command; on failure, get a suggested fix (never auto-applied)
-forge fix --cmd "pnpm test" --repo
+braavo fix --cmd "pnpm test" --repo
 
 # Dependency-free Model Context Protocol stdio client
-forge mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
-forge mcp tools fs
-forge mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
+braavo mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+braavo mcp tools fs
+braavo mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
 
 # List local Ollama models + which BYOK providers have a stored key
-forge models
+braavo models
 ```
 
-### braavo
+### Pipelines
 
 ```bash
-# Log in
-braavo login --email you@example.com --password "..."
-braavo login --api https://self-host.local/api/v1 --token "eyJ..."
-
 # View your account
 braavo whoami
 
@@ -125,36 +120,44 @@ braavo continue run_xyz789 --provider OLLAMA --model llama2
 braavo connections
 ```
 
-## forge Commands
+## Council Commands
 
 ### login
 
 Authenticate with email/password or JWT token.
 
 ```bash
-forge login --email user@example.com --password "..."
-forge login --token "eyJ0eXAiOiJKV1QiL..."
-forge login --api https://internal.example.com --token "..."
+braavo login --email user@example.com --password "..."
+braavo login --token "eyJ0eXAiOiJKV1QiL..."
+braavo login --api https://internal.example.com --token "..."
 ```
 
-Stores credentials in `~/.forge/config.json` (with refresh-token support). Uses transparent single-retry on 401 to refresh expired tokens.
+Stores credentials in `~/.braavo/config.json` (with refresh-token support). Uses transparent single-retry on 401 to refresh expired tokens.
+
+### logout
+
+Clear stored credentials (best-effort server-side refresh-token revocation first).
+
+```bash
+braavo logout
+```
 
 ### use
 
 Set the default company for `ask` and `cascade` commands.
 
 ```bash
-forge use company_xyz
+braavo use company_xyz
 ```
 
-Overridable per-command: `forge ask "..." --company company_abc`
+Overridable per-command: `braavo ask "..." --company company_abc`
 
 ### ask
 
 Compare responses across multiple models (async poll).
 
 ```bash
-forge ask "What's a good state machine library?" --models claude,gpt4
+braavo ask "What's a good state machine library?" --models claude,gpt4
 ```
 
 Shows side-by-side answers from each model, plus a synthesis (if the server provides one), and token/cost savings vs. baseline.
@@ -166,9 +169,9 @@ Cheap-first routing with optional escalation.
 Starts with the cheapest model that meets your confidence threshold; escalates to expensive models only if low confidence is returned.
 
 ```bash
-forge cascade "Explain DNS resolution" --threshold 0.85
-forge cascade "Write Rust code" --threshold 0.9 --second-opinion
-forge cascade "..." --budget 2.50
+braavo cascade "Explain DNS resolution" --threshold 0.85
+braavo cascade "Write Rust code" --threshold 0.9 --second-opinion
+braavo cascade "..." --budget 2.50
 ```
 
 Shows the chosen model, confidence score, total cost, and any escalation attempts.
@@ -178,8 +181,8 @@ Shows the chosen model, confidence score, total cost, and any escalation attempt
 View cost & token savings from cascade routing over a date range.
 
 ```bash
-forge savings
-forge savings --days 30
+braavo savings
+braavo savings --days 30
 ```
 
 Breakdown includes:
@@ -194,53 +197,45 @@ Breakdown includes:
 Store, list, and remove local API keys for external providers.
 
 ```bash
-forge keys add openai --key "sk-proj-abc..."
-forge keys add anthropic --key "sk-ant-v0..."
-forge keys list
-forge keys rm openai
+braavo keys add openai --key "sk-proj-abc..."
+braavo keys add anthropic --key "sk-ant-v0..."
+braavo keys list
+braavo keys rm openai
 ```
 
 #### Key Storage
 
-**macOS:** Keys live in the login keychain (service "forge-cli"), indexed by a names-only file `~/.forge/keys-index.json`. The secret value is never stored in plaintext.
+**macOS:** Keys live in the login keychain (service "braavo-cli"), indexed by a names-only file `~/.braavo/keys-index.json`. The secret value is never stored in plaintext.
 
-**Other platforms:** Keys are stored in `~/.forge/keys.json` with permissions `chmod 600` (owner read/write only). You'll see a warning that they're not in the OS keychain.
+**Other platforms:** Keys are stored in `~/.braavo/keys.json` with permissions `chmod 600` (owner read/write only). You'll see a warning that they're not in the OS keychain.
 
-**Important:** Keys are never sent to the Braavolabs server. They're stored and used locally only — for future Lane-A direct-provider integrations or local model inference.
+**Important:** Keys are never sent to the Braavolabs server. They're stored and used locally only — for Lane-A direct-provider integrations or local model inference.
 
-When you run `forge keys list`, only a masked fingerprint (first-4 and last-4 characters) is displayed. The full secret is never echoed.
-
-### logout
-
-Clear stored credentials and keys.
-
-```bash
-forge logout
-```
+When you run `braavo keys list`, only a masked fingerprint (first-4 and last-4 characters) is displayed. The full secret is never echoed.
 
 ### local
 
 Serverless, keyless, offline: send a question directly to a local [Ollama](https://ollama.com) daemon. No login, no BYOK key, no network call beyond `localhost`.
 
 ```bash
-forge local "Explain OAuth 2.0"
-forge local "Explain OAuth 2.0" --model llama3.1
-forge local "..." --host http://192.168.1.50:11434
+braavo local "Explain OAuth 2.0"
+braavo local "Explain OAuth 2.0" --model llama3.1
+braavo local "..." --host http://192.168.1.50:11434
 ```
 
 - Talks to Ollama's native API: `GET /api/tags` to discover installed models, `POST /api/chat` (`stream:false`) for the completion.
-- `--model` picks the model; if omitted, forge uses the first model returned by `/api/tags` (i.e. whatever you have installed — it never guesses a name that isn't there).
+- `--model` picks the model; if omitted, braavo uses the first model returned by `/api/tags` (i.e. whatever you have installed — it never guesses a name that isn't there).
 - Base URL resolution: `--host` flag > `OLLAMA_HOST` env var > `http://localhost:11434`.
-- If Ollama isn't running (or unreachable at the resolved host), forge fails honestly: `Ollama not reachable — is it running?` — it does not retry silently or fabricate a response.
+- If Ollama isn't running (or unreachable at the resolved host), braavo fails honestly: `Ollama not reachable — is it running?` — it does not retry silently or fabricate a response.
 
 ### direct
 
-Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `forge keys`. The Braavolabs server is never contacted.
+Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `braavo keys`. The Braavolabs server is never contacted.
 
 ```bash
-forge direct anthropic "Explain OAuth 2.0"
-forge direct openai "Explain OAuth 2.0" --model gpt-4o
-forge direct groq "Explain OAuth 2.0"
+braavo direct anthropic "Explain OAuth 2.0"
+braavo direct openai "Explain OAuth 2.0" --model gpt-4o
+braavo direct groq "Explain OAuth 2.0"
 ```
 
 Supported providers (Lane-A v1): `anthropic`, `openai`, `groq`.
@@ -252,31 +247,31 @@ Supported providers (Lane-A v1): `anthropic`, `openai`, `groq`.
 | `groq` | `POST https://api.groq.com/openai/v1/chat/completions` (openai-compatible) | `Authorization: Bearer` | `llama-3.1-8b-instant` |
 
 Notes:
-- Requires a key stored via `forge keys add <provider>` first; otherwise forge tells you exactly that: `no key stored — run: forge keys add <provider>`.
+- Requires a key stored via `braavo keys add <provider>` first; otherwise braavo tells you exactly that: `no key stored — run: braavo keys add <provider>`.
 - The default models above are **documented, stable snapshots — not a claim that they're the newest available**. Check the provider's own model list and pass `--model <name>` to use something else.
 - The key is read from local storage, used only in that provider's own auth header for this one request, and is never printed, logged, or included in any error message.
 
 ### spawn
 
-Run **your own, already-authenticated** vendor CLI (`claude` or `codex`) as a child process. Forge is a thin, opaque passthrough — it does **not** re-implement the vendor, and it does **not** perform any vendor OAuth. You must have logged in with the official binary beforehand.
+Run **your own, already-authenticated** vendor CLI (`claude` or `codex`) as a child process. `braavo` is a thin, opaque passthrough — it does **not** re-implement the vendor, and it does **not** perform any vendor OAuth. You must have logged in with the official binary beforehand.
 
 ```bash
-forge spawn claude "refactor this module"      # anything after the vendor is passed verbatim
-forge spawn codex --model o4-mini "write tests"
-forge spawn claude --dir ./packages/api "..."  # run the session in a specific directory
-forge spawn claude --quiet "..."               # suppress the one-line risk note
-forge spawn --list                             # which vendor CLIs are installed (+ version)
+braavo spawn claude "refactor this module"      # anything after the vendor is passed verbatim
+braavo spawn codex --model o4-mini "write tests"
+braavo spawn claude --dir ./packages/api "..."  # run the session in a specific directory
+braavo spawn claude --quiet "..."               # suppress the one-line risk note
+braavo spawn --list                             # which vendor CLIs are installed (+ version)
 ```
 
-- **`--dir <path>`** sets the working directory for the session (default: current cwd). This flag is consumed by forge and **not** forwarded to the vendor; every other token after the vendor name is passed through unchanged.
+- **`--dir <path>`** sets the working directory for the session (default: current cwd). This flag is consumed by braavo and **not** forwarded to the vendor; every other token after the vendor name is passed through unchanged.
 - **`--quiet`** suppresses the one-line ToS-risk note printed before the session.
-- Before each run, forge prints a single steel line stating the vendor's ToS-risk level (`claude` = SAFE / volatile; `codex` = SAFE / lowest risk).
-- If the binary isn't found (or the spawn fails), forge degrades gracefully and points you at API-key mode, e.g. `forge direct anthropic "<question>"` — it never fabricates a result.
-- Forge exits with the child's own exit code.
+- Before each run, braavo prints a single steel line stating the vendor's ToS-risk level (`claude` = SAFE / volatile; `codex` = SAFE / lowest risk).
+- If the binary isn't found (or the spawn fails), braavo degrades gracefully and points you at API-key mode, e.g. `braavo direct anthropic "<question>"` — it never fabricates a result.
+- `braavo` exits with the child's own exit code.
 
 #### Lane-B safety contract
 
-`forge spawn` is a **SAFE-SPAWN adapter**, not an automation of someone else's account. The rules below are enforced by the implementation (`src/forge/spawn.ts`) and are non-negotiable:
+`braavo spawn` is a **SAFE-SPAWN adapter**, not an automation of someone else's account. The rules below are enforced by the implementation (`src/forge/spawn.ts`) and are non-negotiable:
 
 **MUST**
 - Run **only** the official vendor binary, discovered on `PATH` (or at a neutral bin dir such as `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
@@ -296,35 +291,35 @@ forge spawn --list                             # which vendor CLIs are installed
 
 ### --repo (structured git context)
 
-`ask`, `local`, `direct`, and `fix` accept `--repo`. When set, forge gathers a compact, factual snapshot of the **current git work tree** and prepends it to the prompt so the model reasons about your actual state instead of guessing:
+`ask`, `local`, `direct`, and `fix` accept `--repo`. When set, braavo gathers a compact, factual snapshot of the **current git work tree** and prepends it to the prompt so the model reasons about your actual state instead of guessing:
 
 ```bash
-forge ask "why is CI failing?" --repo
-forge local "suggest a commit message" --repo
-forge direct anthropic "review my staged changes" --repo
-forge fix --cmd "pnpm test" --repo
+braavo ask "why is CI failing?" --repo
+braavo local "suggest a commit message" --repo
+braavo direct anthropic "review my staged changes" --repo
+braavo fix --cmd "pnpm test" --repo
 ```
 
 The block contains: current **branch**, `git status --porcelain`, the **last 5 commits** (`git log -5 --oneline`), and both **staged** and **unstaged** `diff --stat`.
 
 - Every git call is an **execFile arg-array** — no shell, no injection seam (`src/forge/repo.ts`).
-- The block is capped at **~4KB**. On overflow it is cut and marked with an honest `[truncated …]` line — forge tells you it dropped context rather than silently trimming.
-- If the current directory is **not** a git repository, forge stops with an honest error (`not a git repository: <cwd>`) rather than fabricating a "clean tree".
+- The block is capped at **~4KB**. On overflow it is cut and marked with an honest `[truncated …]` line — braavo tells you it dropped context rather than silently trimming.
+- If the current directory is **not** a git repository, braavo stops with an honest error (`not a git repository: <cwd>`) rather than fabricating a "clean tree".
 
 ### fix
 
-Run **your own** test command; if it fails, send the failing output (plus optional `--repo` context) to a model and print a **suggested** fix. Forge **never edits a file or applies a patch** — the suggestion is yours to review and apply.
+Run **your own** test command; if it fails, send the failing output (plus optional `--repo` context) to a model and print a **suggested** fix. `braavo` **never edits a file or applies a patch** — the suggestion is yours to review and apply.
 
 ```bash
-forge fix --cmd "pnpm test"                              # backend defaults to --via ask (server cascade)
-forge fix --cmd "pnpm test" --via local                  # local Ollama
-forge fix --cmd "pnpm test" --via direct --provider anthropic
-forge fix --cmd "vitest run packages/cli" --repo         # include git context in the payload
+braavo fix --cmd "pnpm test"                              # backend defaults to --via ask (server cascade)
+braavo fix --cmd "pnpm test" --via local                  # local Ollama
+braavo fix --cmd "pnpm test" --via direct --provider anthropic
+braavo fix --cmd "vitest run packages/cli" --repo         # include git context in the payload
 ```
 
-- **Security:** `--cmd` is **your own command**, executed with `sh -c` exactly as written. Forge adds nothing to it — treat it like any shell command you'd run yourself, and don't paste a command you wouldn't run by hand.
-- **Cost honesty:** if the command exits **0**, forge prints `✓ tests already green` and **never calls a model** — no spend on a passing suite.
-- **Suggestion-only:** on failure the output is prefixed with a steel `suggestion only — review before applying` note; forge prints the model's proposed change and exits with the command's own exit code. It does not write to disk.
+- **Security:** `--cmd` is **your own command**, executed with `sh -c` exactly as written. `braavo` adds nothing to it — treat it like any shell command you'd run yourself, and don't paste a command you wouldn't run by hand.
+- **Cost honesty:** if the command exits **0**, braavo prints `✓ tests already green` and **never calls a model** — no spend on a passing suite.
+- **Suggestion-only:** on failure the output is prefixed with a steel `suggestion only — review before applying` note; braavo prints the model's proposed change and exits with the command's own exit code. It does not write to disk.
 - **`--via`** selects the backend that turns the failure into a suggestion: `ask` (Braavolabs server cascade, needs login), `local` (Ollama), or `direct` (BYOK, needs `--provider`). Only the tail (~80 lines) of the output is sent.
 
 ### mcp
@@ -334,21 +329,21 @@ A **dependency-free Model Context Protocol stdio client**. Register MCP servers,
 ```bash
 # Register a server. The "--" separator is MANDATORY; everything after it is the
 # server command + args, stored as a discrete array (no shell, no injection).
-forge mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+braavo mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
 
-forge mcp list                       # registered servers
-forge mcp rm fs                      # remove one
+braavo mcp list                       # registered servers
+braavo mcp rm fs                      # remove one
 
-forge mcp tools fs                   # spawn, handshake, tools/list — tabulated
-forge mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
-forge mcp call fs read_file --json '{"path":"…"}' --timeout 30000
+braavo mcp tools fs                   # spawn, handshake, tools/list — tabulated
+braavo mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
+braavo mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 ```
 
-- **Config** lives in `~/.forge/mcp.json` as `{ "<name>": { "command": "...", "args": [...] } }`. The command is always an **argument array** — never a joined string — so there is no shell-injection seam when the server is later spawned.
-- **Handshake:** `initialize` (protocolVersion `2024-11-05`, `clientInfo: { name: "forge" }`) → `notifications/initialized` → `tools/list` | `tools/call`.
+- **Config** lives in `~/.braavo/mcp.json` as `{ "<name>": { "command": "...", "args": [...] } }`. The command is always an **argument array** — never a joined string — so there is no shell-injection seam when the server is later spawned.
+- **Handshake:** `initialize` (protocolVersion `2024-11-05`, `clientInfo: { name: "braavo" }`) → `notifications/initialized` → `tools/list` | `tools/call`.
 - **Timeout:** every request has a timeout (default **10s**, override with `--timeout <ms>`) so a wedged server can't hang the CLI.
 - **stderr** from the server is streamed through verbatim in steel for debugging, and is **never** parsed as JSON-RPC — only stdout carries protocol messages.
-- A tool result with `isError: true` is printed through the molten error line and forge exits non-zero.
+- A tool result with `isError: true` is printed through the molten error line and braavo exits non-zero.
 
 > **Scope note (deliberately narrow).** This P-C4 slice ships `--repo` context, `fix`, and an MCP stdio client. **Sandbox/isolation parity** for spawned commands and MCP servers (containerized execution, filesystem/network confinement) is **not** in this CLI slice — it is deferred to the **desktop app, Phase D**. Until then, `fix --cmd` and MCP servers run with your own user's privileges; run only commands and servers you trust.
 
@@ -357,23 +352,20 @@ forge mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 List what's available for the serverless modes: local Ollama models plus which BYOK providers have a key stored.
 
 ```bash
-forge models
+braavo models
 ```
 
 Shows the resolved Ollama host and its installed models (or a clear "not reachable" line if the daemon is down), followed by a per-provider row for `anthropic` / `openai` / `groq` showing whether a key is stored.
 
-## braavo Commands
+## Pipeline Commands
 
-`braavo` is the ops/steering CLI — shorter reference below. See `braavo --help` for full details.
-
-### login / logout / whoami
+### whoami
 
 ```bash
-braavo login --email user@example.com --password "..."
-braavo login --token "eyJ..."
 braavo whoami
-braavo logout
 ```
+
+Shows your email, tenant name, and plan.
 
 ### runs / run
 
@@ -412,7 +404,7 @@ braavo continue run_xyz --provider OLLAMA --model llama2:70b --base-url http://l
 
 Handoff flow:
 1. `handoff` freezes the run at the next turn boundary and opens a claim slot.
-2. `continue` claims that slot, resuming on the new provider/model.
+2. `continue` claims that slot, resuming on the new provider/model. If the checkpoint is still freezing, the API answers `409 CHECKPOINT_PENDING` and `braavo continue` retries a few times automatically.
 
 ### connections
 
@@ -428,29 +420,26 @@ Shows status, platform (e.g., "OLLAMA", "OPENAI"), label, and base URL.
 
 ### Environment Variables
 
-**forge**
-- `FORGE_API_URL` — Override the API base (default: from config or `~/.forge/config.json`)
-- `FORGE_KEY` — Provide an API key via env (for `forge keys add`; if not set, you'll be prompted)
-
-**braavo**
-- `BRAAVO_API_URL` — Override the API base (default: `https://braavolabs.com/api/v1`)
+- `BRAAVO_API_URL` — Override the API base (default: `https://braavolabs.com/api/v1`, or from `~/.braavo/config.json`)
+- `BRAAVO_KEY` — Provide an API key via env (for `braavo keys add`; if not set, you'll be prompted)
+- `OLLAMA_HOST` — Override the local Ollama daemon base for `local` / `fix --via local` / `models` (default `http://localhost:11434`)
+- `NO_COLOR` / `BRAAVO_NO_COLOR` — Disable ANSI colors and spinners
 
 ### Config Files
 
-- **forge:** `~/.forge/config.json` — API URL, JWT token, refresh token
-- **braavo:** `~/.braavo/config.json` — Same structure
-- **forge keys:** `~/.forge/keys-index.json` (macOS) or `~/.forge/keys.json` (all platforms)
+- **config:** `~/.braavo/config.json` — API URL, JWT token, refresh token
+- **keys:** `~/.braavo/keys-index.json` (macOS) or `~/.braavo/keys.json` (other platforms)
+- **mcp:** `~/.braavo/mcp.json` — registered MCP servers
 
-Both binaries support `--api <url>` at login time to point to a self-hosted instance.
+`braavo` supports `--api <url>` at login time to point to a self-hosted instance.
 
 ## Non-Interactive Mode (TTY-less)
 
-Both binaries detect whether stdin/stdout are a terminal. In non-interactive environments (e.g., CI, cron, scripts):
+`braavo` detects whether stdin/stdout are a terminal. In non-interactive environments (e.g., CI, cron, scripts):
 
-- `prompt()` calls (e.g., "Email: ", password input) **will fail with "No TTY"** — pass credentials via flags or env:
+- `prompt()` calls (e.g., "Email: ", password input) **will fail** — pass credentials via flags or env:
   ```bash
-  forge login --token "eyJ..." --api https://your.api/v1
-  braavo login --token "eyJ..."
+  braavo login --token "eyJ..." --api https://your.api/v1
   ```
 
 - Output formatting adapts: no ANSI colors/spinners in pipe/file contexts (auto-detected via `isTTY`).
@@ -459,7 +448,7 @@ Both binaries detect whether stdin/stdout are a terminal. In non-interactive env
 
 ## Output Examples (Plain Text)
 
-### forge ask
+### braavo ask
 
 ```
 ── claude ──
@@ -483,7 +472,7 @@ balancing security with convenience.
 ≈ saved $0.0042 · 1,847 tokens
 ```
 
-### forge cascade
+### braavo cascade
 
 ```
 Rust's ownership model ensures memory safety at compile time. Each value has a
@@ -494,7 +483,7 @@ by the borrow checker.
 claude-opus/claude-3-opus-20250514 · tier=4 · confidence=97% · no escalation · $0.0156
 ```
 
-### forge savings
+### braavo savings
 
 ```
 period               7 days
@@ -525,30 +514,30 @@ OPEN          h_456def  run=run_xyz  from=gpt4             Escalation required
 
 ## Troubleshooting
 
-**"Not logged in. Run: forge login"**
-- No valid token in `~/.forge/config.json`
-- Use `forge login --token "..."` or `forge login --email ... --password ...`
+**"Not logged in. Run: braavo login"**
+- No valid token in `~/.braavo/config.json`
+- Use `braavo login --token "..."` or `braavo login --email ... --password ...`
 
 **"API 401: Unauthorized"**
 - Token expired; if a refresh token is stored, the CLI retries automatically
 - If both tokens are invalid, re-login
 
-**"No company. Run: forge use <companyId>"**
+**"No company. Run: braavo use <companyId>"**
 - No default company set; either:
-  - `forge use <id>` once, or
+  - `braavo use <id>` once, or
   - Pass `--company <id>` to each `ask`/`cascade` command
 
-**Keys show as "(missing)" in forge keys list (macOS)**
+**Keys show as "(missing)" in braavo keys list (macOS)**
 - The keychain entry was deleted out-of-band (e.g., Keychain Access.app)
-- Re-add: `forge keys add <provider> --key "..."`
+- Re-add: `braavo keys add <provider> --key "..."`
 
-**"Stored in ~/.forge/keys.json (chmod 600) — no OS keychain on this platform"**
+**"Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform"**
 - You're not on macOS; keys are stored in plaintext with restricted permissions
 - This is expected. Keep the file secure and back up carefully.
 
-**Cannot write to ~/.forge/ or ~/.braavo/**
+**Cannot write to ~/.braavo/**
 - Ensure the directory exists and you have write permissions
-- Both binaries auto-create the directory on first login
+- `braavo` auto-creates the directory on first login
 
 ## Development
 
@@ -558,7 +547,7 @@ OPEN          h_456def  run=run_xyz  from=gpt4             Escalation required
 pnpm build
 ```
 
-Compiles TypeScript to `dist/`.
+Compiles TypeScript to `dist/` (single bin at `dist/braavo.js`).
 
 ### Test
 
@@ -578,12 +567,11 @@ npm run lint
 
 ## Notes
 
-- **forge** and **braavo** are separate CLI tools, not a monolithic interface. Each solves a distinct problem (multi-model steering vs. pipeline ops).
-- Both use the same config structure but separate config files (`~/.forge/` vs `~/.braavo/`).
-- `braavo` is an **ops** tool meant for control-plane integration; `forge` is a **developer** tool.
-- No runtime dependencies — both are pure Node with built-in fetch + fs + readline.
+- `braavo` is a single CLI covering two families of work: the multi-model **council** (ask/cascade/savings, BYOK keys, serverless local/direct, spawn, fix, MCP) and **pipeline** ops (runs, steering, handoffs, connections).
+- Config lives under `~/.braavo/`. The internal source directory is `src/forge/` — an implementation detail, not a product name.
+- No runtime dependencies — pure Node with built-in fetch + fs + readline.
 - Transparent token refresh on 401 (single retry) mirrors web/mobile behavior.
-- Self-host support: both accept `--api <url>` at login time.
+- Self-host support: pass `--api <url>` at login time.
 
 ## License
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { lastLines, buildFixPrompt, runFix, defaultRunCmd, SUGGESTION_NOTE } from "../fix";
 // renderFixLines is the entrypoint-owned renderer (ui in, string[] out).
-import { renderFixLines } from "../../forge";
+import { renderFixLines } from "../../braavo";
 import { makeUi } from "../ui";
 
 const colorUi = makeUi({ tty: true });
@@ -102,7 +102,7 @@ describe("renderFixLines — suggestion-only, no green", () => {
     const joined = lines.join("\n");
     expect(joined).toContain(SUGGESTION_NOTE);
     expect(joined).toContain("edit foo.ts line 3");
-    expect(joined).toContain("forge never applies");
+    expect(joined).toContain("braavo never applies");
     assertNoGreen(joined);
   });
 });

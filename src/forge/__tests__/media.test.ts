@@ -45,7 +45,7 @@ describe("renderMediaPreview", () => {
   it("warns + hints the media-key command when no key is configured", () => {
     const lines = renderMediaPreview(ui, { usd: 0.5 }, false, false).join("\n");
     expect(lines).toContain("no provider key");
-    expect(lines).toContain("forge keys add");
+    expect(lines).toContain("braavo keys add");
   });
   it("prompts for --yes only when a key exists and the user has not opted in", () => {
     expect(renderMediaPreview(ui, { usd: 0.5 }, true, false).join("\n")).toContain("add --yes to generate");

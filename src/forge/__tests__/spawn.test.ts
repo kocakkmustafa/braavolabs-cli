@@ -10,7 +10,7 @@ import {
   type ChildLike,
 } from "../spawn";
 import { makeUi } from "../ui";
-import { renderSpawnList, spawnRiskLine, spawnFallbackLines } from "../../forge";
+import { renderSpawnList, spawnRiskLine, spawnFallbackLines } from "../../braavo";
 
 const colorUi = makeUi({ tty: true });
 
@@ -53,8 +53,8 @@ describe("isSpawnVendor / VENDOR_SPECS", () => {
     expect(VENDOR_SPECS.codex.risk).toContain("SAFE");
     expect(VENDOR_SPECS.codex.risk.toLowerCase()).toContain("lowest");
     // Fallback (rule g) points at the API-key path, never a vendor OAuth flow.
-    expect(VENDOR_SPECS.claude.fallback).toBe('forge direct anthropic "<question>"');
-    expect(VENDOR_SPECS.codex.fallback).toBe('forge direct openai "<question>"');
+    expect(VENDOR_SPECS.claude.fallback).toBe('braavo direct anthropic "<question>"');
+    expect(VENDOR_SPECS.codex.fallback).toBe('braavo direct openai "<question>"');
   });
 
   it("known paths are neutral bin dirs, never a vendor config/token dir (rule d)", () => {
@@ -205,7 +205,7 @@ describe("spawn renderers (terminal-noir, no green)", () => {
     const lines = spawnFallbackLines(colorUi, "codex");
     const joined = lines.join("\n");
     expect(joined).toContain("codex CLI not found");
-    expect(joined).toContain('forge direct openai "<question>"');
+    expect(joined).toContain('braavo direct openai "<question>"');
     assertNoGreen(joined);
   });
 

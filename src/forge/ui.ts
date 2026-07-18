@@ -1,12 +1,12 @@
 /**
- * forge terminal-noir UI — ANSI palette + braille spinner.
+ * braavo terminal-noir UI — ANSI palette + braille spinner.
  *
  * Palette (256-color): arc-blue is primary AND success (there is deliberately
  * NO GREEN anywhere — a success ✓ is arc-blue, not green). ember drives
  * running/highlight state and the spinner; molten is error; steel is secondary.
  *
  * Colors auto-disable when stdout is not a TTY (piped output stays clean) or
- * when NO_COLOR / FORGE_NO_COLOR is set. `makeUi({ tty })` lets tests force
+ * when NO_COLOR / BRAAVO_NO_COLOR is set. `makeUi({ tty })` lets tests force
  * either mode. No font assumptions — braille spinner degrades to nothing off-TTY.
  */
 
@@ -46,7 +46,7 @@ export interface UiOpts {
 
 export function makeUi(opts: UiOpts = {}): Ui {
   const tty = opts.tty ?? Boolean(process.stdout.isTTY);
-  const enabled = tty && !process.env.NO_COLOR && !process.env.FORGE_NO_COLOR;
+  const enabled = tty && !process.env.NO_COLOR && !process.env.BRAAVO_NO_COLOR;
 
   const paint = (code: number, s: string): string => (enabled ? `\x1b[38;5;${code}m${s}\x1b[0m` : s);
   const attr = (code: number, s: string): string => (enabled ? `\x1b[${code}m${s}\x1b[0m` : s);

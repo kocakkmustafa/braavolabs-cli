@@ -13,8 +13,8 @@ function fakeGit(map: Record<string, string>, calls?: string[][]): GitRunner {
 
 const HAPPY: Record<string, string> = {
   "rev-parse --is-inside-work-tree": "true\n",
-  "rev-parse --abbrev-ref HEAD": "feat/forge-cli-p4\n",
-  "status --porcelain": " M src/forge.ts\n?? new.ts\n",
+  "rev-parse --abbrev-ref HEAD": "feat/braavo-cli-p4\n",
+  "status --porcelain": " M src/braavo.ts\n?? new.ts\n",
   "log -5 --oneline": "9b505c3 merge\nb681ebe merge main\n",
   "diff --cached --stat": " src/a.ts | 2 +-\n",
   "diff --stat": " src/b.ts | 9 +++++----\n",
@@ -27,8 +27,8 @@ describe("collectRepoContext", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.truncated).toBe(false);
-    expect(res.text).toContain("branch: feat/forge-cli-p4");
-    expect(res.text).toContain(" M src/forge.ts");
+    expect(res.text).toContain("branch: feat/braavo-cli-p4");
+    expect(res.text).toContain(" M src/braavo.ts");
     expect(res.text).toContain("9b505c3 merge");
     expect(res.text).toContain("src/a.ts | 2 +-");
     expect(res.text).toContain("src/b.ts | 9 +++++----");

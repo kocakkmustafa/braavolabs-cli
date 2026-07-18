@@ -1,15 +1,15 @@
 /**
- * forge fix — run YOUR test command, and if it fails, ask a model for a fix.
+ * braavo fix — run YOUR test command, and if it fails, ask a model for a fix.
  *
- *   forge fix --cmd "<test-command>" [--via local|direct <provider>|ask] [--repo]
+ *   braavo fix --cmd "<test-command>" [--via local|direct <provider>|ask] [--repo]
  *
  * Contract (why this is safe by construction):
- *   - The command is the USER'S OWN, passed to `sh -c` exactly as given. Forge
+ *   - The command is the USER'S OWN, passed to `sh -c` exactly as given. braavo
  *     adds nothing to it. (README carries the security note that this executes
  *     whatever you type — treat it like any shell command.)
- *   - Cost honesty: if the command exits 0, forge prints "tests already green"
+ *   - Cost honesty: if the command exits 0, braavo prints "tests already green"
  *     and NEVER calls a model. No spend on a passing suite.
- *   - Suggestion-only: on failure, forge sends the tail of the output (+ optional
+ *   - Suggestion-only: on failure, braavo sends the tail of the output (+ optional
  *     --repo context) to the selected backend and PRINTS the suggested fix. It
  *     NEVER writes to a file or applies a patch. The output is prefixed with a
  *     steel "suggestion only — review before applying" note.
@@ -19,7 +19,7 @@
  */
 import { spawnSync } from "node:child_process";
 
-/** Steel note stamped ahead of every suggestion — forge never auto-applies. */
+/** Steel note stamped ahead of every suggestion — braavo never auto-applies. */
 export const SUGGESTION_NOTE = "suggestion only — review before applying";
 
 /** Default tail size (lines of command output) sent to the model. */

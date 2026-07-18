@@ -1,5 +1,5 @@
 /**
- * forge mcp — a dependency-free Model Context Protocol stdio client.
+ * braavo mcp — a dependency-free Model Context Protocol stdio client.
  *
  * MCP stdio framing is line-delimited JSON-RPC 2.0: every message is a single
  * JSON object on one line terminated by "\n". This module implements just enough
@@ -7,11 +7,11 @@
  * built on node:child_process + JSON.parse, with NO runtime dependency.
  *
  * Design notes:
- *   - Server config lives in ~/.forge/mcp.json as { name: {command, args[]} }.
+ *   - Server config lives in ~/.braavo/mcp.json as { name: {command, args[]} }.
  *     The command is stored as an ARG ARRAY, never a joined string — so there is
  *     no shell and no injection seam when the server is later spawned.
  *   - The handshake is: initialize (request) → notifications/initialized (notify)
- *     → tools/list | tools/call. clientInfo identifies us as { name:"forge" }.
+ *     → tools/list | tools/call. clientInfo identifies us as { name:"braavo" }.
  *   - stderr from the server is surfaced verbatim (debug, painted steel by the
  *     caller) but NEVER parsed — only stdout carries JSON-RPC.
  *   - Every request has a timeout (default 10s) so a wedged server can't hang us.
@@ -25,10 +25,10 @@ import { CONFIG_DIR } from "./config";
 
 export const MCP_PATH = join(CONFIG_DIR, "mcp.json");
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
-export const FORGE_VERSION = "0.1.0";
+export const BRAAVO_VERSION = "0.1.0";
 export const DEFAULT_MCP_TIMEOUT_MS = 10_000;
 
-const CLIENT_INFO = { name: "forge", version: FORGE_VERSION };
+const CLIENT_INFO = { name: "braavo", version: BRAAVO_VERSION };
 
 /** A registered MCP server: its launch command and discrete argument array. */
 export interface McpServerDef {
@@ -66,13 +66,13 @@ export function removeMcpServer(cfg: McpConfig, name: string): McpConfig {
 export type ParsedMcpAdd = { name: string; command: string; args: string[] } | { error: string };
 
 /**
- * Parse `forge mcp add <name> -- <command> [args...]` from the tokens that
+ * Parse `braavo mcp add <name> -- <command> [args...]` from the tokens that
  * follow "add" (i.e. [name, "--", command, ...args]). The "--" separator is
- * mandatory so the server command is never confused with forge's own flags.
+ * mandatory so the server command is never confused with braavo's own flags.
  */
 export function parseMcpAdd(afterAdd: string[]): ParsedMcpAdd {
   const name = afterAdd[0];
-  if (!name || name === "--") return { error: "usage: forge mcp add <name> -- <command> [args...]" };
+  if (!name || name === "--") return { error: "usage: braavo mcp add <name> -- <command> [args...]" };
   const dashIdx = afterAdd.indexOf("--");
   if (dashIdx < 0) return { error: 'missing "--" separator before the server command' };
   const command = afterAdd[dashIdx + 1];
