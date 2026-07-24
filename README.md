@@ -4,7 +4,10 @@ Braavolabs CLI — one terminal command, `braavo`, for both the multi-model coun
 
 ## Overview
 
-`braavo` is a single, dependency-free (Node 20+) CLI with two families of commands:
+`braavo` is a single, near-dependency-free (Node 20+) CLI with two families of commands. The one
+runtime dependency is `zod`, used only by the opt-in companion relay bridge (`spawn --bridge`,
+see below) to validate the relay contract — every other command remains built on Node built-ins
+alone.
 
 **Council** — multi-model orchestration & BYOK keys
 - Compare models side-by-side (`ask`), route cheapest-capable-first (`cascade`)
@@ -13,7 +16,9 @@ Braavolabs CLI — one terminal command, `braavo`, for both the multi-model coun
 - **Serverless modes (Lane-A):** `local` (keyless, offline, straight to Ollama) and
   `direct` (BYOK, one-shot completion straight to a provider) — no Braavolabs server involved
 - **Safe-spawn (Lane-B):** `spawn` runs your own already-authenticated `claude`/`codex` CLI
-  as an opaque child process — no vendor OAuth, output never parsed, token files never touched
+  as an opaque child process — no vendor OAuth, output never parsed, token files never touched.
+  **`--bridge`** is an opt-in exception that mirrors the session to a companion (mobile panel)
+  over the relay control plane — see [spawn](#spawn) below
 - **Repo-aware prompting:** `--repo` prepends a compact git snapshot (branch, status, recent
   commits, diff --stat, ≤4KB) to `ask`/`local`/`direct`/`fix`
 - **Suggest-a-fix:** `fix` runs your own test command and, only on failure, asks a model for a
@@ -37,7 +42,8 @@ pnpm build
 pnpm build && npm link
 ```
 
-`braavo` is zero-dependency; it runs on Node 20+.
+`braavo` runs on Node 20+ and is near-dependency-free — `zod` is its one runtime dependency,
+used only by the opt-in `spawn --bridge` companion relay (see [spawn](#spawn)).
 
 ## Quick Start
 
@@ -260,6 +266,7 @@ braavo spawn claude "refactor this module"      # anything after the vendor is p
 braavo spawn codex --model o4-mini "write tests"
 braavo spawn claude --dir ./packages/api "..."  # run the session in a specific directory
 braavo spawn claude --quiet "..."               # suppress the one-line risk note
+braavo spawn claude --bridge "..."              # opt-in: mirror the session to a companion (see below)
 braavo spawn --list                             # which vendor CLIs are installed (+ version)
 ```
 
@@ -268,6 +275,29 @@ braavo spawn --list                             # which vendor CLIs are installe
 - Before each run, braavo prints a single steel line stating the vendor's ToS-risk level (`claude` = SAFE / volatile; `codex` = SAFE / lowest risk).
 - If the binary isn't found (or the spawn fails), braavo degrades gracefully and points you at API-key mode, e.g. `braavo direct anthropic "<question>"` — it never fabricates a result.
 - `braavo` exits with the child's own exit code.
+
+#### `--bridge` (opt-in companion relay)
+
+By default `spawn` is the opaque `stdio:"inherit"` passthrough described below — braavo never reads
+a byte of the vendor's output. **`--bridge`** is a narrow, deliberate, opt-in exception: it TEEs the
+vendor's stdout/stderr to BOTH your terminal (unchanged — you still see everything live) AND a
+companion (mobile panel) over the sealed relay control plane, so you can watch and steer a spawned
+session remotely.
+
+- Requires login (`braavo login`) — registering the session with the relay needs the same bearer
+  token every other authenticated command uses.
+- The mirrored output is **client-side redacted** (`sk-…`/`Bearer …`/long-opaque-token patterns) before
+  it ever leaves this process — the relay server redacts again independently, so this is defense in
+  depth, not the only guard.
+- A companion `steer` command writes the message straight into the vendor's stdin (as if you'd typed
+  it); a companion `kill` command sends `SIGTERM`. A companion `approve`/`reject` command is a
+  **logged no-op** — braavo's spawn has no local approval gate of its own; the vendor CLI manages its
+  own approvals internally.
+- A relay outage never blocks or kills the session — the vendor CLI keeps running companion-less if
+  the relay is unreachable.
+- Implementation: `src/forge/relay-protocol.ts` / `relay-bridge.ts` / `relay-transport.ts` (the CLI-side
+  mirror of the sealed relay contract, ported from the Braavolabs Desktop app's own companion bridge)
+  and `spawnVendorBridged` in `src/forge/spawn.ts`.
 
 #### Lane-B safety contract
 
@@ -284,10 +314,10 @@ braavo spawn --list                             # which vendor CLIs are installe
 
 **MUST NOT**
 - Perform, initiate, or broker any **vendor OAuth / sign-in**. The user authenticates with the official binary themselves, out of band.
-- **Read, parse, or scrape** the child's output for tokens, identity, or anything else — and never write that output to disk, telemetry, or any server.
+- **Read, parse, or scrape** the child's output for tokens, identity, or anything else — and never write that output to disk, telemetry, or any server. (`--bridge`, opt-in only, is the one deliberate exception: it relays a TEE'd, client-side-redacted copy of the output to a companion over the sealed relay — see above — but still never parses it for content, never writes it to disk, and the default, non-`--bridge` path is byte-for-byte unchanged.)
 - Touch OAuth **token/cookie files** (`~/.claude*`, `~/.codex*`, credentials, `auth.json`) — **not even to read them**. Binary discovery looks only at `PATH` and neutral bin dirs, never inside a vendor config directory. `spawn --list` reports *installed-or-not only*; it deliberately does **not** probe login state.
 - Impose directory isolation the user didn't ask for.
-- Add a runtime dependency — the adapter stays dependency-free (Node built-ins only).
+- Add a runtime dependency to the default, opaque passthrough — that path stays dependency-free (Node built-ins only). `--bridge` is the one opt-in exception, adding `zod` to validate the relay contract (same trade-off the Braavolabs Desktop app made for its own companion bridge).
 
 ### --repo (structured git context)
 

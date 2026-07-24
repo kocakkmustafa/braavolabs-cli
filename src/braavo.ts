@@ -10,7 +10,10 @@
  *                 suggest-a-fix, and a dep-free MCP stdio client.
  *   • pipelines — list/trigger runs, steer a live run, hand a run across provider
  *                 boundaries, and inspect external connections.
- * Dep-free: Node 20+ global fetch + built-ins only. Token/defaults live in
+ * Near-dep-free: Node 20+ global fetch + built-ins only, except `zod` —
+ * pulled in solely by the opt-in `spawn --bridge` companion relay (see
+ * forge/relay-protocol.ts) to validate the sealed relay contract; every
+ * other command stays on built-ins alone. Token/defaults live in
  * ~/.braavo/config.json; a 401 transparently refreshes once and retries.
  *
  * ai morghulis · ai dohaeris.
@@ -63,11 +66,16 @@ import {
   VENDOR_SPECS,
   findBinary,
   spawnVendor,
+  spawnVendorBridged,
+  makeChildRef,
+  makeSpawnBridgeHandlers,
   probeVendor,
   isSpawnVendor,
   type SpawnVendor,
   type VendorStatus,
 } from "./forge/spawn";
+import { createRelayTransport } from "./forge/relay-transport";
+import { RelayBridge } from "./forge/relay-bridge";
 import { collectRepoContext, prependRepoContext } from "./forge/repo";
 import {
   SUGGESTION_NOTE,
@@ -396,7 +404,7 @@ ${ui.steel("Council")}
   ${p("braavo direct")}  <provider> "<question>" [--model <name>] [--repo]
   ${p("braavo fix")}     --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]
   ${p("braavo mcp")}     add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']
-  ${p("braavo spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet]  |  --list
+  ${p("braavo spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet] [--bridge]  |  --list
   ${p("braavo models")}  list local Ollama models + BYOK providers with a stored key
   ${p("braavo logout")}
 
@@ -733,11 +741,12 @@ async function main(): Promise<void> {
         die(`usage: braavo spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  braavo spawn --list`);
       }
       // Everything after the vendor is passed VERBATIM to the child (arg array —
-      // no shell, no injection). --dir carves out its own working directory but
-      // is not forwarded to the vendor; every other token is.
+      // no shell, no injection). --dir/--quiet/--bridge carve out their own
+      // meaning and are not forwarded to the vendor; every other token is.
       const passthrough: string[] = [];
       let cwd: string | undefined;
       let quiet = false;
+      let bridged = false;
       const rest = process.argv.slice(2);
       const vIdx = rest.indexOf(vendor);
       for (let i = vIdx + 1; i < rest.length; i++) {
@@ -746,6 +755,8 @@ async function main(): Promise<void> {
           cwd = rest[++i];
         } else if (a === "--quiet") {
           quiet = true;
+        } else if (a === "--bridge") {
+          bridged = true;
         } else {
           passthrough.push(a);
         }
@@ -756,6 +767,28 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       if (!quiet) console.error(spawnRiskLine(ui, vendor));
+
+      if (bridged) {
+        // OPT-IN companion-relay mode (Companion channel Dilim 2b — see
+        // spawn.ts's spawnVendorBridged doc comment). Needs the same bearer
+        // token every other authed command needs, to register the session
+        // with the relay; the default (bridge-less) spawn above needs no
+        // auth at all, since it never talks to braavolabs's own API.
+        requireAuth(cfg);
+        const childRef = makeChildRef();
+        const handlers = makeSpawnBridgeHandlers(childRef);
+        const transport = createRelayTransport({ cfg });
+        const bridge = new RelayBridge(transport, handlers);
+        try {
+          const code = await spawnVendorBridged(binPath, passthrough, { cwd, bridge, childRef, label: vendor });
+          process.exit(code); // own the child's exit code verbatim
+        } catch {
+          for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+          process.exit(1);
+        }
+        return;
+      }
+
       try {
         const code = await spawnVendor(binPath, passthrough, { cwd });
         process.exit(code); // own the child's exit code verbatim
