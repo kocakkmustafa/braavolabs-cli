@@ -32,6 +32,7 @@
 import { spawn as nodeSpawn, execFileSync } from "node:child_process";
 import { existsSync as fsExistsSync } from "node:fs";
 import { homedir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import type { RelayBridge, BridgeHandlers } from "./relay-bridge";
 
 export const SPAWN_VENDORS = ["claude", "codex"] as const;
@@ -248,7 +249,14 @@ export function makeSpawnBridgeHandlers(
 ): BridgeHandlers {
   return {
     onSteer(message: string) {
-      ref.current?.stdin.write(`${message}\n`);
+      // The companion's message is written into the vendor CLI's stdin as if
+      // the user typed ONE line. Collapse embedded control chars (newline, CR,
+      // ESC, BEL, …) to spaces so a single steer cannot inject MULTIPLE
+      // lines/commands into the child — braavo is the last gate before the
+      // child's stdin and must not lean solely on the relay's server-side
+      // owner-binding (defence in depth). Exactly one trailing "\n" is added.
+      const oneLine = message.replace(/[\u0000-\u001F\u007F]/g, " ").trimEnd();
+      if (oneLine) ref.current?.stdin.write(`${oneLine}\n`);
     },
     async onApprove(actionId: string) {
       onIgnored("approve", actionId);
@@ -312,10 +320,18 @@ export function spawnVendorBridged(
     const child = spawnImpl(binPath, args, { stdio: "pipe", cwd });
     childRef.current = child;
 
-    const tee = (out: NodeJS.WritableStream) => (chunk: Buffer | string) => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      out.write(text);
-      void bridge.emitOutput(text);
+    // Each stream gets its OWN StringDecoder so a multibyte UTF-8 char split
+    // across chunk boundaries isn't corrupted (the decoder holds the partial
+    // bytes until the rest arrives) — the relay mirror and its redaction always
+    // see complete text. The terminal gets the RAW chunk (perfect fidelity,
+    // byte-for-byte the same as the default passthrough).
+    const tee = (out: NodeJS.WritableStream) => {
+      const decoder = new StringDecoder("utf8");
+      return (chunk: Buffer | string) => {
+        out.write(chunk);
+        const text = typeof chunk === "string" ? chunk : decoder.write(chunk);
+        if (text) void bridge.emitOutput(text);
+      };
     };
     child.stdout.on("data", tee(process.stdout));
     child.stderr.on("data", tee(process.stderr));
@@ -332,6 +348,7 @@ export function spawnVendorBridged(
     })();
 
     child.on("error", (err) => {
+      childRef.current = null; // a late steer/kill must not touch a dead child
       void bridge.stop().catch(() => {});
       reject(err);
     });
@@ -340,6 +357,7 @@ export function spawnVendorBridged(
     // before unsubscribing (see relay-bridge.ts) — no separate setStatus
     // call is needed here.
     child.on("exit", (code) => {
+      childRef.current = null; // a late steer/kill must not touch a dead child
       void (async () => {
         try {
           await bridge.stop();

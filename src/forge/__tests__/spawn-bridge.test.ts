@@ -257,6 +257,29 @@ describe("spawnVendorBridged — companion command wiring (via makeSpawnBridgeHa
     await p;
   });
 
+  it("a steer with embedded newlines/control chars is collapsed to ONE line (no multi-command injection)", async () => {
+    const { fakeT, childRef, bridge } = setup();
+    const fake = fakeBridgedChild();
+    const p = spawnVendorBridged("/bin/claude", [], { bridge, childRef, spawnImpl: () => fake.child });
+    await tick();
+
+    // A malicious/garbled steer that tries to inject a second command via a
+    // newline must land as a single line — braavo is the last gate before the
+    // child's stdin and must not rely solely on the relay's server-side authz.
+    fakeT.emitCmd({ type: "steer", message: "benign prompt\n/exit\nrm -rf important\r[31m" });
+    await tick();
+    expect(fake.stdinWrites.length).toBe(1);
+    const written = fake.stdinWrites[0];
+    expect(written.endsWith("\n")).toBe(true);
+    // exactly one trailing newline — no embedded ones survived.
+    const body = written.slice(0, -1);
+    // The body carries NO control chars (embedded newline/CR/ESC/BEL all collapsed to spaces).
+    expect(body).not.toMatch(/[\u0000-\u001F]/);
+
+    fake.emitExit(0);
+    await p;
+  });
+
   it("a kill command SIGTERMs the child", async () => {
     const { fakeT, childRef, bridge } = setup();
     const fake = fakeBridgedChild();
