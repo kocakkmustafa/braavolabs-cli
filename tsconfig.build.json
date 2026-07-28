@@ -1,0 +1,12 @@
+{
+  // Build-only config. The base tsconfig deliberately includes the tests so
+  // `npm run lint` (tsc --noEmit) type-checks them — vitest transpiles without
+  // checking types, so that lint run is the only thing standing between a
+  // broken test helper and a green suite. But emitting those same files put
+  // eight compiled `__tests__/*.test.js` into dist/, and `files: ["dist"]`
+  // then shipped them to every user: ~58 kB of the published tarball was test
+  // code. So the build extends the base and drops tests from the EMIT only —
+  // type-checking coverage is unchanged.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts"]
+}

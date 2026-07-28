@@ -1,0 +1,31 @@
+Braavolabs — Source-Available License (early-access)
+
+Copyright (c) 2026 YULALabs
+
+All rights reserved.
+
+This source code is made available for review, audit, and self-hosted
+non-commercial evaluation. The following are explicitly NOT granted by
+this license, except by separate written agreement from the copyright
+holder:
+
+  • Redistribution of the source or compiled binaries
+  • Use in any commercial product or hosted service that competes with
+    braavolabs.com or the Braavolabs mobile apps
+  • Removal or replacement of the Braavolabs name, marks, or attribution
+    in user-facing surfaces
+
+Self-hosted non-commercial evaluation IS permitted: you may run the
+software internally for your own use, modify it, and contribute fixes
+back via pull request to the official Braavolabs repository.
+
+For commercial / SaaS / OEM licensing, write to
+founder@braavolabs.com.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

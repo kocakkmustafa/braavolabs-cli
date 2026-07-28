@@ -2,14 +2,22 @@
   "name": "@braavolabs/cli",
   "version": "0.1.0",
   "packageManager": "pnpm@10.33.0",
-  "private": true,
   "description": "Braavolabs CLI — one terminal for the multi-model council (ask/cascade/savings, BYOK keys, local/direct, spawn, fix, MCP) and pipeline control (runs, steering, handoffs, connections). Near-dep-free (zod only, for the opt-in spawn --bridge companion relay), self-host capable.",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://braavolabs.com",
+  "repository": { "type": "git", "url": "git+https://github.com/kocakkmustafa/braavolabs-cli.git" },
+  "bugs": { "url": "https://github.com/kocakkmustafa/braavolabs-cli/issues" },
+  "keywords": ["ai", "agents", "cli", "llm", "byok", "multi-model", "governance", "claude", "braavolabs"],
   "main": "./dist/braavo.js",
   "bin": { "braavo": "./dist/braavo.js" },
+  "engines": { "node": ">=18" },
+  "publishConfig": { "access": "public" },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "zod": "^3.24.0"
