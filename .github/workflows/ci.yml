@@ -11,5 +11,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      # BR-P0-005: roadmap §9's CLI gate is install → test → lint → build →
+      # `--help`. lint (tsc --noEmit) and the built-binary smoke check were both
+      # missing, so a type error or a bin that fails to start could pass CI.
       - run: pnpm test
+      - run: pnpm run lint
+      - run: pnpm build
+      # Runs the actual built artifact. `pnpm build` succeeding does not prove
+      # the published bin starts — this is the cheapest possible proof it does.
+      - run: node dist/braavo.js --help
