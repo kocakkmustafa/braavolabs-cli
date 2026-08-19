@@ -20,7 +20,11 @@
  */
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
-import { Config, loadConfig, saveConfig, clearConfig, classifyApiHost } from "./forge/config";
+import { Config, loadConfig, saveConfig, clearConfig, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
+import { EXIT } from "./forge/exit-codes";
+import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
+import { runDoctor } from "./forge/doctor";
+import { verifyEvidenceChain } from "./forge/audit";
 import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
@@ -407,6 +411,21 @@ ${ui.steel("Council")}
   ${p("braavo spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet] [--bridge]  |  --list
   ${p("braavo models")}  list local Ollama models + BYOK providers with a stored key
   ${p("braavo logout")}
+
+${ui.steel("Control (contract)")}
+  ${p("braavo doctor")}    local health: config perms, api host, credentials, sandbox, mcp   [--json]
+  ${p("braavo init")}      [--api <url>]                write ~/.braavo/config.json
+  ${p("braavo watch")}     <runId>                      poll until a terminal state          [--json]
+  ${p("braavo approve")}   <approvalId> [--deny] [--reason <t>] --yes                        [--json]
+  ${p("braavo pause")}     <runId> --yes                                                     [--json]
+  ${p("braavo stop")}      <runId> --yes                                                     [--json]
+  ${p("braavo policy")}    test                         governance config + risk posture     [--json]
+  ${p("braavo audit")}     verify [--run <runId>]       verify the evidence hash chain       [--json]
+  ${p("braavo cost")}      [--days <n>]                                                      [--json]
+  ${p("braavo connect")}                                external connections                 [--json]
+  ${p("braavo agent")}     [--company <id>]                                                  [--json]
+  ${p("braavo session")}                                active relay sessions                [--json]
+  ${ui.dim("mutating commands refuse without --yes or --approval <token>; exit 4 = refused")}
 
 ${ui.steel("Pipelines")}
   ${p("braavo whoami")}
@@ -1117,6 +1136,181 @@ async function main(): Promise<void> {
       return;
     }
 
+    // ── roadmap §5.2 contract commands (BR-P1-002) ────────────────────────
+    //
+    // Every mutating command here goes through requireConfirmation, so the
+    // default in a non-TTY (i.e. every CI job) is to refuse rather than act.
+
+    case "doctor": {
+      // Local health only — deliberately does NOT require auth, because the
+      // most common reason to run doctor is that auth is what's broken.
+      const checks = await runDoctor(cfg);
+      const failed = checks.filter((c) => c.status === "fail");
+      emit(flags, { checks, ok: failed.length === 0 }, () =>
+        checks
+          .map((c) => `${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${c.name.padEnd(22)} ${c.detail}`)
+          .join("\n"),
+      );
+      if (failed.length) process.exitCode = EXIT.GENERAL;
+      return;
+    }
+
+    case "init": {
+      const api = flag(flags, "api") ?? cfg.apiUrl;
+      const c: Config = { ...cfg, apiUrl: api };
+      saveConfig(c);
+      emit(flags, { apiUrl: c.apiUrl, configPath: CONFIG_PATH }, () =>
+        `Initialised. API ${c.apiUrl}\nConfig ${CONFIG_PATH}\nNext: braavo login`,
+      );
+      return;
+    }
+
+    case "watch": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo watch <runId> [--json]");
+      // Poll rather than SSE: a scriptable `watch` must terminate on a terminal
+      // state and return a usable exit code, which an open stream does not.
+      const TERMINAL = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
+      for (;;) {
+        const r = await apiFetch(`/runs/${id}`, { cfg });
+        const status = String(r.status ?? "UNKNOWN");
+        if (TERMINAL.has(status)) {
+          emit(flags, { id, status, terminal: true }, () => `${status}  ${id}`);
+          if (status !== "COMPLETED") process.exitCode = EXIT.GENERAL;
+          return;
+        }
+        if (!flags.json) console.log(`${status}  ${id}`);
+        await sleep(3000);
+      }
+    }
+
+    case "approve": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo approve <approvalId> [--deny] [--yes]");
+      const decision = has(flags, "deny") ? "DENIED" : "APPROVED";
+      requireConfirmation(flags, `${decision === "DENIED" ? "deny" : "approve"} approval ${id}`);
+      const d = await apiFetch(`/approvals/${id}/decide`, {
+        method: "POST",
+        body: { decision, reason: flag(flags, "reason") ?? "via braavo cli" },
+        cfg,
+      });
+      emit(flags, { id, decision, result: d }, () => `${decision}  ${id}`);
+      return;
+    }
+
+    case "pause": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo pause <runId> [--yes]");
+      requireConfirmation(flags, `pause run ${id}`);
+      const d = await apiFetch(`/runs/${id}/pause`, { method: "POST", body: {}, cfg });
+      emit(flags, { id, action: "pause", result: d }, () => `Paused ${id}`);
+      return;
+    }
+
+    case "stop": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) die("usage: braavo stop <runId> [--yes]");
+      requireConfirmation(flags, `stop run ${id}`);
+      const d = await apiFetch(`/runs/${id}/stop`, { method: "POST", body: {}, cfg });
+      emit(flags, { id, action: "stop", result: d }, () => `Stopped ${id}`);
+      return;
+    }
+
+    case "cost": {
+      requireAuth(cfg);
+      const days = flag(flags, "days") ?? "30";
+      const [usage, savings] = await Promise.all([
+        apiFetch("/billing/usage", { cfg }),
+        apiFetch(`/billing/savings?days=${encodeURIComponent(days)}`, { cfg, raw: true }),
+      ]);
+      const data = { usage, savings: savings?.body ?? null, days: Number(days) };
+      emit(flags, data, () => {
+        const lines = [`Usage (${days}d)`];
+        for (const [k, v] of Object.entries(usage ?? {})) {
+          if (typeof v === "object") continue;
+          lines.push(`  ${k.padEnd(24)} ${String(v)}`);
+        }
+        return lines.join("\n");
+      });
+      return;
+    }
+
+    case "policy": {
+      requireAuth(cfg);
+      const sub = positionals[0];
+      if (sub !== "test") die("usage: braavo policy test [--json]");
+      // "policy test" = show the governance config and current risk posture the
+      // engine would apply. Read-only by construction: it must be safe to run
+      // against production while deciding whether an action is allowed.
+      const [config, risks] = await Promise.all([
+        apiFetch("/governance/config", { cfg }),
+        apiFetch("/governance/risks", { cfg, raw: true }),
+      ]);
+      emit(flags, { config, risks: risks?.body ?? null }, () =>
+        `Governance config:\n${JSON.stringify(config, null, 2)}`,
+      );
+      return;
+    }
+
+    case "audit": {
+      requireAuth(cfg);
+      const sub = positionals[0];
+      if (sub !== "verify") die("usage: braavo audit verify [--run <runId>] [--json]");
+      const runId = flag(flags, "run");
+      const path = runId ? `/runs/${runId}` : "/dashboard/activity";
+      const d = await apiFetch(path, { cfg });
+      const result = verifyEvidenceChain(d);
+      emit(flags, result, () =>
+        result.ok
+          ? `Evidence chain OK (${result.checked} record(s) verified)`
+          : `Evidence chain FAILED at ${result.brokenAt}: ${result.reason}`,
+      );
+      if (!result.ok) process.exitCode = EXIT.VERIFICATION_FAILED;
+      return;
+    }
+
+    case "connect": {
+      requireAuth(cfg);
+      const d = await apiFetch("/external-connections", { cfg });
+      const list: any[] = Array.isArray(d) ? d : [];
+      emit(flags, { connections: list }, () =>
+        list.length
+          ? list.map((c) => `${String(c.status ?? "").padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`).join("\n")
+          : "No connections.",
+      );
+      return;
+    }
+
+    case "agent": {
+      requireAuth(cfg);
+      const company = flag(flags, "company") ?? cfg.defaultCompany;
+      if (!company) die("usage: braavo agent --company <id>  (or set one with: braavo use <id>)");
+      const d = await apiFetch(`/companies/${company}`, { cfg });
+      const agents: any[] = d.agents ?? [];
+      emit(flags, { companyId: company, agents }, () =>
+        agents.length
+          ? agents.map((a) => `${String(a.status ?? "").padEnd(10)}  ${a.role ?? ""}  ${a.name ?? a.id}`).join("\n")
+          : "No agents in this company.",
+      );
+      return;
+    }
+
+    case "session": {
+      requireAuth(cfg);
+      const d = await apiFetch("/relay/sessions", { cfg, raw: true });
+      const list: any[] = Array.isArray(d?.body) ? d.body : (d?.body?.sessions ?? []);
+      emit(flags, { sessions: list }, () =>
+        list.length
+          ? list.map((x: any) => `${String(x.state ?? "").padEnd(10)}  ${x.id}  ${x.deviceId ?? ""}`).join("\n")
+          : "No active sessions.",
+      );
+      return;
+    }
+
     default: {
       console.log(HELP(ui));
       if (cmd && cmd !== "help" && cmd !== "--help" && cmd !== "-h") process.exit(1);
@@ -1129,6 +1323,11 @@ if (require.main === module) {
   main().catch((e) => {
     const ui = makeUi();
     console.error(ui.fail(e instanceof ApiError ? `API ${e.status}: ${e.message}` : e instanceof Error ? e.message : String(e)));
-    process.exit(1);
+    // Documented exit codes (forge/exit-codes.ts) — a non-interactive caller
+    // branches on these, so "1 for everything" is not a contract.
+    if (e instanceof ConfirmationRequiredError) process.exit(e.exitCode);
+    if (e instanceof UntrustedHostError) process.exit(EXIT.UNTRUSTED_HOST);
+    if (e instanceof ApiError) process.exit(e.status === 401 ? EXIT.AUTH : e.status === 404 ? EXIT.NOT_FOUND : EXIT.API);
+    process.exit(EXIT.GENERAL);
   });
 }
