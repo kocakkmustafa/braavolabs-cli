@@ -10,7 +10,7 @@
  *   POST /research/cascade    → synchronous result (NO companyId in body)
  *   GET  /billing/savings     → savings report (tenant-scoped, no companyId)
  */
-import { Config, saveConfig } from "./config";
+import { Config, saveConfig, assertHostSafeForCredentials } from "./config";
 
 export class ApiError extends Error {
   status: number;
@@ -48,6 +48,12 @@ export interface RawResult {
  */
 export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
   const { cfg } = opts;
+  // BR-P0-004 — custom-host credential safety. Every credential the CLI holds
+  // crosses this function: the password in the /auth/login body, the Bearer
+  // access token on authed calls, and the refresh token on the 401 retry. Gate
+  // the destination BEFORE any of them is put on the wire. cfg.apiUrl is
+  // attacker-influenceable via `--api`, BRAAVO_API_URL and ~/.braavo/config.json.
+  assertHostSafeForCredentials(cfg.apiUrl, { allowCustomHost: cfg.allowCustomHost });
   const authed = opts.auth !== false;
   const save = opts.save ?? saveConfig;
   const doFetch: FetchLike = opts.fetchImpl ?? (globalThis.fetch as FetchLike);

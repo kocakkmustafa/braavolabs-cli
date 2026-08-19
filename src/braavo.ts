@@ -20,7 +20,7 @@
  */
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
-import { Config, loadConfig, saveConfig, clearConfig } from "./forge/config";
+import { Config, loadConfig, saveConfig, clearConfig, classifyApiHost } from "./forge/config";
 import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
@@ -449,7 +449,24 @@ async function main(): Promise<void> {
   const { cmd, positionals, flags } = parseArgs(process.argv.slice(2));
   const cfg = loadConfig();
   if (flag(flags, "api")) {
+    // BR-P0-004 — changing the API host is a trust decision, so it is made
+    // HERE, once, and persisted next to the host it applies to. A later --api
+    // pointing at a DIFFERENT unknown host is a fresh decision and must be
+    // opted into again; apiFetch enforces this on every call.
     cfg.apiUrl = flag(flags, "api")!;
+    cfg.allowCustomHost = flags["allow-custom-host"] === true ? true : undefined;
+    const c = classifyApiHost(cfg.apiUrl);
+    if (c.kind === "custom") {
+      // Name the exact origin BEFORE any credential is sent, so the user can
+      // see where their password would go. `origin` deliberately omits path
+      // and query, which can carry a token.
+      ui.warn(
+        `API host is not an official Braavolabs address: ${c.origin}` +
+          (cfg.allowCustomHost
+            ? " — allowed by --allow-custom-host."
+            : " — credentials will be refused. Re-run with --allow-custom-host if you self-host."),
+      );
+    }
     saveConfig(cfg);
   }
 

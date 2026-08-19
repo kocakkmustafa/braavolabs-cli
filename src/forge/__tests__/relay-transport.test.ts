@@ -11,7 +11,10 @@ function resp(status: number, body: unknown) {
   };
 }
 
-const baseCfg = (): Config => ({ apiUrl: "https://host/api/v1", token: "tok" });
+// BR-P0-004: apiFetch now refuses to send credentials to a non-official host,
+// so the fixture uses the official one. Host-trust behavior itself is covered
+// in host-trust.test.ts.
+const baseCfg = (): Config => ({ apiUrl: "https://braavolabs.com/api/v1", token: "tok" });
 
 describe("splitSseEvents — pure SSE framing", () => {
   it("splits complete blocks and keeps the partial tail", () => {
@@ -61,7 +64,7 @@ describe("createRelayTransport — register/postEvent (reuses apiFetch)", () => 
     const transport = createRelayTransport({ cfg: baseCfg(), fetchImpl });
     const out = await transport.register({ surface: "cli", label: "braavo spawn claude" });
     expect(out).toEqual({ sessionId: "sess_7" });
-    expect(calls[0].url).toBe("https://host/api/v1/relay/sessions");
+    expect(calls[0].url).toBe("https://braavolabs.com/api/v1/relay/sessions");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
     expect(JSON.parse(calls[0].init.body)).toEqual({ surface: "cli", label: "braavo spawn claude" });
@@ -75,7 +78,7 @@ describe("createRelayTransport — register/postEvent (reuses apiFetch)", () => 
     });
     const transport = createRelayTransport({ cfg: baseCfg(), fetchImpl });
     await transport.postEvent("sess_7", { type: "status", state: "running" });
-    expect(calls[0].url).toBe("https://host/api/v1/relay/sessions/sess_7/events");
+    expect(calls[0].url).toBe("https://braavolabs.com/api/v1/relay/sessions/sess_7/events");
     expect(JSON.parse(calls[0].init.body)).toEqual({ type: "status", state: "running" });
   });
 
@@ -87,7 +90,7 @@ describe("createRelayTransport — register/postEvent (reuses apiFetch)", () => 
     });
     const transport = createRelayTransport({ cfg: baseCfg(), fetchImpl });
     await transport.postEvent("sess/weird id", { type: "status", state: "idle" });
-    expect(calls[0]).toBe("https://host/api/v1/relay/sessions/sess%2Fweird%20id/events");
+    expect(calls[0]).toBe("https://braavolabs.com/api/v1/relay/sessions/sess%2Fweird%20id/events");
   });
 });
 
@@ -121,7 +124,7 @@ describe("createRelayTransport — subscribeCommands (fetch+SSE)", () => {
     const transport = createRelayTransport({ cfg: baseCfg(), fetchImpl });
     const unsubscribe = transport.subscribeCommands("sess_1", () => {});
     await new Promise((r) => setTimeout(r, 10));
-    expect(calls[0].url).toBe("https://host/api/v1/relay/sessions/sess_1/commands");
+    expect(calls[0].url).toBe("https://braavolabs.com/api/v1/relay/sessions/sess_1/commands");
     expect(calls[0].init.method).toBe("GET");
     expect(calls[0].init.headers.Accept).toBe("text/event-stream");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
