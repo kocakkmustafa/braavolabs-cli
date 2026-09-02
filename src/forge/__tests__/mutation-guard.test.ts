@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { requireConfirmation, ConfirmationRequiredError, emit } from "../output";
 import { EXIT } from "../exit-codes";
 
 /**
- * BR-P1-002 — "Mutating command exact confirmation veya bound approval token
- * ister" (roadmap §5.2).
+ * BR-P1-002 — mutating commands require exact local confirmation. Approval
+ * strings fail closed until a server-bound authorization contract exists.
  *
  * The failure this prevents: a script loops over run ids and calls
  * `braavo stop` on each. One typo, and it stops production runs with no prompt
@@ -14,6 +16,21 @@ import { EXIT } from "../exit-codes";
 describe("requireConfirmation", () => {
   it("refuses a mutating action by default", () => {
     expect(() => requireConfirmation({}, "stop run r1")).toThrow(ConfirmationRequiredError);
+  });
+
+  it("gates every legacy mutating command before its first API request", () => {
+    const source = readFileSync(join(process.cwd(), "src/braavo.ts"), "utf8");
+    for (const command of ["run", "steer", "handoff", "continue"]) {
+      const start = source.indexOf(`case "${command}": {`);
+      expect(start, `missing ${command} command`).toBeGreaterThanOrEqual(0);
+      const nextCase = source.indexOf("\n    case ", start + 1);
+      const block = source.slice(start, nextCase < 0 ? undefined : nextCase);
+      const guard = block.indexOf("requireConfirmation(");
+      const mutation = block.indexOf("apiFetch(");
+      expect(guard, `${command} has no confirmation gate`).toBeGreaterThanOrEqual(0);
+      expect(mutation, `${command} has no API request`).toBeGreaterThanOrEqual(0);
+      expect(guard, `${command} reaches the API before confirmation`).toBeLessThan(mutation);
+    }
   });
 
   it("carries the CONFIRMATION_REQUIRED exit code, not a generic 1", () => {
@@ -38,8 +55,16 @@ describe("requireConfirmation", () => {
     expect(() => requireConfirmation({ yes: true }, "stop run r1")).not.toThrow();
   });
 
-  it("proceeds with a bound approval token", () => {
-    expect(() => requireConfirmation({ approval: "tok_abc" }, "stop run r1")).not.toThrow();
+  it("rejects an unverified approval string rather than pretending it is bound", () => {
+    expect(() => requireConfirmation({ approval: "tok_abc" }, "stop run r1")).toThrow(
+      /not yet server-verified or bound/,
+    );
+  });
+
+  it("does not silently ignore an unverified approval when --yes is also present", () => {
+    expect(() => requireConfirmation({ yes: true, approval: "tok_abc" }, "stop run r1")).toThrow(
+      /not yet server-verified or bound/,
+    );
   });
 
   it("does NOT accept a --yes that was given a string value by accident", () => {

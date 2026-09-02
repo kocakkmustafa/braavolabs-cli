@@ -22,15 +22,28 @@ function chain(n: number, mutate?: (recs: any[]) => void): any[] {
   return recs;
 }
 
+function anchor(recs: any[]) {
+  return {
+    count: recs.length,
+    genesisHash: recs[0].currentHash,
+    headHash: recs.at(-1).currentHash,
+  };
+}
+
 describe("verifyEvidenceChain", () => {
   it("accepts an intact chain", () => {
-    expect(verifyEvidenceChain({ events: chain(4) })).toEqual({ ok: true, checked: 4 });
+    const recs = chain(4);
+    expect(verifyEvidenceChain({ events: recs }, anchor(recs))).toEqual({ ok: true, checked: 4 });
   });
 
-  it("accepts a bare array as well as a wrapped payload", () => {
-    expect(verifyEvidenceChain(chain(2)).ok).toBe(true);
-    expect(verifyEvidenceChain({ records: chain(2) }).ok).toBe(true);
-    expect(verifyEvidenceChain({ activity: chain(2) }).ok).toBe(true);
+  it("labels an unanchored chain only as internally consistent, never complete", () => {
+    for (const payload of [chain(2), { records: chain(2) }, { activity: chain(2) }]) {
+      expect(verifyEvidenceChain(payload)).toMatchObject({
+        ok: false,
+        subsetConsistent: true,
+        checked: 2,
+      });
+    }
   });
 
   it("detects TAMPERED CONTENT — the case the chain exists for", () => {
@@ -72,6 +85,34 @@ describe("verifyEvidenceChain", () => {
 
   it("reports how many records it actually checked", () => {
     expect(verifyEvidenceChain({ events: chain(7) }).checked).toBe(7);
+  });
+
+  it("rejects an internally consistent missing prefix against the trusted anchor", () => {
+    const original = chain(5);
+    const truncated = original.slice(2);
+    truncated[0] = { ...truncated[0], previousHash: null };
+    truncated[0].currentHash = computeRecordHash(truncated[0]);
+    for (let i = 1; i < truncated.length; i++) {
+      truncated[i] = { ...truncated[i], previousHash: truncated[i - 1].currentHash };
+      truncated[i].currentHash = computeRecordHash(truncated[i]);
+    }
+    const result = verifyEvidenceChain({ events: truncated }, anchor(original));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/count|genesis/);
+  });
+
+  it("rejects an internally consistent missing tail against the trusted anchor", () => {
+    const original = chain(5);
+    const result = verifyEvidenceChain({ events: original.slice(0, 3) }, anchor(original));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/count|head/);
+  });
+
+  it("rejects a malformed trusted anchor", () => {
+    const recs = chain(2);
+    expect(verifyEvidenceChain({ events: recs }, {
+      count: 2, genesisHash: "not-a-hash", headHash: recs.at(-1).currentHash,
+    }).reason).toMatch(/malformed/);
   });
 
   it("hashing ignores currentHash itself (or no chain could ever verify)", () => {

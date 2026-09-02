@@ -5,7 +5,7 @@
  * refresh-retry loop everywhere, plus a `defaultCompany` set by `braavo use`.
  * Paths are injectable so tests round-trip against a tmp file, never real $HOME.
  */
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -143,8 +143,11 @@ export function loadConfig(path: string = CONFIG_PATH): Config {
 }
 
 export function saveConfig(c: Config, path: string = CONFIG_PATH): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(c, null, 2));
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(c, null, 2), { mode: 0o600 });
+  // writeFile's mode only applies on create; force an already-existing config
+  // back to the credential-safe contract too.
+  chmodSync(path, 0o600);
 }
 
 export function clearConfig(path: string = CONFIG_PATH): void {

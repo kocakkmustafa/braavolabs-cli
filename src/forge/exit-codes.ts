@@ -17,8 +17,8 @@ export const EXIT = {
   USAGE: 2,
   /** Not authenticated, or the token was rejected. Re-run `braavo login`. */
   AUTH: 3,
-  /** A mutating action was refused because it lacked confirmation or a bound
-   *  approval token. The action did NOT happen. */
+  /** A mutating action was refused because it lacked local confirmation or
+   *  supplied an unverified approval token. The action did NOT happen. */
   CONFIRMATION_REQUIRED: 4,
   /** The API host is not trusted for credentials (see forge/config.ts).
    *  Nothing was sent. */
@@ -43,7 +43,7 @@ export const EXIT_MEANING: Record<keyof typeof EXIT, string> = {
   GENERAL: "unclassified failure",
   USAGE: "bad invocation — unknown command or invalid argument",
   AUTH: "not authenticated, or the token was rejected",
-  CONFIRMATION_REQUIRED: "refused: mutating action needs confirmation or a bound approval",
+  CONFIRMATION_REQUIRED: "refused: mutating action needs a bare --yes; unverified approvals are rejected",
   UNTRUSTED_HOST: "refused: API host is not trusted for credentials",
   NOT_FOUND: "resource not found or not visible to this tenant",
   API: "the API returned an error",

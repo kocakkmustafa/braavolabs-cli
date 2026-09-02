@@ -1,7 +1,7 @@
 /**
  * Non-interactive output + mutation safety (BR-P1-002, roadmap §5.2:
  * "Default human output kısa. Her read/action command için --json. Mutating
- * action exact confirmation veya bound approval token ister.").
+ * action exact confirmation ister." Unverified approval strings fail closed.
  */
 import { EXIT, type ExitCode } from "./exit-codes";
 
@@ -24,17 +24,25 @@ export class ConfirmationRequiredError extends Error {
  * otherwise act on every one of them with no prompt. `action` is echoed back so
  * the operator sees exactly what would have happened.
  *
- * Consent is `--yes` as a BARE flag, or a non-empty `--approval <token>`.
+ * Consent is `--yes` as a BARE flag. `--approval` is rejected until the API
+ * exposes a server-verified action/target/account/payload/expiry/replay
+ * contract and the CLI transmits the credential to that verifier.
  * `--yes <value>` is deliberately NOT consent: `braavo stop --yes r1` parses as
  * `{yes: "r1"}` with no positional, and treating that as confirmation would let
  * a mistyped command confirm itself.
  */
 export function requireConfirmation(flags: Flags, action: string): void {
+  if (flags.approval !== undefined) {
+    throw new ConfirmationRequiredError(
+      `Refusing to ${action}: --approval is not yet server-verified or bound to this action.\n` +
+        `  Re-run with a bare --yes for local confirmation.\n` +
+      `  Nothing has been changed.`,
+    );
+  }
   if (flags.yes === true) return;
-  if (typeof flags.approval === "string" && flags.approval.trim() !== "") return;
   throw new ConfirmationRequiredError(
     `Refusing to ${action} without confirmation.\n` +
-      `  Re-run with --yes to confirm, or --approval <token> to supply a bound approval.\n` +
+      `  Re-run with a bare --yes to confirm locally.\n` +
       `  Nothing has been changed.`,
   );
 }

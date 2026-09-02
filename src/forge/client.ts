@@ -10,7 +10,7 @@
  *   POST /research/cascade    → synchronous result (NO companyId in body)
  *   GET  /billing/savings     → savings report (tenant-scoped, no companyId)
  */
-import { Config, saveConfig, assertHostSafeForCredentials } from "./config";
+import { Config, saveConfig, assertHostSafeForCredentials, UntrustedHostError } from "./config";
 
 export class ApiError extends Error {
   status: number;
@@ -57,9 +57,37 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
   const authed = opts.auth !== false;
   const save = opts.save ?? saveConfig;
   const doFetch: FetchLike = opts.fetchImpl ?? (globalThis.fetch as FetchLike);
+  const expectedOrigin = new URL(cfg.apiUrl).origin;
+
+  const checkedFetch: FetchLike = async (url, init = {}) => {
+    // Native fetch follows 301/302/307/308 by default and can replay a POST
+    // body and Authorization header to the redirect target. That would bypass
+    // the host gate above after it had already approved only the initial URL.
+    const res = await doFetch(url, { ...init, redirect: "manual" });
+    const status = Number(res?.status);
+    if ((status >= 300 && status < 400) || res?.redirected === true) {
+      throw new UntrustedHostError(
+        `Refusing credential-bearing redirect from ${expectedOrigin}; no redirected request was sent.`,
+      );
+    }
+    if (typeof res?.url === "string" && res.url !== "") {
+      let responseOrigin: string;
+      try {
+        responseOrigin = new URL(res.url).origin;
+      } catch {
+        throw new UntrustedHostError("Refusing a response with an invalid final URL.");
+      }
+      if (responseOrigin !== expectedOrigin) {
+        throw new UntrustedHostError(
+          `Refusing a response that escaped the approved API origin ${expectedOrigin}.`,
+        );
+      }
+    }
+    return res;
+  };
 
   const req = (tok?: string) =>
-    doFetch(`${cfg.apiUrl}${path}`, {
+    checkedFetch(`${cfg.apiUrl}${path}`, {
       method: opts.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
@@ -72,7 +100,7 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
 
   // Transparent single refresh on 401 (never on /auth/* to avoid loops).
   if (res.status === 401 && authed && cfg.refreshToken && !path.startsWith("/auth/")) {
-    const r = await doFetch(`${cfg.apiUrl}/auth/refresh`, {
+    const r = await checkedFetch(`${cfg.apiUrl}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken: cfg.refreshToken }),

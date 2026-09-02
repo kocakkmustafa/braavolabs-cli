@@ -11,8 +11,15 @@ import { createHash } from "node:crypto";
 export interface ChainResult {
   ok: boolean;
   checked: number;
+  subsetConsistent?: boolean;
   brokenAt?: string;
   reason?: string;
+}
+
+export interface TrustedChainAnchor {
+  count: number;
+  genesisHash: string;
+  headHash: string;
 }
 
 interface ChainRecord {
@@ -36,7 +43,7 @@ export function computeRecordHash(record: ChainRecord): string {
  * an explicit reason — silently returning "ok" for data that was never chained
  * would be the worst possible answer, because it reads as a passing audit.
  */
-export function verifyEvidenceChain(payload: unknown): ChainResult {
+export function verifyEvidenceChain(payload: unknown, anchor?: TrustedChainAnchor): ChainResult {
   const records = extractRecords(payload);
   if (!records.length) {
     return { ok: false, checked: 0, reason: "no chained records found in the response — nothing was verified" };
@@ -47,6 +54,14 @@ export function verifyEvidenceChain(payload: unknown): ChainResult {
     const id = String(r.id ?? `#${checked}`);
     if (!r.currentHash) {
       return { ok: false, checked, brokenAt: id, reason: "record has no currentHash" };
+    }
+    if (checked === 0 && r.previousHash !== null) {
+      return {
+        ok: false,
+        checked,
+        brokenAt: id,
+        reason: "first record is not a genesis record (previousHash must be null)",
+      };
     }
     if (previous !== null && r.previousHash !== previous) {
       return {
@@ -62,6 +77,33 @@ export function verifyEvidenceChain(payload: unknown): ChainResult {
     }
     previous = r.currentHash;
     checked++;
+  }
+
+  if (!anchor) {
+    return {
+      ok: false,
+      checked,
+      subsetConsistent: true,
+      reason: "records are internally consistent, but completeness is unverified without a trusted count/genesis/head anchor",
+    };
+  }
+  if (!Number.isSafeInteger(anchor.count) || anchor.count < 1 ||
+      !/^[a-f0-9]{64}$/i.test(anchor.genesisHash) || !/^[a-f0-9]{64}$/i.test(anchor.headHash)) {
+    return { ok: false, checked, subsetConsistent: true, reason: "trusted anchor is malformed" };
+  }
+  if (anchor.count !== records.length) {
+    return {
+      ok: false,
+      checked,
+      subsetConsistent: true,
+      reason: `trusted count ${anchor.count} does not match response count ${records.length}`,
+    };
+  }
+  if (records[0]!.currentHash !== anchor.genesisHash) {
+    return { ok: false, checked, subsetConsistent: true, reason: "trusted genesis hash does not match the first record" };
+  }
+  if (records.at(-1)!.currentHash !== anchor.headHash) {
+    return { ok: false, checked, subsetConsistent: true, reason: "trusted head hash does not match the last record" };
   }
   return { ok: true, checked };
 }

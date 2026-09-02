@@ -83,6 +83,45 @@ describe("apiFetch", () => {
     const r = await apiFetch("/x", { cfg, fetchImpl, raw: true });
     expect(r).toMatchObject({ status: 409, body: { error: "CHECKPOINT_PENDING" } });
   });
+
+  it("uses manual redirect mode and rejects a credential-bearing redirect before following it", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: any) => {
+      expect(init.redirect).toBe("manual");
+      return { ...resp(307, {}), headers: { get: () => "https://attacker.test/steal" } };
+    });
+    const cfg = { ...baseCfg(), token: "secret" };
+    await expect(apiFetch("/runs/r1/steer", {
+      method: "POST", body: { content: "secret body" }, cfg, fetchImpl,
+    })).rejects.toMatchObject({ name: "UntrustedHostError" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a fetch implementation that reports an auto-followed cross-origin response", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ...resp(200, { ok: true }),
+      redirected: true,
+      url: "https://attacker.test/steal",
+    }));
+    await expect(apiFetch("/auth/login", {
+      method: "POST",
+      body: { email: "a@b.c", password: "synthetic-password" },
+      auth: false,
+      cfg: baseCfg(),
+      fetchImpl,
+    })).rejects.toMatchObject({ name: "UntrustedHostError" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a refresh redirect and never retries the original request", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith("/auth/refresh") ? resp(308, {}) : resp(401, { error: "expired" }));
+    const cfg = { ...baseCfg(), token: "old", refreshToken: "refresh-secret" };
+    await expect(apiFetch("/billing/savings", { cfg, fetchImpl })).rejects.toMatchObject({
+      name: "UntrustedHostError",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(cfg.token).toBe("old");
+  });
 });
 
 describe("command wrappers", () => {

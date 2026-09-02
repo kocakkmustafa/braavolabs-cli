@@ -420,12 +420,12 @@ ${ui.steel("Control (contract)")}
   ${p("braavo pause")}     <runId> --yes                                                     [--json]
   ${p("braavo stop")}      <runId> --yes                                                     [--json]
   ${p("braavo policy")}    test                         governance config + risk posture     [--json]
-  ${p("braavo audit")}     verify [--run <runId>]       verify the evidence hash chain       [--json]
+  ${p("braavo audit")}     verify [--run <runId>] --anchor-count <n> --anchor-genesis <sha256> --anchor-head <sha256> [--json]
   ${p("braavo cost")}      [--days <n>]                                                      [--json]
   ${p("braavo connect")}                                external connections                 [--json]
   ${p("braavo agent")}     [--company <id>]                                                  [--json]
   ${p("braavo session")}                                active relay sessions                [--json]
-  ${ui.dim("mutating commands refuse without --yes or --approval <token>; exit 4 = refused")}
+  ${ui.dim("mutating commands refuse without a bare --yes; unverified --approval is rejected; exit 4 = refused")}
 
 ${ui.steel("Pipelines")}
   ${p("braavo whoami")}
@@ -1040,6 +1040,7 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) die("usage: braavo run <pipelineId>");
+      requireConfirmation(flags, `start run for pipeline ${id}`);
       const d = await apiFetch(`/pipelines/${id}/run`, { method: "POST", body: { input: {} }, cfg });
       ui.ok(`Run started: ${d.id}`);
       return;
@@ -1050,6 +1051,7 @@ async function main(): Promise<void> {
       const id = positionals[0];
       const message = positionals.slice(1).join(" ");
       if (!id || !message) die("usage: braavo steer <runId> <message...>");
+      requireConfirmation(flags, `steer run ${id}`);
       await apiFetch(`/runs/${id}/steer`, { method: "POST", body: { content: message }, cfg });
       ui.ok("Steering sent — the agent picks it up on its next turn.");
       return;
@@ -1078,6 +1080,7 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) die("usage: braavo handoff <runId> [--reason <text>]");
+      requireConfirmation(flags, `open handoff for run ${id}`);
       const body: Record<string, unknown> = {};
       const reason = flag(flags, "reason");
       if (reason) body.reason = reason;
@@ -1096,6 +1099,7 @@ async function main(): Promise<void> {
       const id = positionals[0];
       const provider = flag(flags, "provider");
       if (!id || !provider) die("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
+      requireConfirmation(flags, `continue run ${id} with provider ${provider}`);
       const body: Record<string, unknown> = { provider };
       const model = flag(flags, "model");
       if (model) body.model = model;
@@ -1263,11 +1267,27 @@ async function main(): Promise<void> {
       const runId = flag(flags, "run");
       const path = runId ? `/runs/${runId}` : "/dashboard/activity";
       const d = await apiFetch(path, { cfg });
-      const result = verifyEvidenceChain(d);
+      const anchorCount = flag(flags, "anchor-count");
+      const anchorGenesis = flag(flags, "anchor-genesis");
+      const anchorHead = flag(flags, "anchor-head");
+      const anchorParts = [anchorCount, anchorGenesis, anchorHead];
+      if (anchorParts.some(Boolean) && !anchorParts.every(Boolean)) {
+        die("audit anchors are all-or-none: --anchor-count, --anchor-genesis, and --anchor-head");
+      }
+      const parsedCount = anchorCount === undefined ? undefined : Number(anchorCount);
+      if (parsedCount !== undefined && (!Number.isSafeInteger(parsedCount) || parsedCount < 1)) {
+        die("--anchor-count must be a positive integer");
+      }
+      const anchor = parsedCount === undefined ? undefined : {
+        count: parsedCount,
+        genesisHash: anchorGenesis!,
+        headHash: anchorHead!,
+      };
+      const result = verifyEvidenceChain(d, anchor);
       emit(flags, result, () =>
         result.ok
           ? `Evidence chain OK (${result.checked} record(s) verified)`
-          : `Evidence chain FAILED at ${result.brokenAt}: ${result.reason}`,
+          : `Evidence chain FAILED${result.brokenAt ? ` at ${result.brokenAt}` : ""}: ${result.reason}`,
       );
       if (!result.ok) process.exitCode = EXIT.VERIFICATION_FAILED;
       return;
