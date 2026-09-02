@@ -20,7 +20,8 @@ function resp(status: number, body: unknown) {
   };
 }
 
-const baseCfg = (): Config => ({ apiUrl: "https://host/api/v1" });
+// BR-P0-004: apiFetch refuses non-official hosts without an explicit opt-in.
+const baseCfg = (): Config => ({ apiUrl: "https://braavolabs.com/api/v1" });
 
 describe("apiFetch", () => {
   it("sends Bearer auth + Content-Type and returns parsed JSON on 2xx", async () => {
@@ -32,7 +33,7 @@ describe("apiFetch", () => {
     const cfg = { ...baseCfg(), token: "tok" };
     const out = await apiFetch("/research/cascade", { method: "POST", body: { prompt: "hi" }, cfg, fetchImpl });
     expect(out).toEqual({ hello: "world" });
-    expect(calls[0].url).toBe("https://host/api/v1/research/cascade");
+    expect(calls[0].url).toBe("https://braavolabs.com/api/v1/research/cascade");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
     expect(calls[0].init.headers["Content-Type"]).toBe("application/json");
@@ -82,6 +83,45 @@ describe("apiFetch", () => {
     const r = await apiFetch("/x", { cfg, fetchImpl, raw: true });
     expect(r).toMatchObject({ status: 409, body: { error: "CHECKPOINT_PENDING" } });
   });
+
+  it("uses manual redirect mode and rejects a credential-bearing redirect before following it", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: any) => {
+      expect(init.redirect).toBe("manual");
+      return { ...resp(307, {}), headers: { get: () => "https://attacker.test/steal" } };
+    });
+    const cfg = { ...baseCfg(), token: "secret" };
+    await expect(apiFetch("/runs/r1/steer", {
+      method: "POST", body: { content: "secret body" }, cfg, fetchImpl,
+    })).rejects.toMatchObject({ name: "UntrustedHostError" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a fetch implementation that reports an auto-followed cross-origin response", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ...resp(200, { ok: true }),
+      redirected: true,
+      url: "https://attacker.test/steal",
+    }));
+    await expect(apiFetch("/auth/login", {
+      method: "POST",
+      body: { email: "a@b.c", password: "synthetic-password" },
+      auth: false,
+      cfg: baseCfg(),
+      fetchImpl,
+    })).rejects.toMatchObject({ name: "UntrustedHostError" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a refresh redirect and never retries the original request", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith("/auth/refresh") ? resp(308, {}) : resp(401, { error: "expired" }));
+    const cfg = { ...baseCfg(), token: "old", refreshToken: "refresh-secret" };
+    await expect(apiFetch("/billing/savings", { cfg, fetchImpl })).rejects.toMatchObject({
+      name: "UntrustedHostError",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(cfg.token).toBe("old");
+  });
 });
 
 describe("command wrappers", () => {
@@ -94,7 +134,7 @@ describe("command wrappers", () => {
     const cfg = { ...baseCfg(), token: "t" };
     const out = await startCompare(cfg, { companyId: "c1", query: "why is the sky blue", maxCandidates: 2 }, { fetchImpl });
     expect(out).toEqual({ id: "s1", status: "PENDING" });
-    expect(captured.url).toBe("https://host/api/v1/research/compare");
+    expect(captured.url).toBe("https://braavolabs.com/api/v1/research/compare");
     expect(captured.method).toBe("POST");
     expect(captured.body).toEqual({ companyId: "c1", query: "why is the sky blue", maxCandidates: 2 });
   });
@@ -110,7 +150,7 @@ describe("command wrappers", () => {
     const cfg = { ...baseCfg(), token: "t" };
     const session = await pollCompare(cfg, "s1", { fetchImpl, intervalMs: 0 });
     expect(session.status).toBe("COMPLETED");
-    expect(urls.every((u) => u === "https://host/api/v1/research/s1")).toBe(true);
+    expect(urls.every((u) => u === "https://braavolabs.com/api/v1/research/s1")).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
@@ -123,7 +163,7 @@ describe("command wrappers", () => {
     const cfg = { ...baseCfg(), token: "t" };
     const out = await cascade(cfg, { prompt: "meaning of life?", confidenceThreshold: 0.8 }, { fetchImpl });
     expect(out.answer).toBe("42");
-    expect(captured.url).toBe("https://host/api/v1/research/cascade");
+    expect(captured.url).toBe("https://braavolabs.com/api/v1/research/cascade");
     expect(captured.body).toEqual({ prompt: "meaning of life?", confidenceThreshold: 0.8 });
     expect(captured.body).not.toHaveProperty("companyId");
   });
@@ -136,7 +176,7 @@ describe("command wrappers", () => {
     });
     const cfg = { ...baseCfg(), token: "t" };
     await savings(cfg, { days: 30 }, { fetchImpl });
-    expect(capturedUrl).toBe("https://host/api/v1/billing/savings?days=30");
+    expect(capturedUrl).toBe("https://braavolabs.com/api/v1/billing/savings?days=30");
   });
 });
 
@@ -149,7 +189,7 @@ describe("logout", () => {
     });
     const cfg = { ...baseCfg(), token: "tok", refreshToken: "r1" };
     const r = await logout(cfg, { fetchImpl });
-    expect(calls[0].url).toBe("https://host/api/v1/auth/logout");
+    expect(calls[0].url).toBe("https://braavolabs.com/api/v1/auth/logout");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
     // audit #1: the refresh token in the body lets the server revoke even when

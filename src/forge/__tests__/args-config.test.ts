@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rmSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { parseArgs } from "../../braavo";
 import { loadConfig, saveConfig, DEFAULT_API, type Config } from "../config";
 
@@ -54,5 +54,16 @@ describe("config round-trip", () => {
   it("falls back to DEFAULT_API when the file is missing", () => {
     const loaded = loadConfig(join(tmpdir(), "braavo-does-not-exist.json"));
     expect(loaded).toEqual({ apiUrl: DEFAULT_API });
+  });
+
+  it("forces an existing credential-bearing config to mode 0600", () => {
+    const root = join(tmpdir(), `braavo-cfg-mode-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    const target = join(root, "nested", "config.json");
+    mkdirSync(join(root, "nested"), { recursive: true });
+    writeFileSync(target, "{}", { mode: 0o644 });
+    chmodSync(target, 0o644);
+    saveConfig({ apiUrl: "https://braavolabs.com/api/v1", token: "secret" }, target);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+    rmSync(root, { recursive: true, force: true });
   });
 });
