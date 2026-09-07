@@ -8,6 +8,7 @@
  */
 import { statSync, existsSync } from "node:fs";
 import { classifyApiHost, CONFIG_PATH, CONFIG_DIR, type Config } from "./config";
+import { loadMcpConfig } from "./mcp";
 
 export interface Check {
   name: string;
@@ -75,8 +76,8 @@ async function checkApiReachable(cfg: Config, fetchImpl?: typeof fetch): Promise
   }
 }
 
-function checkMcpServers(cfg: Config & { mcpServers?: Record<string, unknown> }): Check {
-  const n = Object.keys(cfg.mcpServers ?? {}).length;
+function checkMcpServers(): Check {
+  const n = Object.keys(loadMcpConfig()).length;
   return n
     ? { name: "mcp servers", status: "ok", detail: `${n} registered — inspect with: braavo mcp list` }
     : { name: "mcp servers", status: "warn", detail: "none registered" };
@@ -103,7 +104,7 @@ export async function runDoctor(cfg: Config, fetchImpl?: typeof fetch): Promise<
     checkApiHost(cfg),
     checkCredentials(cfg),
     await checkApiReachable(cfg, fetchImpl),
-    checkMcpServers(cfg as any),
+    checkMcpServers(),
     checkSandbox(),
   ];
 }

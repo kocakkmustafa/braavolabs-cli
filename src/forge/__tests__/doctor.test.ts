@@ -1,6 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeEach, describe, it, expect, vi } from "vitest";
+import { rmSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { runDoctor } from "../doctor";
-import type { Config } from "../config";
+import { CONFIG_DIR, type Config } from "../config";
+import { addMcpServer, loadMcpConfig, MCP_PATH, removeMcpServer, saveMcpConfig } from "../mcp";
+
+vi.mock("../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config")>();
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "braavo-doctor-"));
+  return { ...actual, CONFIG_DIR: dir, CONFIG_PATH: join(dir, "config.json") };
+});
+
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+
+beforeEach(() => {
+  rmSync(MCP_PATH, { force: true });
+  vi.mocked(spawn).mockClear();
+});
+afterAll(() => rmSync(CONFIG_DIR, { recursive: true, force: true }));
 
 /**
  * BR-P1-002 — `braavo doctor` (roadmap §5.2: checks API host fingerprint,
@@ -14,6 +34,27 @@ const find = (checks: Awaited<ReturnType<typeof runDoctor>>, name: string) =>
   checks.find((c) => c.name === name)!;
 
 describe("braavo doctor", () => {
+  it("reads the same persisted registry as mcp add/list without starting a server", async () => {
+    saveMcpConfig(addMcpServer({}, "audit-local", "never-start-this-command", ["private-fixture-argument"]));
+
+    const checks = await runDoctor(base, okFetch);
+    expect(find(checks, "mcp servers")).toEqual({
+      name: "mcp servers", status: "ok", detail: "1 registered — inspect with: braavo mcp list",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(JSON.stringify(checks)).not.toContain("private-fixture-argument");
+
+    saveMcpConfig(removeMcpServer(loadMcpConfig(), "audit-local"));
+    expect(find(await runDoctor(base, okFetch), "mcp servers").status).toBe("warn");
+  });
+
+  it("reports no servers when the registry is absent", async () => {
+    expect(find(await runDoctor(base, okFetch), "mcp servers")).toEqual({
+      name: "mcp servers", status: "warn", detail: "none registered",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("does not require authentication — the usual reason to run it is that auth broke", async () => {
     const checks = await runDoctor(base, okFetch);
     expect(find(checks, "credentials").status).toBe("warn");
