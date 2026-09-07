@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
@@ -18,7 +18,15 @@ import {
 import { renderMcpList, renderMcpTools, renderMcpCallResult } from "../../braavo";
 import { makeUi } from "../ui";
 
-const colorUi = makeUi({ tty: true });
+let colorUi: ReturnType<typeof makeUi>;
+// Renderer palette assertions must not inherit a CI/terminal NO_COLOR setting.
+beforeEach(() => {
+  vi.stubEnv("NO_COLOR", undefined);
+  vi.stubEnv("BRAAVO_NO_COLOR", undefined);
+  vi.stubEnv("TERM", "xterm-256color");
+  colorUi = makeUi({ tty: true });
+});
+afterEach(() => vi.unstubAllEnvs());
 
 // ── parseMcpAdd ────────────────────────────────────────────────────────────────
 describe("parseMcpAdd", () => {
@@ -223,7 +231,7 @@ describe("mcp renderers", () => {
     const joined = lines.join("\n");
     expect(joined).toContain("fs");
     expect(joined).toContain("npx -y srv");
-    expect(joined).toContain("38;5;75");
+    expect(joined).toContain("38;5;146");
     assertNoGreen(joined);
   });
 
@@ -249,7 +257,7 @@ describe("mcp renderers", () => {
     const joined = err.join("\n");
     expect(joined).toContain("error");
     expect(joined).toContain("nope");
-    expect(joined).toContain("38;5;203"); // molten
+    expect(joined).toContain("38;5;210"); // molten
     assertNoGreen(joined);
   });
 });

@@ -21,7 +21,7 @@
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 import { Config, loadConfig, saveConfig, clearConfig, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
-import { EXIT } from "./forge/exit-codes";
+import { EXIT, type ExitCode } from "./forge/exit-codes";
 import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
 import { runDoctor } from "./forge/doctor";
 import { verifyEvidenceChain } from "./forge/audit";
@@ -449,7 +449,9 @@ ${ui.steel("spawn")}    runs YOUR own authenticated ${SPAWN_VENDORS.join("/")} C
 ${ui.steel("steer")}    send a real-time message to a live run; agent picks it up on its next turn
 ${ui.steel("handoff")}  hand a live run to a different AI provider (freeze checkpoint → continue on --provider)
 
-Config: ~/.braavo/config.json   ·   Env: BRAAVO_API_URL overrides the API base.
+Version: braavo --version (or -v)
+Custom API: --api <url> saves the address; a bare --allow-custom-host trusts the current HTTPS host.
+Config: ~/.braavo/config.json   ·   Env: BRAAVO_API_URL is the default when no API URL is saved.
 Ollama: OLLAMA_HOST overrides the local daemon base (default http://localhost:11434).`;
 };
 
@@ -457,23 +459,34 @@ async function main(): Promise<void> {
   const ui = makeUi();
   // Function declarations (not const arrows) so control-flow analysis narrows
   // through the `never` guard sites below (e.g. `if (!x) die(...)`).
-  function die(msg: string): never {
+  function die(msg: string, code: ExitCode = EXIT.GENERAL): never {
     console.error(ui.fail(msg));
-    process.exit(1);
+    process.exit(code);
+  }
+  function usage(msg: string): never {
+    return die(msg, EXIT.USAGE);
   }
   function requireAuth(cfg: Config): void {
-    if (!cfg.token) die("Not logged in. Run: braavo login");
+    if (!cfg.token) die("Not logged in. Run: braavo login", EXIT.AUTH);
   }
 
   const { cmd, positionals, flags } = parseArgs(process.argv.slice(2));
+  if (cmd === "--version" || cmd === "-v") {
+    console.log((require("../package.json") as { version: string }).version);
+    return;
+  }
   const cfg = loadConfig();
-  if (flag(flags, "api")) {
+  const requestedApi = flag(flags, "api");
+  const allowCustomHost = flags["allow-custom-host"] === true;
+  if (requestedApi || allowCustomHost) {
     // BR-P0-004 — changing the API host is a trust decision, so it is made
     // HERE, once, and persisted next to the host it applies to. A later --api
     // pointing at a DIFFERENT unknown host is a fresh decision and must be
     // opted into again; apiFetch enforces this on every call.
-    cfg.apiUrl = flag(flags, "api")!;
-    cfg.allowCustomHost = flags["allow-custom-host"] === true ? true : undefined;
+    // A retry can opt into the URL already selected by config/defaults without
+    // spelling --api again. An explicit --api still resets previous consent.
+    if (requestedApi) cfg.apiUrl = requestedApi;
+    cfg.allowCustomHost = allowCustomHost ? true : undefined;
     const c = classifyApiHost(cfg.apiUrl);
     if (c.kind === "custom") {
       // Name the exact origin BEFORE any credential is sent, so the user can
@@ -481,7 +494,9 @@ async function main(): Promise<void> {
       // and query, which can carry a token.
       ui.warn(
         `API host is not an official Braavolabs address: ${c.origin}` +
-          (cfg.allowCustomHost
+          (!c.https
+            ? " — plaintext HTTP; credentials will be refused. Use https://."
+            : cfg.allowCustomHost
             ? " — allowed by --allow-custom-host."
             : " — credentials will be refused. Re-run with --allow-custom-host if you self-host."),
       );
@@ -525,7 +540,7 @@ async function main(): Promise<void> {
 
     case "use": {
       const company = positionals[0];
-      if (!company) die("usage: braavo use <companyId>");
+      if (!company) usage("usage: braavo use <companyId>");
       cfg.defaultCompany = company;
       saveConfig(cfg);
       ui.ok(`Default company set: ${company}`);
@@ -535,11 +550,11 @@ async function main(): Promise<void> {
     case "ask": {
       requireAuth(cfg);
       let query = positionals.join(" ").trim();
-      if (!query) die('usage: braavo ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
+      if (!query) usage('usage: braavo ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const companyId = flag(flags, "company") ?? cfg.defaultCompany;
-      if (!companyId) die("No company. Run: braavo use <companyId>  (or pass --company <id>)");
+      if (!companyId) usage("No company. Run: braavo use <companyId>  (or pass --company <id>)");
 
       // --models a,b,c → count drives maxCandidates (the endpoint picks the
       // tenant's own configured providers; names aren't sent). Clamp 1..3.
@@ -573,7 +588,7 @@ async function main(): Promise<void> {
     case "cascade": {
       requireAuth(cfg);
       const promptText = positionals.join(" ").trim();
-      if (!promptText) die('usage: braavo cascade "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]');
+      if (!promptText) usage('usage: braavo cascade "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]');
       const params: Parameters<typeof cascade>[1] = { prompt: promptText };
       const threshold = flag(flags, "threshold");
       if (threshold) params.confidenceThreshold = Number(threshold);
@@ -618,18 +633,18 @@ async function main(): Promise<void> {
       }
       const provider = (positionals[1] ?? "").toUpperCase();
       if (!["FAL", "GOOGLE_TTS", "ELEVENLABS"].includes(provider)) {
-        die("usage: braavo media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>  |  braavo media-key rm <provider>  |  braavo media-key list");
+        usage("usage: braavo media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>  |  braavo media-key rm <provider>  |  braavo media-key list");
       }
       if (sub === "add") {
         const secret = positionals[2];
-        if (!secret) die(`usage: braavo media-key add ${provider} <secret>`);
+        if (!secret) usage(`usage: braavo media-key add ${provider} <secret>`);
         const r = await mediaKeyPut(cfg, provider, secret);
         console.log(ui.primary(`✓ ${provider} media key stored ${ui.dim(r?.keyMasked ?? "")}`));
       } else if (sub === "rm") {
         await mediaKeyDelete(cfg, provider);
         console.log(ui.primary(`✓ ${provider} media key removed`));
       } else {
-        die("usage: braavo media-key <add|list|rm> …");
+        usage("usage: braavo media-key <add|list|rm> …");
       }
       return;
     }
@@ -637,16 +652,16 @@ async function main(): Promise<void> {
     case "image": {
       requireAuth(cfg);
       const prompt = positionals.join(" ").trim();
-      if (!prompt) die('usage: braavo image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
+      if (!prompt) usage('usage: braavo image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
       const model = flag(flags, "model") ?? IMAGE_MODELS[0];
-      if (!(IMAGE_MODELS as readonly string[]).includes(model)) die(`--model must be one of: ${IMAGE_MODELS.join(", ")}`);
+      if (!(IMAGE_MODELS as readonly string[]).includes(model)) usage(`--model must be one of: ${IMAGE_MODELS.join(", ")}`);
       const n = Number(flag(flags, "n") ?? 1);
-      if (!Number.isInteger(n) || n < 1 || n > 4) die("--n must be an integer 1..4");
+      if (!Number.isInteger(n) || n < 1 || n > 4) usage("--n must be an integer 1..4");
       let size: { width: number; height: number };
       try {
         size = parseSize(flag(flags, "size"));
       } catch (e) {
-        die((e as Error).message);
+        usage((e as Error).message);
         return;
       }
       const body = { kind: "image", model, prompt, n, width: size.width, height: size.height };
@@ -670,9 +685,9 @@ async function main(): Promise<void> {
     case "voice": {
       requireAuth(cfg);
       const text = positionals.join(" ").trim();
-      if (!text) die('usage: braavo voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
+      if (!text) usage('usage: braavo voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
       const provider = (flag(flags, "provider") ?? TTS_PROVIDERS[0]).toUpperCase();
-      if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) die(`--provider must be one of: ${TTS_PROVIDERS.join(", ")}`);
+      if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) usage(`--provider must be one of: ${TTS_PROVIDERS.join(", ")}`);
       const voice = flag(flags, "voice");
       const model = flag(flags, "model");
       const body: Record<string, unknown> = { kind: "tts", provider, text };
@@ -702,7 +717,7 @@ async function main(): Promise<void> {
 
     case "local": {
       let query = positionals.join(" ").trim();
-      if (!query) die('usage: braavo local "<question>" [--model <name>] [--host <url>] [--repo]');
+      if (!query) usage('usage: braavo local "<question>" [--model <name>] [--host <url>] [--repo]');
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const host = resolveOllamaHost(flag(flags, "host"));
@@ -724,9 +739,9 @@ async function main(): Promise<void> {
     case "direct": {
       const provider = positionals[0];
       let query = positionals.slice(1).join(" ").trim();
-      if (!provider || !query) die('usage: braavo direct <provider> "<question>" [--model <name>] [--repo]');
+      if (!provider || !query) usage('usage: braavo direct <provider> "<question>" [--model <name>] [--repo]');
       if (!isDirectProvider(provider)) {
-        die(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
+        usage(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
       }
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
@@ -774,7 +789,7 @@ async function main(): Promise<void> {
       }
       const vendor = positionals[0];
       if (!vendor || !isSpawnVendor(vendor)) {
-        die(`usage: braavo spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  braavo spawn --list`);
+        usage(`usage: braavo spawn <${SPAWN_VENDORS.join("|")}> [...args]  |  braavo spawn --list`);
       }
       // Everything after the vendor is passed VERBATIM to the child (arg array —
       // no shell, no injection). --dir/--quiet/--bridge carve out their own
@@ -839,7 +854,7 @@ async function main(): Promise<void> {
     case "fix": {
       const testCmd = flag(flags, "cmd");
       if (!testCmd) {
-        die('usage: braavo fix --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]');
+        usage('usage: braavo fix --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]');
       }
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       const via = flag(flags, "via") ?? "ask";
@@ -855,7 +870,7 @@ async function main(): Promise<void> {
       } else if (via === "direct") {
         const provider = flag(flags, "provider");
         if (!provider || !isDirectProvider(provider)) {
-          die(`--via direct needs --provider <${DIRECT_PROVIDERS.join("|")}>`);
+          usage(`--via direct needs --provider <${DIRECT_PROVIDERS.join("|")}>`);
         }
         const store = makeKeyStore();
         const apiKey = store.get(provider);
@@ -871,7 +886,7 @@ async function main(): Promise<void> {
           return String((await cascade(cfg, { prompt: p }))?.answer ?? "");
         };
       } else {
-        die(`unknown --via "${via}". Use: local | direct | ask`);
+        usage(`unknown --via "${via}". Use: local | direct | ask`);
       }
 
       const spin = ui.spinner(`running: ${testCmd}`);
@@ -897,7 +912,7 @@ async function main(): Promise<void> {
           // (parseArgs treats "--" as a flag), so the server command is verbatim.
           const afterAdd = process.argv.slice(2).slice(2); // tokens after "mcp add"
           const parsed = parseMcpAdd(afterAdd);
-          if ("error" in parsed) die(parsed.error);
+          if ("error" in parsed) usage(parsed.error);
           const next = addMcpServer(loadMcpConfig(), parsed.name, parsed.command, parsed.args);
           saveMcpConfig(next);
           ui.ok(`Added MCP server "${parsed.name}" → ${parsed.command} ${parsed.args.join(" ")}`.trim());
@@ -909,7 +924,7 @@ async function main(): Promise<void> {
         }
         case "rm": {
           const name = positionals[1];
-          if (!name) die("usage: braavo mcp rm <name>");
+          if (!name) usage("usage: braavo mcp rm <name>");
           const conf = loadMcpConfig();
           if (!conf[name]) die(`no such MCP server: ${name}`);
           saveMcpConfig(removeMcpServer(conf, name));
@@ -918,7 +933,7 @@ async function main(): Promise<void> {
         }
         case "tools": {
           const name = positionals[1];
-          if (!name) die("usage: braavo mcp tools <name>");
+          if (!name) usage("usage: braavo mcp tools <name>");
           const def = loadMcpConfig()[name];
           if (!def) die(`no such MCP server: ${name}  (add it: braavo mcp add ${name} -- <command>)`);
           const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
@@ -939,7 +954,7 @@ async function main(): Promise<void> {
         case "call": {
           const name = positionals[1];
           const tool = positionals[2];
-          if (!name || !tool) die("usage: braavo mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
+          if (!name || !tool) usage("usage: braavo mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
           const def = loadMcpConfig()[name];
           if (!def) die(`no such MCP server: ${name}`);
           let toolArgs: Record<string, unknown> = {};
@@ -948,7 +963,7 @@ async function main(): Promise<void> {
             try {
               toolArgs = JSON.parse(jsonFlag);
             } catch {
-              die(`--json is not valid JSON: ${jsonFlag}`);
+              usage(`--json is not valid JSON: ${jsonFlag}`);
             }
           }
           const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
@@ -968,7 +983,7 @@ async function main(): Promise<void> {
           return;
         }
         default:
-          die("usage: braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']");
+          usage("usage: braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']");
       }
       return;
     }
@@ -979,9 +994,9 @@ async function main(): Promise<void> {
       switch (sub) {
         case "add": {
           const provider = positionals[1];
-          if (!provider) die("usage: braavo keys add <provider> [--key <secret>]");
+          if (!provider) usage("usage: braavo keys add <provider> [--key <secret>]");
           const secret = flag(flags, "key") ?? process.env.BRAAVO_KEY ?? (await promptHidden(`${provider} key: `));
-          if (!secret) die("No key provided.");
+          if (!secret) usage("No key provided.");
           store.add(provider, secret);
           if (!store.secure) {
             ui.warn("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform.");
@@ -1003,13 +1018,13 @@ async function main(): Promise<void> {
         }
         case "rm": {
           const provider = positionals[1];
-          if (!provider) die("usage: braavo keys rm <provider>");
+          if (!provider) usage("usage: braavo keys rm <provider>");
           store.remove(provider);
           ui.ok(`Removed ${provider} key.`);
           return;
         }
         default:
-          die("usage: braavo keys add <provider> | list | rm <provider>");
+          usage("usage: braavo keys add <provider> | list | rm <provider>");
       }
       return;
     }
@@ -1039,7 +1054,7 @@ async function main(): Promise<void> {
     case "run": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo run <pipelineId>");
+      if (!id) usage("usage: braavo run <pipelineId>");
       requireConfirmation(flags, `start run for pipeline ${id}`);
       const d = await apiFetch(`/pipelines/${id}/run`, { method: "POST", body: { input: {} }, cfg });
       ui.ok(`Run started: ${d.id}`);
@@ -1050,7 +1065,7 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       const message = positionals.slice(1).join(" ");
-      if (!id || !message) die("usage: braavo steer <runId> <message...>");
+      if (!id || !message) usage("usage: braavo steer <runId> <message...>");
       requireConfirmation(flags, `steer run ${id}`);
       await apiFetch(`/runs/${id}/steer`, { method: "POST", body: { content: message }, cfg });
       ui.ok("Steering sent — the agent picks it up on its next turn.");
@@ -1079,7 +1094,7 @@ async function main(): Promise<void> {
     case "handoff": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo handoff <runId> [--reason <text>]");
+      if (!id) usage("usage: braavo handoff <runId> [--reason <text>]");
       requireConfirmation(flags, `open handoff for run ${id}`);
       const body: Record<string, unknown> = {};
       const reason = flag(flags, "reason");
@@ -1098,7 +1113,7 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       const provider = flag(flags, "provider");
-      if (!id || !provider) die("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
+      if (!id || !provider) usage("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
       requireConfirmation(flags, `continue run ${id} with provider ${provider}`);
       const body: Record<string, unknown> = { provider };
       const model = flag(flags, "model");
@@ -1172,7 +1187,7 @@ async function main(): Promise<void> {
     case "watch": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo watch <runId> [--json]");
+      if (!id) usage("usage: braavo watch <runId> [--json]");
       // Poll rather than SSE: a scriptable `watch` must terminate on a terminal
       // state and return a usable exit code, which an open stream does not.
       const TERMINAL = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
@@ -1192,7 +1207,7 @@ async function main(): Promise<void> {
     case "approve": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo approve <approvalId> [--deny] [--yes]");
+      if (!id) usage("usage: braavo approve <approvalId> [--deny] [--yes]");
       const decision = has(flags, "deny") ? "DENIED" : "APPROVED";
       requireConfirmation(flags, `${decision === "DENIED" ? "deny" : "approve"} approval ${id}`);
       const d = await apiFetch(`/approvals/${id}/decide`, {
@@ -1207,7 +1222,7 @@ async function main(): Promise<void> {
     case "pause": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo pause <runId> [--yes]");
+      if (!id) usage("usage: braavo pause <runId> [--yes]");
       requireConfirmation(flags, `pause run ${id}`);
       const d = await apiFetch(`/runs/${id}/pause`, { method: "POST", body: {}, cfg });
       emit(flags, { id, action: "pause", result: d }, () => `Paused ${id}`);
@@ -1217,7 +1232,7 @@ async function main(): Promise<void> {
     case "stop": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) die("usage: braavo stop <runId> [--yes]");
+      if (!id) usage("usage: braavo stop <runId> [--yes]");
       requireConfirmation(flags, `stop run ${id}`);
       const d = await apiFetch(`/runs/${id}/stop`, { method: "POST", body: {}, cfg });
       emit(flags, { id, action: "stop", result: d }, () => `Stopped ${id}`);
@@ -1246,7 +1261,7 @@ async function main(): Promise<void> {
     case "policy": {
       requireAuth(cfg);
       const sub = positionals[0];
-      if (sub !== "test") die("usage: braavo policy test [--json]");
+      if (sub !== "test") usage("usage: braavo policy test [--json]");
       // "policy test" = show the governance config and current risk posture the
       // engine would apply. Read-only by construction: it must be safe to run
       // against production while deciding whether an action is allowed.
@@ -1263,7 +1278,7 @@ async function main(): Promise<void> {
     case "audit": {
       requireAuth(cfg);
       const sub = positionals[0];
-      if (sub !== "verify") die("usage: braavo audit verify [--run <runId>] [--json]");
+      if (sub !== "verify") usage("usage: braavo audit verify [--run <runId>] [--json]");
       const runId = flag(flags, "run");
       const path = runId ? `/runs/${runId}` : "/dashboard/activity";
       const d = await apiFetch(path, { cfg });
@@ -1272,11 +1287,11 @@ async function main(): Promise<void> {
       const anchorHead = flag(flags, "anchor-head");
       const anchorParts = [anchorCount, anchorGenesis, anchorHead];
       if (anchorParts.some(Boolean) && !anchorParts.every(Boolean)) {
-        die("audit anchors are all-or-none: --anchor-count, --anchor-genesis, and --anchor-head");
+        usage("audit anchors are all-or-none: --anchor-count, --anchor-genesis, and --anchor-head");
       }
       const parsedCount = anchorCount === undefined ? undefined : Number(anchorCount);
       if (parsedCount !== undefined && (!Number.isSafeInteger(parsedCount) || parsedCount < 1)) {
-        die("--anchor-count must be a positive integer");
+        usage("--anchor-count must be a positive integer");
       }
       const anchor = parsedCount === undefined ? undefined : {
         count: parsedCount,
@@ -1308,7 +1323,7 @@ async function main(): Promise<void> {
     case "agent": {
       requireAuth(cfg);
       const company = flag(flags, "company") ?? cfg.defaultCompany;
-      if (!company) die("usage: braavo agent --company <id>  (or set one with: braavo use <id>)");
+      if (!company) usage("usage: braavo agent --company <id>  (or set one with: braavo use <id>)");
       const d = await apiFetch(`/companies/${company}`, { cfg });
       const agents: any[] = d.agents ?? [];
       emit(flags, { companyId: company, agents }, () =>
@@ -1333,7 +1348,7 @@ async function main(): Promise<void> {
 
     default: {
       console.log(HELP(ui));
-      if (cmd && cmd !== "help" && cmd !== "--help" && cmd !== "-h") process.exit(1);
+      if (cmd && cmd !== "help" && cmd !== "--help" && cmd !== "-h") process.exit(EXIT.USAGE);
     }
   }
 }

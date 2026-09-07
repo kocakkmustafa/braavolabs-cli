@@ -1,8 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { makeUi } from "../ui";
 import { renderCompareLines, renderCascadeLines, renderSavingsTable, extractSaved } from "../../braavo";
 
-const colorUi = makeUi({ tty: true });
+let colorUi: ReturnType<typeof makeUi>;
+// Renderer palette assertions must not inherit a CI/terminal NO_COLOR setting.
+beforeEach(() => {
+  vi.stubEnv("NO_COLOR", undefined);
+  vi.stubEnv("BRAAVO_NO_COLOR", undefined);
+  vi.stubEnv("TERM", "xterm-256color");
+  colorUi = makeUi({ tty: true });
+});
+afterEach(() => vi.unstubAllEnvs());
 
 const compareSession = {
   status: "COMPLETED",
@@ -100,14 +108,14 @@ describe("renderSavingsTable", () => {
   });
 });
 
-describe("terminal-noir palette", () => {
+describe("quiet workbench palette", () => {
   it("uses arc-blue but never any green across all renders", () => {
     const all = [
       ...renderCompareLines(colorUi, compareSession),
       ...renderCascadeLines(colorUi, cascadeResult),
       ...renderSavingsTable(colorUi, savingsData),
     ].join("\n");
-    expect(all).toContain("38;5;75"); // arc-blue is present → colors really are on
+    expect(all).toContain("38;5;146"); // muted blue is present → colors really are on
     assertNoGreen(all);
   });
 
