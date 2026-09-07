@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   SPAWN_VENDORS,
   VENDOR_SPECS,
@@ -12,7 +12,15 @@ import {
 import { makeUi } from "../ui";
 import { renderSpawnList, spawnRiskLine, spawnFallbackLines } from "../../braavo";
 
-const colorUi = makeUi({ tty: true });
+let colorUi: ReturnType<typeof makeUi>;
+// Renderer palette assertions must not inherit a CI/terminal NO_COLOR setting.
+beforeEach(() => {
+  vi.stubEnv("NO_COLOR", undefined);
+  vi.stubEnv("BRAAVO_NO_COLOR", undefined);
+  vi.stubEnv("TERM", "xterm-256color");
+  colorUi = makeUi({ tty: true });
+});
+afterEach(() => vi.unstubAllEnvs());
 
 /** Any green ANSI escape — banned by the terminal-noir palette (rule: no green). */
 function assertNoGreen(text: string) {
@@ -197,7 +205,7 @@ describe("spawn renderers (terminal-noir, no green)", () => {
   it("risk line is a single steel line carrying the vendor risk note", () => {
     const line = spawnRiskLine(colorUi, "claude");
     expect(line).toContain("SAFE");
-    expect(line).toContain("38;5;245"); // steel
+    expect(line).toContain("38;5;246"); // steel
     assertNoGreen(line);
   });
 
@@ -219,7 +227,7 @@ describe("spawn renderers (terminal-noir, no green)", () => {
     expect(joined).toContain("installed");
     expect(joined).toContain("1.2.3");
     expect(joined).toContain("not installed");
-    expect(joined).toContain("38;5;75"); // arc-blue present → colors really on
+    expect(joined).toContain("38;5;146"); // arc-blue present → colors really on
     assertNoGreen(joined);
   });
 });

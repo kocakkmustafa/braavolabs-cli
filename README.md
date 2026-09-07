@@ -47,6 +47,64 @@ used only by the opt-in `spawn --bridge` companion relay (see [spawn](#spawn)).
 
 ## Quick Start
 
+### Version, API address and script exits
+
+The command contract in this section describes this source tree. Check the
+release notes for the npm version that includes it; a local source build is
+not proof that the same changes have been published.
+
+`braavo --version` (or `braavo -v`) prints the installed package version and
+exits successfully. It does not read or change your saved config or contact an
+API. Use it alongside the package's release notes when reporting a problem.
+
+`--api <url>` selects and saves the API address. Otherwise a saved config URL
+is used; `BRAAVO_API_URL` supplies the default only when no URL is saved. An
+unknown HTTPS host requires an explicit, **bare** `--allow-custom-host` flag:
+
+```bash
+# Select and trust a self-hosted address; login prompts for credentials.
+braavo login --api https://your-api.example/api/v1 --allow-custom-host
+
+# If the intended address is already configured, repeating --api is optional.
+braavo login --allow-custom-host
+```
+
+The warning shows the effective origin before credentials are sent. The flag
+is saved with that URL. Passing `--api` again without the flag clears earlier
+custom-host consent. A string value such as `--allow-custom-host true` is not
+consent. Plain HTTP outside loopback remains refused, even with the flag, and
+API redirects are not followed.
+
+Scripts can distinguish these exit statuses:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Unclassified runtime or local diagnostic failure |
+| 2 | Unknown command, missing argument or invalid invocation |
+| 3 | Missing authentication or API rejection of the token |
+| 4 | Mutation refused without explicit confirmation |
+| 5 | API host refused for credential safety |
+| 6 | API resource not found or not visible to this tenant |
+| 7 | Other API error reported by the shared client |
+| 8 | Local evidence verification failed |
+
+Commands that require authentication check it before their arguments. Existing
+provider-specific and legacy runtime errors may use the general code 1.
+`--json` result commands write their JSON document to stdout; errors and progress
+use stderr. A refused command may have empty stdout, so inspect the exit status
+before attempting to parse a result.
+
+### Appearance and motion
+
+Interactive progress uses a small Braavolabs coin sequence (`◉ ◐ │ ◑ ◉`) on
+stderr, with muted blue and warm bronze accents. It runs only when both stdout
+and stderr are terminals; redirected output and JSON command results stay clean.
+`NO_COLOR` or `BRAAVO_NO_COLOR` disables color and motion (including an empty
+value), and `TERM=dumb` keeps output plain. Set `BRAAVO_REDUCED_MOTION=1` to
+keep terminal colors while disabling the animation. Finishing the indicator
+does not itself print or imply a successful operation.
+
 ### Council
 
 ```bash

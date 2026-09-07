@@ -2,12 +2,29 @@
 
 All notable changes to `@braavolabs/cli` (the `braavo` command) are documented
 here. The format loosely follows [Keep a Changelog](https://keepachangelog.com/).
-The package is not yet published to a registry, so entries are grouped by date;
-versioned sections start when releases do.
+Versioned entries describe release candidates and published packages; older
+development history remains grouped by date.
 
 ## [Unreleased]
 
 - _(nothing yet)_
+
+## 0.1.1 — release candidate
+
+### Changed
+- Add Braavolabs coin-inspired terminal activity with quiet non-TTY and no-color output.
+- Print the package version for both `--version` and `-v`.
+- Document config-over-environment API precedence and explicit custom-host trust.
+
+### Fixed
+- Return the documented authentication and local-usage exit codes.
+- Apply a bare `--allow-custom-host` to the explicitly selected effective host,
+  without carrying trust to a different host or allowing plaintext remote HTTP.
+- Read the persisted MCP server registry in `doctor`.
+
+### Tests
+- Exercise the compiled CLI with isolated config and synthetic network responses;
+  keep JSON output on stdout and diagnostics on stderr.
 
 ## 2026-07-18
 
