@@ -25,6 +25,13 @@
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "nanoid@3": "3.3.18",
+      "postcss@8": "8.5.23",
+      "vitest>vite": "7.3.6"
+    }
   }
 }
