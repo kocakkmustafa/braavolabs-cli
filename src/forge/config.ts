@@ -5,9 +5,10 @@
  * refresh-retry loop everywhere, plus a `defaultCompany` set by `braavo use`.
  * Paths are injectable so tests round-trip against a tmp file, never real $HOME.
  */
-import { chmodSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, closeSync, openSync, readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 
 export interface Config {
   apiUrl: string;
@@ -134,26 +135,202 @@ export function assertHostSafeForCredentials(
 }
 
 
-export function loadConfig(path: string = CONFIG_PATH): Config {
+interface DiskConfig {
+  config: Config;
+  present: boolean;
+  valid: boolean;
+}
+
+/** Non-secret disk generation; kept out of the public config JSON and shape. */
+export interface ConfigOwner extends Pick<Config, "apiUrl" | "token" | "refreshToken"> {
+  readonly path: string;
+  readonly nonce: string;
+  readonly present: boolean;
+}
+const configOwners = new WeakMap<Config, ConfigOwner>();
+
+function changedOwner(): Error {
+  const error = new Error("Session changed while the command was pending");
+  error.name = "SessionChangedError";
+  return error;
+}
+
+function readConfig(path: string): DiskConfig {
+  let contents: string;
   try {
-    return { apiUrl: DEFAULT_API, ...JSON.parse(readFileSync(path, "utf8")) };
-  } catch {
-    return { apiUrl: DEFAULT_API };
+    contents = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return { config: { apiUrl: DEFAULT_API }, present: false, valid: true };
   }
+  try {
+    const parsed = JSON.parse(contents);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid config");
+    return { config: { apiUrl: DEFAULT_API, ...parsed }, present: true, valid: true };
+  } catch {
+    return { config: { apiUrl: DEFAULT_API }, present: true, valid: false };
+  }
+}
+
+/** All CLI writers share this short lock; no network work occurs while held. */
+function withConfigLock<T>(path: string, write: () => T): T {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
+  const lockPath = `${path}.lock`;
+  let lock: number;
+  try {
+    lock = openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error("Config is being updated by another process; retry the command.");
+    }
+    throw error;
+  }
+  try {
+    return write();
+  } finally {
+    try { closeSync(lock); } finally { rmSync(lockPath, { force: true }); }
+  }
+}
+
+/** Atomic replacement also lets readers see a complete credential-safe file. */
+function writeAtomic(value: unknown, path: string): void {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function readNonce(path: string): string | undefined {
+  let contents: string;
+  try {
+    contents = readFileSync(`${path}.owner`, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const marker = JSON.parse(contents) as { version?: unknown; nonce?: unknown };
+  if (marker?.version !== 1 || typeof marker.nonce !== "string" || !marker.nonce) {
+    throw new Error("Invalid config session owner marker");
+  }
+  return marker.nonce;
+}
+
+function writeNonce(path: string, nonce = randomUUID()): string {
+  writeAtomic({ version: 1, nonce }, `${path}.owner`);
+  return nonce;
+}
+
+function ownerSnapshot(path: string, nonce: string, disk: DiskConfig): ConfigOwner {
+  return Object.freeze({ path: resolve(path), nonce, present: disk.present,
+    apiUrl: disk.config.apiUrl, token: disk.config.token, refreshToken: disk.config.refreshToken });
+}
+
+function samePair(a: Pick<Config, "apiUrl" | "token" | "refreshToken">, b: Pick<Config, "apiUrl" | "token" | "refreshToken">): boolean {
+  return a.apiUrl === b.apiUrl && a.token === b.token && a.refreshToken === b.refreshToken;
+}
+
+function matchesOwner(path: string, owner: ConfigOwner, nonce: string | undefined, disk: DiskConfig): boolean {
+  return disk.valid && owner.path === resolve(path) && owner.nonce === nonce &&
+    owner.present === disk.present && samePair(disk.config, owner);
+}
+
+function applyCommittedConfig(cfg: Config, committed: Config): void {
+  Object.assign(cfg, committed);
+  if (!("defaultCompany" in committed)) delete cfg.defaultCompany;
+  if (!("allowCustomHost" in committed)) delete cfg.allowCustomHost;
+}
+
+export function loadConfig(path: string = CONFIG_PATH): Config {
+  // Pair + generation must come from one critical section. Two independent
+  // atomic reads can otherwise combine a pre-transition config with its new nonce.
+  return withConfigLock(path, () => {
+    const disk = readConfig(path);
+    const nonce = readNonce(path) ?? writeNonce(path);
+    if (disk.valid) configOwners.set(disk.config, ownerSnapshot(path, nonce, disk));
+    return disk.config;
+  });
+}
+
+/** Capture before prompts/network; a previously loaded owner cannot be rebound to B. */
+export function captureConfigOwner(cfg: Config, path: string = CONFIG_PATH): ConfigOwner {
+  return withConfigLock(path, () => {
+    const disk = readConfig(path);
+    const nonce = readNonce(path) ?? writeNonce(path);
+    const known = configOwners.get(cfg);
+    if (!disk.valid || !samePair(disk.config, cfg) || (known && !matchesOwner(path, known, nonce, disk))) {
+      throw changedOwner();
+    }
+    const owner = ownerSnapshot(path, nonce, disk);
+    configOwners.set(cfg, owner);
+    return owner;
+  });
 }
 
 export function saveConfig(c: Config, path: string = CONFIG_PATH): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify(c, null, 2), { mode: 0o600 });
-  // writeFile's mode only applies on create; force an already-existing config
-  // back to the credential-safe contract too.
-  chmodSync(path, 0o600);
+  withConfigLock(path, () => {
+    readNonce(path); // A corrupt marker is not silently replaced.
+    // Publish the invalidation first: a failed subsequent config write must
+    // still prevent pending old commands from committing successfully.
+    const nonce = writeNonce(path);
+    writeAtomic(c, path);
+    configOwners.set(c, ownerSnapshot(path, nonce, { config: c, present: true, valid: true }));
+  });
+}
+
+/** Refresh keeps the same generation and changes only authentication fields. */
+export function saveConfigIfCurrent(
+  next: Config,
+  owner: Pick<Config, "apiUrl" | "token" | "refreshToken">,
+  path: string = CONFIG_PATH,
+): boolean {
+  return withConfigLock(path, () => {
+    const disk = readConfig(path);
+    const nonce = readNonce(path);
+    const known = configOwners.get(next) ?? configOwners.get(owner);
+    if (!known || !disk.present || !matchesOwner(path, { ...known,
+      apiUrl: owner.apiUrl, token: owner.token, refreshToken: owner.refreshToken }, nonce, disk) || next.apiUrl !== owner.apiUrl) {
+      return false;
+    }
+    const committed = { ...disk.config, token: next.token, refreshToken: next.refreshToken };
+    writeAtomic(committed, path);
+    applyCommittedConfig(next, committed);
+    configOwners.set(next, ownerSnapshot(path, nonce!, { config: committed, present: true, valid: true }));
+    return true;
+  });
+}
+
+/** Email-login may replace an unchanged present OR initially absent owner. */
+export function commitLoginIfCurrent(
+  cfg: Config,
+  pair: Pick<Config, "token" | "refreshToken">,
+  owner: ConfigOwner,
+  path: string = CONFIG_PATH,
+): boolean {
+  return withConfigLock(path, () => {
+    const disk = readConfig(path);
+    if (!matchesOwner(path, owner, readNonce(path), disk) || !samePair(cfg, owner)) return false;
+    if (typeof pair.token !== "string" || !pair.token.trim() ||
+        (pair.refreshToken !== undefined && (typeof pair.refreshToken !== "string" || !pair.refreshToken.trim()))) {
+      throw new Error("Invalid authentication response");
+    }
+    const committed = { ...disk.config, token: pair.token, refreshToken: pair.refreshToken };
+    const nonce = writeNonce(path);
+    writeAtomic(committed, path);
+    applyCommittedConfig(cfg, committed);
+    configOwners.set(cfg, ownerSnapshot(path, nonce, { config: committed, present: true, valid: true }));
+    return true;
+  });
 }
 
 export function clearConfig(path: string = CONFIG_PATH): void {
-  try {
-    rmSync(path);
-  } catch {
-    /* already gone */
-  }
+  withConfigLock(path, () => {
+    readNonce(path);
+    writeNonce(path); // Tombstone survives deletion, including an already absent config.
+    rmSync(path, { force: true });
+  });
 }
