@@ -10,7 +10,7 @@
  *   POST /research/cascade    → synchronous result (NO companyId in body)
  *   GET  /billing/savings     → savings report (tenant-scoped, no companyId)
  */
-import { Config, saveConfig, assertHostSafeForCredentials, UntrustedHostError } from "./config";
+import { Config, saveConfigIfCurrent, assertHostSafeForCredentials, UntrustedHostError } from "./config";
 
 export class ApiError extends Error {
   status: number;
@@ -29,8 +29,8 @@ export interface RequestOpts {
   auth?: boolean;
   raw?: boolean;
   cfg: Config;
-  /** Persist cfg after a refresh; defaults to the real on-disk saveConfig. */
-  save?: (c: Config) => void;
+  /** Persist cfg after a refresh; defaults to the conditional on-disk save. */
+  save?: (c: Config) => void | Promise<void>;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: FetchLike;
 }
@@ -41,6 +41,103 @@ export interface RawResult {
   body: any;
 }
 
+/** A logout/login transition must invalidate even an identical restored pair. */
+export class SessionChangedError extends Error {
+  constructor() {
+    super("Session changed while the request was pending");
+    this.name = "SessionChangedError";
+  }
+}
+export interface SessionSnapshot {
+  revision: number;
+  apiUrl: string;
+  token?: string;
+  refreshToken?: string;
+}
+const sessions = new WeakMap<Config, SessionSnapshot>();
+const refreshes = new WeakMap<Config, { owner: SessionSnapshot; promise: Promise<string | undefined> }>();
+
+function currentSession(cfg: Config): SessionSnapshot {
+  let state = sessions.get(cfg);
+  if (!state) {
+    state = { revision: 0, apiUrl: cfg.apiUrl, token: cfg.token, refreshToken: cfg.refreshToken };
+    sessions.set(cfg, state);
+  } else if (state.apiUrl !== cfg.apiUrl || state.token !== cfg.token || state.refreshToken !== cfg.refreshToken) {
+    state.revision++;
+    state.apiUrl = cfg.apiUrl; state.token = cfg.token; state.refreshToken = cfg.refreshToken;
+  }
+  return state;
+}
+export function captureSession(cfg: Config): SessionSnapshot {
+  return { ...currentSession(cfg) };
+}
+export function isCurrentSession(cfg: Config, owner: SessionSnapshot): boolean {
+  const state = currentSession(cfg);
+  return state.revision === owner.revision && state.apiUrl === owner.apiUrl;
+}
+export function invalidateSession(cfg: Config): void {
+  currentSession(cfg).revision++;
+}
+function assertSession(cfg: Config, owner: SessionSnapshot): void {
+  if (!isCurrentSession(cfg, owner)) throw new SessionChangedError();
+}
+
+/** One refresh per captured owner/pair. Rotation itself keeps that owner alive. */
+async function refreshSession(
+  cfg: Config,
+  owner: SessionSnapshot,
+  doFetch: FetchLike,
+  save: (c: Config) => void | Promise<void>,
+): Promise<string | undefined> {
+  assertSession(cfg, owner);
+  const pending = refreshes.get(cfg);
+  if (pending && pending.owner.revision === owner.revision && pending.owner.apiUrl === owner.apiUrl) {
+    // Rotation updates memory before async persistence finishes. Join that
+    // flight before reusing its pair so a late 401 cannot bypass a failed save.
+    const token = await pending.promise;
+    assertSession(cfg, owner);
+    return token === undefined ? undefined : cfg.token;
+  }
+  const current = currentSession(cfg);
+  if (current.token !== owner.token || current.refreshToken !== owner.refreshToken) {
+    return current.token; // A late 401 can reuse the already rotated pair.
+  }
+  if (!owner.refreshToken) return undefined;
+  let flight = refreshes.get(cfg);
+  if (!flight || flight.owner.revision !== owner.revision || flight.owner.apiUrl !== owner.apiUrl ||
+      flight.owner.token !== owner.token || flight.owner.refreshToken !== owner.refreshToken) {
+    const promise = (async () => {
+      const r = await doFetch(`${owner.apiUrl}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: owner.refreshToken }),
+      });
+      assertSession(cfg, owner);
+      if (!r.ok) return undefined;
+      const d = (await r.json()) as { token?: string; refreshToken?: string };
+      assertSession(cfg, owner);
+      if (typeof d?.token !== "string" || !d.token.trim() ||
+          (d.refreshToken !== undefined && (typeof d.refreshToken !== "string" || !d.refreshToken.trim()))) {
+        throw new ApiError(503, "Invalid authentication response");
+      }
+      cfg.token = d.token;
+      if (d.refreshToken !== undefined) cfg.refreshToken = d.refreshToken;
+      // These writes are our own rotation, not a new account/session.
+      current.token = cfg.token; current.refreshToken = cfg.refreshToken;
+      try { await save(cfg); } finally { assertSession(cfg, owner); }
+      return cfg.token;
+    })();
+    flight = { owner, promise };
+    refreshes.set(cfg, flight);
+    const cleanup = () => { if (refreshes.get(cfg) === flight) refreshes.delete(cfg); };
+    void promise.then(cleanup, cleanup);
+  }
+  const token = await flight.promise;
+  assertSession(cfg, owner);
+  return token === undefined ? undefined : cfg.token;
+}
+
+
 /**
  * JSON request against the configured API base. Mirrors braavo's behavior:
  * Bearer auth by default, exactly one transparent refresh on 401, `raw` mode
@@ -48,16 +145,28 @@ export interface RawResult {
  */
 export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
   const { cfg } = opts;
+  const owner = captureSession(cfg);
   // BR-P0-004 — custom-host credential safety. Every credential the CLI holds
   // crosses this function: the password in the /auth/login body, the Bearer
   // access token on authed calls, and the refresh token on the 401 retry. Gate
   // the destination BEFORE any of them is put on the wire. cfg.apiUrl is
   // attacker-influenceable via `--api`, BRAAVO_API_URL and ~/.braavo/config.json.
-  assertHostSafeForCredentials(cfg.apiUrl, { allowCustomHost: cfg.allowCustomHost });
+  assertHostSafeForCredentials(owner.apiUrl, { allowCustomHost: cfg.allowCustomHost });
   const authed = opts.auth !== false;
-  const save = opts.save ?? saveConfig;
+  const save = opts.save ?? ((next: Config) => {
+    let persisted = false;
+    try {
+      persisted = saveConfigIfCurrent(next, owner);
+    } finally {
+      if (!persisted) {
+        invalidateSession(next);
+        next.token = undefined; next.refreshToken = undefined;
+      }
+    }
+    if (!persisted) throw new SessionChangedError();
+  });
   const doFetch: FetchLike = opts.fetchImpl ?? (globalThis.fetch as FetchLike);
-  const expectedOrigin = new URL(cfg.apiUrl).origin;
+  const expectedOrigin = new URL(owner.apiUrl).origin;
 
   const checkedFetch: FetchLike = async (url, init = {}) => {
     // Native fetch follows 301/302/307/308 by default and can replay a POST
@@ -86,8 +195,9 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
     return res;
   };
 
-  const req = (tok?: string) =>
-    checkedFetch(`${cfg.apiUrl}${path}`, {
+  const req = (tok?: string) => {
+    assertSession(cfg, owner);
+    return checkedFetch(`${owner.apiUrl}${path}`, {
       method: opts.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
@@ -95,36 +205,33 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
       },
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
     });
+  };
 
-  let res = await req(authed ? cfg.token : undefined);
+  let res = await req(authed ? owner.token : undefined);
+  assertSession(cfg, owner);
 
   // Transparent single refresh on 401 (never on /auth/* to avoid loops).
-  if (res.status === 401 && authed && cfg.refreshToken && !path.startsWith("/auth/")) {
-    const r = await checkedFetch(`${cfg.apiUrl}/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: cfg.refreshToken }),
-    });
-    if (r.ok) {
-      const d = (await r.json()) as { token: string; refreshToken?: string };
-      cfg.token = d.token;
-      if (d.refreshToken) cfg.refreshToken = d.refreshToken;
-      save(cfg);
-      res = await req(cfg.token);
-    }
+  if (res.status === 401 && authed && owner.refreshToken && !path.startsWith("/auth/")) {
+    const token = await refreshSession(cfg, owner, checkedFetch, save);
+    if (token) res = await req(token);
+    assertSession(cfg, owner);
   }
 
   if (opts.raw) {
     const body = res.status === 204 ? null : await res.json().catch(() => ({}));
+    assertSession(cfg, owner);
     return { status: res.status, statusText: res.statusText, body } satisfies RawResult;
   }
 
   if (!res.ok) {
     const b = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    assertSession(cfg, owner);
     throw new ApiError(res.status, b.error ?? b.message ?? res.statusText);
   }
   if (res.status === 204) return null;
-  return res.json();
+  const body = await res.json();
+  assertSession(cfg, owner);
+  return body;
 }
 
 // ── typed command wrappers ──────────────────────────────────────────────────

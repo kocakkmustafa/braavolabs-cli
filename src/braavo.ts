@@ -20,7 +20,7 @@
  */
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
-import { Config, loadConfig, saveConfig, clearConfig, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
+import { Config, loadConfig, saveConfig, clearConfig, captureConfigOwner, commitLoginIfCurrent, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
 import { EXIT, type ExitCode } from "./forge/exit-codes";
 import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
 import { runDoctor } from "./forge/doctor";
@@ -28,7 +28,9 @@ import { verifyEvidenceChain } from "./forge/audit";
 import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
+  SessionChangedError,
   apiFetch,
+  invalidateSession,
   login,
   logout,
   startCompare,
@@ -508,32 +510,40 @@ async function main(): Promise<void> {
     case "login": {
       const token = flag(flags, "token");
       if (token) {
+        invalidateSession(cfg);
         cfg.token = token;
+        cfg.refreshToken = undefined;
         saveConfig(cfg);
         ui.ok(`Token saved · ${cfg.apiUrl}`);
         return;
       }
+      const owner = captureConfigOwner(cfg);
       const email = flag(flags, "email") ?? (await prompt("Email: "));
       const password = flag(flags, "password") ?? (await promptHidden("Password: "));
+      if (captureConfigOwner(cfg).nonce !== owner.nonce) throw new SessionChangedError();
       const d = await login(cfg, { email, password });
-      cfg.token = d.token;
-      cfg.refreshToken = d.refreshToken;
-      saveConfig(cfg);
+      if (!commitLoginIfCurrent(cfg, { token: d.token, refreshToken: d.refreshToken }, owner)) {
+        throw new SessionChangedError();
+      }
+      invalidateSession(cfg);
       ui.ok(`Logged in as ${d.user?.email ?? email} · ${d.tenant?.name ?? cfg.apiUrl}`);
       return;
     }
 
     case "logout": {
-      // Best-effort server-side refresh-token revocation before clearing local
-      // creds, so the token can't be reused (audit C3). Never blocks logout.
-      if (cfg.token) {
+      // Clear locally before awaiting best-effort server-side revocation.
+      const departing = { ...cfg };
+      invalidateSession(cfg);
+      cfg.token = undefined;
+      cfg.refreshToken = undefined;
+      clearConfig();
+      if (departing.token || departing.refreshToken) {
         try {
-          await logout(cfg);
+          await logout(departing);
         } catch {
-          /* offline / expired — local clear below still logs the user out */
+          /* offline / expired — local credentials are already cleared */
         }
       }
-      clearConfig();
       ui.ok("Logged out.");
       return;
     }
