@@ -36,6 +36,10 @@ os.homedir = () => process.env.BRAAVO_TEST_HOME;
 globalThis.fetch = async (url, init = {}) => {
   fs.appendFileSync(process.env.BRAAVO_TEST_CALLS, JSON.stringify({
     origin: new URL(String(url)).origin, redirect: init.redirect,
+    ...(process.env.BRAAVO_TEST_CAPTURE_REQUEST ? {
+      path: new URL(String(url)).pathname, method: init.method,
+      body: JSON.parse(init.body), authorization: init.headers.Authorization,
+    } : {}),
   }) + "\\n");
   const status = Number(process.env.BRAAVO_TEST_STATUS || 200);
   const body = status === 200
@@ -210,4 +214,79 @@ describe("compiled CLI current-host opt-in", () => {
     expect(r.stderr).toMatch(/redirect/i);
     expect(f.calls()).toEqual([{ origin: "https://custom.example.invalid", redirect: "manual" }]);
   });
+});
+
+
+describe("compiled CLI approval decision contract", () => {
+  for (const deny of [false, true]) {
+    const args = ["approve", "synthetic-approval", ...(deny ? ["--deny"] : [])];
+    const decision = deny ? "REJECTED" : "APPROVED";
+
+    it(`${decision} sends the exact authenticated decision payload`, () => {
+      const f = fixture(authenticated);
+      const r = f.run([...args, "--yes", "--json"], { BRAAVO_TEST_CAPTURE_REQUEST: "1" });
+      expect(r.status).toBe(EXIT.OK);
+      expect(r.stderr).toBe("");
+      expect(JSON.parse(r.stdout)).toMatchObject({ id: "synthetic-approval", decision });
+      expect(f.calls()).toEqual([{
+        origin: "https://braavolabs.com", redirect: "manual",
+        path: "/api/v1/approvals/synthetic-approval/decide", method: "POST",
+        body: { decision, reason: "via braavo cli" }, authorization: "Bearer synthetic-access",
+      }]);
+    });
+
+    it(`${decision} requires explicit confirmation before dispatch`, () => {
+      const f = fixture(authenticated);
+      const r = f.run([...args, "--json"]);
+      expect(r.status).toBe(EXIT.CONFIRMATION_REQUIRED);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(`${deny ? "deny" : "approve"} approval synthetic-approval`);
+      expect(f.calls()).toEqual([]);
+    });
+
+    it(`${decision} requires authentication even with --yes`, () => {
+      const f = fixture();
+      const r = f.run([...args, "--yes", "--json"]);
+      expect(r.status).toBe(EXIT.AUTH);
+      expect(r.stdout).toBe("");
+      expect(f.calls()).toEqual([]);
+    });
+  }
+
+  it("preserves an explicit reason without introducing an INPUT answer note", () => {
+    const f = fixture(authenticated);
+    expect(f.run(["approve", "synthetic-approval", "--deny", "--yes", "--reason", "operator reason"],
+      { BRAAVO_TEST_CAPTURE_REQUEST: "1" }).status).toBe(EXIT.OK);
+    expect(f.calls()[0].body).toEqual({ decision: "REJECTED", reason: "operator reason" });
+  });
+
+  for (const status of [401, 403]) {
+    it(`API ${status} refuses denial without emitting success`, () => {
+      const f = fixture(authenticated);
+      const r = f.run(["approve", "synthetic-approval", "--deny", "--yes", "--json"],
+        { BRAAVO_TEST_STATUS: String(status) });
+      expect(r.status).not.toBe(EXIT.OK);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("fixture error");
+      expect(f.calls()).toHaveLength(1);
+    });
+  }
+});
+
+
+for (const confirmation of [["--yes", "true"], ["--yes", "--approval", "unverified"]]) {
+  it(`denial rejects unverified confirmation ${confirmation.join(" ")}`, () => {
+    const f = fixture(authenticated);
+    const r = f.run(["approve", "synthetic-approval", "--deny", "--json", ...confirmation]);
+    expect(r.status).toBe(EXIT.CONFIRMATION_REQUIRED);
+    expect(r.stdout).toBe("");
+    expect(f.calls()).toEqual([]);
+  });
+}
+
+it("human denial output uses the accepted rejection label", () => {
+  const f = fixture(authenticated);
+  const r = f.run(["approve", "synthetic-approval", "--deny", "--yes"]);
+  expect(r.status).toBe(EXIT.OK);
+  expect(r.stdout).toBe("REJECTED  synthetic-approval\n");
 });

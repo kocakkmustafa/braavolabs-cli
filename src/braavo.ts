@@ -1218,8 +1218,8 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo approve <approvalId> [--deny] [--yes]");
-      const decision = has(flags, "deny") ? "DENIED" : "APPROVED";
-      requireConfirmation(flags, `${decision === "DENIED" ? "deny" : "approve"} approval ${id}`);
+      const decision = has(flags, "deny") ? "REJECTED" : "APPROVED";
+      requireConfirmation(flags, `${decision === "REJECTED" ? "deny" : "approve"} approval ${id}`);
       const d = await apiFetch(`/approvals/${id}/decide`, {
         method: "POST",
         body: { decision, reason: flag(flags, "reason") ?? "via braavo cli" },
