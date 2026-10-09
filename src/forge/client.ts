@@ -28,6 +28,10 @@ export interface RequestOpts {
   body?: unknown;
   auth?: boolean;
   raw?: boolean;
+  /** Return a successful response's stream without consuming it as JSON. */
+  stream?: boolean;
+  /** Cancel the request, including a replay after authentication refresh. */
+  signal?: AbortSignal;
   cfg: Config;
   /** Persist cfg after a refresh; defaults to the conditional on-disk save. */
   save?: (c: Config) => void | Promise<void>;
@@ -197,13 +201,16 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
 
   const req = (tok?: string) => {
     assertSession(cfg, owner);
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new Error("Request aborted");
     return checkedFetch(`${owner.apiUrl}${path}`, {
       method: opts.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
+        ...(opts.stream ? { Accept: "text/event-stream" } : {}),
         ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
       },
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   };
 
@@ -228,6 +235,7 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
     assertSession(cfg, owner);
     throw new ApiError(res.status, b.error ?? b.message ?? res.statusText);
   }
+  if (opts.stream) return res;
   if (res.status === 204) return null;
   const body = await res.json();
   assertSession(cfg, owner);
@@ -262,6 +270,7 @@ export async function login(
 }
 
 export interface CompareParams {
+  selections?: { provider: string; model: string; reasoningEffort?: "low" | "medium" | "high" }[];
   companyId: string;
   query: string;
   maxCandidates?: number;
@@ -279,7 +288,8 @@ export async function startCompare(
   if (p.maxCandidates !== undefined) body.maxCandidates = p.maxCandidates;
   if (p.maxTokensPerCandidate !== undefined) body.maxTokensPerCandidate = p.maxTokensPerCandidate;
   if (p.maxCostUsd !== undefined) body.maxCostUsd = p.maxCostUsd;
-  return apiFetch("/research/compare", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
+  if (p.selections !== undefined) body.selections = p.selections;
+  return apiFetch(p.selections === undefined ? "/research/compare" : "/research/compare/selected", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
 }
 
 const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);

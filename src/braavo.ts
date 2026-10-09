@@ -21,6 +21,7 @@
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 import { Config, loadConfig, saveConfig, clearConfig, captureConfigOwner, commitLoginIfCurrent, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
+import { parseApprovalDecision } from "./forge/approvalDecision";
 import { EXIT, type ExitCode } from "./forge/exit-codes";
 import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
 import { runDoctor } from "./forge/doctor";
@@ -402,7 +403,7 @@ const HELP = (ui: Ui): string => {
 ${ui.steel("Council")}
   ${p("braavo login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
   ${p("braavo use")}     <companyId>                 set the default company
-  ${p("braavo ask")}     "<question>" [--company <id>] [--models a,b,c] [--repo]
+  ${p("braavo ask")}     "<question>" [--company <id>] [--models PROVIDER/model,...] [--repo]
   ${p("braavo cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
   ${p("braavo savings")} [--days <1-90>]
   ${p("braavo keys")}    add <provider> [--key <secret>] | list | rm <provider>
@@ -440,6 +441,10 @@ ${ui.steel("Pipelines")}
   ${p("braavo connections")}
 
 ${ui.steel("ask")}      one question, several models, side-by-side (async compare + poll)
+         --models selects 1..3 tenant-configured PROVIDER/model pairs in order.
+         --reasoning-effort low|medium|high applies to each explicit selection.
+         Currently verified: CEREBRAS/gpt-oss-120b on its built-in endpoint.
+         Omit it for automatic first-N selection; synthesis uses the tenant default.
 ${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
 ${ui.steel("keys")}     LOCAL BYOK storage (macOS keychain / chmod-600 file) — never sent to the server
 ${ui.steel("local")}    serverless, keyless — talks straight to a local Ollama daemon
@@ -473,6 +478,12 @@ async function main(): Promise<void> {
   }
 
   const { cmd, positionals, flags } = parseArgs(process.argv.slice(2));
+  if (Object.keys(flags).some(key => key.startsWith("reasoning-effort="))) usage("Use --reasoning-effort low|medium|high (separate flag and value)");
+  const effort = flag(flags, "reasoning-effort");
+  if (flags["reasoning-effort"] !== undefined) {
+    if (cmd !== "ask" || flags.models === undefined) usage("--reasoning-effort requires ask with --models PROVIDER/model,...");
+    if (effort !== "low" && effort !== "medium" && effort !== "high") usage("--reasoning-effort requires low, medium or high");
+  }
   if (cmd === "--version" || cmd === "-v") {
     console.log((require("../package.json") as { version: string }).version);
     return;
@@ -560,32 +571,37 @@ async function main(): Promise<void> {
     case "ask": {
       requireAuth(cfg);
       let query = positionals.join(" ").trim();
-      if (!query) usage('usage: braavo ask "<question>" [--company <id>] [--models a,b,c] [--repo]');
+      if (!query) usage('usage: braavo ask "<question>" [--company <id>] [--models PROVIDER/model,...] [--repo]');
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const companyId = flag(flags, "company") ?? cfg.defaultCompany;
       if (!companyId) usage("No company. Run: braavo use <companyId>  (or pass --company <id>)");
 
-      // --models a,b,c → count drives maxCandidates (the endpoint picks the
-      // tenant's own configured providers; names aren't sent). Clamp 1..3.
+      // Explicit pairs prevent ambiguous aliases and silent provider substitution.
       const modelsFlag = flag(flags, "models");
-      let maxCandidates: number | undefined;
-      if (modelsFlag) {
-        const n = modelsFlag.split(",").map((s) => s.trim()).filter(Boolean).length;
-        maxCandidates = Math.min(3, Math.max(1, n));
+      let selections: NonNullable<Parameters<typeof startCompare>[1]["selections"]> | undefined;
+      if (flags.models !== undefined) {
+        selections = (modelsFlag ?? "").split(",").map(value => {
+          const separator = value.trim().indexOf("/");
+          if (separator <= 0 || separator === value.trim().length - 1) usage("--models requires PROVIDER/model pairs, e.g. OPENAI/gpt-4o");
+          return { provider: value.trim().slice(0, separator).toUpperCase(), model: value.trim().slice(separator + 1) };
+        });
+        if (selections.length > 3 || new Set(selections.map(s => JSON.stringify(s))).size !== selections.length) usage("--models requires 1..3 distinct PROVIDER/model pairs");
+        if (effort === "low" || effort === "medium" || effort === "high") {
+          selections = selections.map(selection => ({...selection, reasoningEffort: effort}));
+        }
       }
-
-      const n = maxCandidates ?? 3;
+      const n = selections?.length ?? 3;
       const spin = ui.spinner(`asking ${n} faces…`);
       try {
-        const stub = await startCompare(cfg, { companyId, query, maxCandidates });
+        const stub = await startCompare(cfg, { companyId, query, selections });
         spin.update(`asking ${n} faces… (session ${stub.id})`);
         const session = await pollCompare(cfg, stub.id, {
           onTick: (status) => spin.update(`asking ${n} faces… (${status.toLowerCase()})`),
         });
         spin.stop();
-        if (String(session.status) === "FAILED") {
-          die(`Compare failed: ${session.error ?? "unknown error"}`);
+        if (String(session.status) !== "COMPLETED") {
+          throw new ApiError(502, `Compare ${String(session.status).toLowerCase()}: ${session.error ?? "no completed result"}`);
         }
         for (const line of renderCompareLines(ui, session)) console.log(line);
       } catch (e) {
@@ -1137,17 +1153,25 @@ async function main(): Promise<void> {
       const MAX_ATTEMPTS = 5;
       for (let attempt = 1; ; attempt++) {
         const r = await apiFetch(`/runs/${id}/continue`, { method: "POST", body, cfg, raw: true });
-        if (r.status < 400) {
+        if (r.status >= 200 && r.status < 300) {
+          if (r.body?.success !== true || ["handoffId", "toProvider", "toModel", "status"].some(key =>
+            typeof r.body?.[key] !== "string" || !r.body[key].trim())) {
+            throw new ApiError(502, "Invalid handoff response; inspect the run before retrying.");
+          }
           ui.ok(`Handoff claimed: ${r.body.handoffId}  →  ${r.body.toProvider}/${r.body.toModel}  (run ${r.body.status})`);
           return;
         }
         const errMsg = r.body?.error ?? r.body?.message ?? r.statusText;
-        if (r.status === 409 && attempt < MAX_ATTEMPTS) {
+        // Current servers expose this legacy message without a machine code.
+        // Other conflicts must not trigger repeated mutations or report freezing.
+        const pending = r.body?.code === "CHECKPOINT_PENDING" || r.body?.error ===
+          "Checkpoint not frozen yet — the live loop hasn't reached a turn boundary. Retry shortly.";
+        if (r.status === 409 && pending && attempt < MAX_ATTEMPTS) {
           console.log(`  Checkpoint still freezing (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in 2s…`);
           await sleep(2000);
           continue;
         }
-        die(`API ${r.status}: ${errMsg}`);
+        throw new ApiError(r.status, errMsg);
       }
     }
 
@@ -1225,7 +1249,13 @@ async function main(): Promise<void> {
         body: { decision, reason: flag(flags, "reason") ?? "via braavo cli" },
         cfg,
       });
-      emit(flags, { id, decision, result: d }, () => `${decision}  ${id}`);
+      let outcome;
+      try { outcome = parseApprovalDecision(d, decision); }
+      catch (error) { throw new ApiError(502, (error as Error).message); }
+      emit(flags, { id, decision, result: d }, () => outcome.claimFailed
+        ? `APPROVED  ${id} — approval recorded; handoff incomplete: ${outcome.error ?? "needs attention"}. Check the run.`
+        : `${decision}  ${id}`);
+      if (outcome.claimFailed) process.exitCode = EXIT.API;
       return;
     }
 
@@ -1346,8 +1376,8 @@ async function main(): Promise<void> {
 
     case "session": {
       requireAuth(cfg);
-      const d = await apiFetch("/relay/sessions", { cfg, raw: true });
-      const list: any[] = Array.isArray(d?.body) ? d.body : (d?.body?.sessions ?? []);
+      const d = await apiFetch("/relay/sessions", { cfg });
+      const list: any[] = Array.isArray(d) ? d : (d?.sessions ?? []);
       emit(flags, { sessions: list }, () =>
         list.length
           ? list.map((x: any) => `${String(x.state ?? "").padEnd(10)}  ${x.id}  ${x.deviceId ?? ""}`).join("\n")

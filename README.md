@@ -115,7 +115,7 @@ braavo login --api https://your-api.com --token "eyJ..."
 braavo use coy_123abc
 
 # Ask a question to multiple models
-braavo ask "Explain OAuth 2.0" --models claude,gpt4,gemini
+braavo ask "Explain OAuth 2.0" --models OPENAI/gpt-4o,GROQ/llama-3.3-70b-versatile
 
 # Cascade: cheapest model that meets your confidence threshold
 braavo cascade "Summarize the Anthropic research paper" --threshold 0.9
@@ -161,6 +161,11 @@ braavo mcp call fs read_file --json '{"path":"/tmp/notes.txt"}'
 braavo models
 ```
 
+`--models` accepts 1–3 distinct `PROVIDER/model` pairs from your tenant's configured AI providers, in the requested order. These are exact configured pairs, not an arbitrary model catalog or aliases. Unknown, unavailable, ambiguous, duplicate, and over-limit selections are rejected before inference. Explicit selection requires a platform supporting `/research/compare/selected`; an older platform returns an error with no automatic fallback. Without `--models`, the platform keeps automatic first-N provider selection. The synthesizer still uses the tenant-default provider chain, including its existing failover behavior.
+
+`ask --models CEREBRAS/gpt-oss-120b --reasoning-effort high` explicitly selects `low`, `medium`, or `high` effort for every selected candidate. The initial verified profile is exactly `CEREBRAS/gpt-oss-120b` at `https://api.cerebras.ai/v1`; tenant proxies and other provider/model combinations reject explicit effort before inference. Omit the flag to retain provider defaults. The tenant-default synthesizer receives no candidate effort. This requires a platform supporting the nested `reasoningEffort` selector field; an older strict selector API rejects the request, with no automatic fallback. Effort selects a model control, not a guaranteed reasoning-token budget or quality level.
+
+
 ### Pipelines
 
 ```bash
@@ -200,7 +205,7 @@ Stores credentials in `~/.braavo/config.json` (with refresh-token support). Uses
 
 ### logout
 
-Clear stored credentials (best-effort server-side refresh-token revocation first).
+Clear stored credentials immediately, then attempt server-side refresh-token revocation.
 
 ```bash
 braavo logout
@@ -221,7 +226,7 @@ Overridable per-command: `braavo ask "..." --company company_abc`
 Compare responses across multiple models (async poll).
 
 ```bash
-braavo ask "What's a good state machine library?" --models claude,gpt4
+braavo ask "What's a good state machine library?" --models OPENAI/gpt-4o,GROQ/llama-3.3-70b-versatile
 ```
 
 Shows side-by-side answers from each model, plus a synthesis (if the server provides one), and token/cost savings vs. baseline.
@@ -353,6 +358,10 @@ session remotely.
   own approvals internally.
 - A relay outage never blocks or kills the session — the vendor CLI keeps running companion-less if
   the relay is unreachable.
+- Opening the command stream applies the configured API host consent and rejects redirects.
+  An expired access token gets one refresh attempt. Unsubscribing or replacing the active
+  session suppresses commands from its old stream. A dropped stream does not reconnect automatically;
+  this build does not establish reliable phone delivery across connection drops.
 - Implementation: `src/forge/relay-protocol.ts` / `relay-bridge.ts` / `relay-transport.ts` (the CLI-side
   mirror of the sealed relay contract, ported from the Braavolabs Desktop app's own companion bridge)
   and `spawnVendorBridged` in `src/forge/spawn.ts`.
@@ -492,7 +501,7 @@ braavo continue run_xyz --provider OLLAMA --model llama2:70b --base-url http://l
 
 Handoff flow:
 1. `handoff` freezes the run at the next turn boundary and opens a claim slot.
-2. `continue` claims that slot, resuming on the new provider/model. If the checkpoint is still freezing, the API answers `409 CHECKPOINT_PENDING` and `braavo continue` retries a few times automatically.
+2. `continue` claims that slot, resuming on the new provider/model. An explicit `CHECKPOINT_PENDING` response (or the current server's exact checkpoint-not-frozen message) retries up to five attempts. Other conflicts stop immediately. Authentication, not-found, and API failures retain their documented exit codes; an invalid success response asks you to inspect the run before retrying.
 
 ### connections
 

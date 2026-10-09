@@ -100,3 +100,35 @@ describe("directChat errors", () => {
     }
   });
 });
+
+describe("direct provider credential boundary", () => {
+  for (const provider of DIRECT_PROVIDERS) {
+    it.each([301, 302, 307, 308])(`${provider} refuses HTTP %s before consuming a redirected body`, async status => {
+      const json = vi.fn(async () => ({ error: "redirect target" }));
+      const fetchImpl = vi.fn(async (_url: string, _init: any) => ({ ...resp(status, {}), json }));
+      await expect(directChat(provider, "synthetic-key", "model", "private prompt", { fetchImpl }))
+        .rejects.toMatchObject({ name: "DirectApiError", status: 502 });
+      expect(fetchImpl).toHaveBeenCalledOnce(); expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+      expect(json).not.toHaveBeenCalled();
+    });
+    it(`${provider} redacts a credential echoed in a provider error`, async () => {
+      const secret = "synthetic-provider-secret";
+      const fetchImpl = async () => resp(401, { error: { message: `Rejected ${secret}; again ${secret}` } });
+      const outcome = await directChat(provider, secret, "model", "prompt", { fetchImpl }).catch(error => error);
+      expect(outcome).toMatchObject({ name: "DirectApiError", status: 401, provider });
+      expect(outcome.message).toBe("Rejected [redacted]; again [redacted]");
+      expect(outcome.message).not.toContain(secret);
+    });
+  }
+  it.each([
+    { redirected: true, url: "https://unapproved.example.invalid/" },
+    { url: "https://unapproved.example.invalid/" },
+    { url: "not a URL" },
+  ])("rejects a fetch implementation that already escaped the provider origin %#", async metadata => {
+    const json = vi.fn(async () => ({ choices: [{ message: { content: "unsafe" } }] }));
+    const fetchImpl = async () => ({ ...resp(200, {}), ...metadata, json });
+    await expect(directChat("openai", "synthetic-key", "model", "prompt", { fetchImpl }))
+      .rejects.toMatchObject({ name: "DirectApiError", status: 502 });
+    expect(json).not.toHaveBeenCalled();
+  });
+});

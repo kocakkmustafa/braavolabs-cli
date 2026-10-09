@@ -38,13 +38,24 @@ globalThis.fetch = async (url, init = {}) => {
     origin: new URL(String(url)).origin, redirect: init.redirect,
     ...(process.env.BRAAVO_TEST_CAPTURE_REQUEST ? {
       path: new URL(String(url)).pathname, method: init.method,
-      body: JSON.parse(init.body), authorization: init.headers.Authorization,
+      body: init.body ? JSON.parse(init.body) : undefined, authorization: init.headers.Authorization,
     } : {}),
   }) + "\\n");
-  const status = Number(process.env.BRAAVO_TEST_STATUS || 200);
+  let status = Number(process.env.BRAAVO_TEST_STATUS || 200);
+  if (process.env.BRAAVO_TEST_OLD_COMPARE) {
+    // Accepted old platform selector shape: real Zod strict nested object.
+    const { z } = require("zod");
+    const oldCompare = z.object({ selections: z.array(z.object({
+      provider: z.string().min(1), model: z.string().min(1),
+    }).strict()).min(1).max(3).optional(), companyId: z.string(), query: z.string() });
+    status = oldCompare.safeParse(JSON.parse(init.body)).success ? 200 : 400;
+  }
   const body = status === 200
-    ? { token: "synthetic-access", user: { email: "fixture@example.invalid" } }
-    : { error: "fixture error" };
+    ? (process.env.BRAAVO_TEST_RESPONSE ? JSON.parse(process.env.BRAAVO_TEST_RESPONSE)
+      : new URL(String(url)).pathname.includes("/approvals/")
+        ? { success: true, decision: JSON.parse(init.body).decision }
+        : { token: "synthetic-access", user: { email: "fixture@example.invalid" } })
+    : (process.env.BRAAVO_TEST_RESPONSE ? JSON.parse(process.env.BRAAVO_TEST_RESPONSE) : { error: "fixture error" });
   return new Response(JSON.stringify(body), { status });
 };
 `);
@@ -150,6 +161,28 @@ describe("compiled CLI version and exit contract", () => {
   }
 });
 
+describe("compiled CLI relay and handoff failures", () => {
+  it.each([[401, EXIT.AUTH], [404, EXIT.NOT_FOUND], [503, EXIT.API]])("session HTTP %s preserves exit %s and emits no empty-success JSON", (status, exit) => {
+    const f = fixture(authenticated); const result = f.run(["session", "--json"], { BRAAVO_TEST_STATUS: String(status) });
+    expect(result.status).toBe(exit); expect(result.stdout).toBe(""); expect(result.stderr).toContain("fixture error");
+    expect(f.calls()).toHaveLength(1);
+  });
+
+  it.each([[401, EXIT.AUTH], [404, EXIT.NOT_FOUND], [409, EXIT.API], [503, EXIT.API]])("continue HTTP %s preserves exit %s without replay", (status, exit) => {
+    const f = fixture(authenticated); const result = f.run(["continue", "run", "--provider", "OPENAI", "--yes"], { BRAAVO_TEST_STATUS: String(status) });
+    expect(result.status).toBe(exit); expect(result.stdout).not.toContain("Checkpoint still freezing");
+    expect(result.stderr).toContain("fixture error"); expect(f.calls()).toHaveLength(1);
+  });
+
+  it("cancelled compare returns an API failure instead of successful synthesis", () => {
+    const f = fixture(authenticated); const result = f.run(["ask", "question", "--company", "company"], {
+      BRAAVO_TEST_RESPONSE: JSON.stringify({ id: "session", status: "CANCELLED", findings: {} }),
+    });
+    expect(result.status).toBe(EXIT.API); expect(result.stderr).toContain("Compare cancelled");
+    expect(result.stdout).not.toContain("synthesis"); expect(f.calls()).toHaveLength(2);
+  });
+});
+
 describe("compiled CLI current-host opt-in", () => {
   it("trusts the saved HTTPS host on a bare flag and remembers that exact URL", () => {
     const apiUrl = "https://saved.example.invalid:8443/api/v1";
@@ -253,12 +286,16 @@ describe("compiled CLI approval decision contract", () => {
     });
   }
 
-  it("preserves an explicit reason without introducing an INPUT answer note", () => {
-    const f = fixture(authenticated);
-    expect(f.run(["approve", "synthetic-approval", "--deny", "--yes", "--reason", "operator reason"],
-      { BRAAVO_TEST_CAPTURE_REQUEST: "1" }).status).toBe(EXIT.OK);
-    expect(f.calls()[0].body).toEqual({ decision: "REJECTED", reason: "operator reason" });
-  });
+  for (const deny of [false, true]) {
+    for (const reason of ["  operator rationale ✓  ", ""]) {
+      it(`preserves ${deny ? "rejected" : "approved"} reason ${JSON.stringify(reason)} without an INPUT answer note`, () => {
+        const f = fixture(authenticated);
+        expect(f.run(["approve", "synthetic-approval", ...(deny ? ["--deny"] : []), "--yes", "--reason", reason],
+          { BRAAVO_TEST_CAPTURE_REQUEST: "1" }).status).toBe(EXIT.OK);
+        expect(f.calls()[0].body).toEqual({ decision: deny ? "REJECTED" : "APPROVED", reason });
+      });
+    }
+  }
 
   for (const status of [401, 403]) {
     it(`API ${status} refuses denial without emitting success`, () => {
@@ -289,4 +326,73 @@ it("human denial output uses the accepted rejection label", () => {
   const r = f.run(["approve", "synthetic-approval", "--deny", "--yes"]);
   expect(r.status).toBe(EXIT.OK);
   expect(r.stdout).toBe("REJECTED  synthetic-approval\n");
+});
+
+
+describe("compiled explicit models contract", () => {
+  it.each(["low", "medium", "high"])("forwards %s in the actual binary and fails closed against the old strict selector contract", effort => {
+    const f = fixture({...authenticated, defaultCompany: "synthetic-company"});
+    const result = f.run(["ask", "Question for models", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort", effort],
+      {BRAAVO_TEST_OLD_COMPARE: "1", BRAAVO_TEST_CAPTURE_REQUEST: "1"});
+    expect(result.status).toBe(EXIT.API); expect(f.calls()).toHaveLength(1);
+    expect(f.calls()[0]).toMatchObject({path: "/api/v1/research/compare/selected", method: "POST",
+      body: {selections: [{provider: "CEREBRAS", model: "gpt-oss-120b", reasoningEffort: effort}]}});
+  });
+  it("the actual binary posts nested effort and completes polling without losing it", () => {
+    const f = fixture({...authenticated, defaultCompany: "synthetic-company"});
+    const result = f.run(["ask", "Question for models", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort", "low"],
+      {BRAAVO_TEST_CAPTURE_REQUEST: "1", BRAAVO_TEST_RESPONSE: JSON.stringify({id: "synthetic-session", status: "COMPLETED"})});
+    expect(result.status).toBe(0); expect(f.calls()).toHaveLength(2);
+    expect(f.calls()[0]).toMatchObject({path: "/api/v1/research/compare/selected", body: {
+      selections: [{provider: "CEREBRAS", model: "gpt-oss-120b", reasoningEffort: "low"}]}});
+    expect(f.calls()[1].path).toBe("/api/v1/research/synthetic-session");
+  });
+  it.each([
+    ["ask", "Question", "--reasoning-effort", "high"],
+    ["ask", "Question", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort"],
+    ["ask", "Question", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort=high"],
+    ...["default", "none", "xhigh", "HIGH"].map(v => ["ask", "Question", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort", v]),
+    ...["cascade", "direct", "local", "login", "models", "--version"].map(cmd => [cmd, "Question", "--models", "CEREBRAS/gpt-oss-120b", "--reasoning-effort", "high"]),
+  ])("rejects invalid or misplaced effort before network: %j", (...args) => {
+    const f = fixture({...authenticated, defaultCompany: "synthetic-company"});
+    expect(f.run(args).status).toBe(EXIT.USAGE); expect(f.calls()).toHaveLength(0);
+  });
+  it("forwards exact pairs on the selected endpoint and fails closed on old platforms", () => {
+    const f = fixture({token: "synthetic-token", apiUrl: "https://braavolabs.com/api/v1", defaultCompany: "synthetic-company"});
+    const result = f.run(["ask", "Question for models", "--models", "OPENAI/gpt-4o,GROQ/llama-3.3-70b-versatile"], {BRAAVO_TEST_STATUS: "404", BRAAVO_TEST_CAPTURE_REQUEST: "1"});
+    expect(result.status).not.toBe(0);
+    expect(f.calls()).toHaveLength(1);
+    expect(f.calls()[0]).toMatchObject({path: "/api/v1/research/compare/selected", body: {selections: [{provider: "OPENAI", model: "gpt-4o"}, {provider: "GROQ", model: "llama-3.3-70b-versatile"}]}});
+  });
+  it.each(["gpt-4o", "", "OPENAI/gpt-4o,", "OPENAI/gpt-4o,OPENAI/gpt-4o"])("rejects malformed selectors without a request: %s", models => {
+    const f = fixture({token: "synthetic-token", defaultCompany: "synthetic-company"});
+    expect(f.run(["ask", "Question for models", "--models", models]).status).not.toBe(0);
+    expect(f.calls()).toHaveLength(0);
+  });
+});
+
+
+describe("compiled CLI handoff outcome contract", () => {
+  for (const json of [false, true]) {
+    it(`committed approval with blocked handoff is nonzero and explicit (json=${json})`, () => {
+      const f = fixture(authenticated);
+      const outcome = { success: true, decision: "APPROVED", claimFailed: true, error: "not frozen" };
+      const result = f.run(["approve", "synthetic-approval", "--yes", ...(json ? ["--json"] : [])],
+        { BRAAVO_TEST_RESPONSE: JSON.stringify(outcome), BRAAVO_TEST_CAPTURE_REQUEST: "1" });
+      expect(result.status).toBe(EXIT.API); expect(f.calls()).toHaveLength(1);
+      if (json) expect(JSON.parse(result.stdout)).toEqual({ id: "synthetic-approval", decision: "APPROVED", result: outcome });
+      else { expect(result.stdout).toContain("APPROVED"); expect(result.stdout).toMatch(/handoff.*(incomplete|attention|failed|blocked)/i); expect(result.stdout).toContain("not frozen"); }
+    });
+  }
+  it.each([{}, { success: true, decision: "APPROVED", claimFailed: "true" }, { success: true, decision: "REJECTED" }])("invalid successful decision response is not success (%j)", outcome => {
+    const f = fixture(authenticated);
+    const result = f.run(["approve", "synthetic-approval", "--yes", "--json"], { BRAAVO_TEST_RESPONSE: JSON.stringify(outcome) });
+    expect(result.status).not.toBe(EXIT.OK); expect(result.stdout).toBe(""); expect(f.calls()).toHaveLength(1);
+  });
+  it.each([undefined, false])("true decision success accepts legacy absent/false claimFailed (%j)", claimFailed => {
+    const f = fixture(authenticated);
+    const outcome = { success: true, decision: "APPROVED", claimFailed };
+    const result = f.run(["approve", "synthetic-approval", "--yes", "--json"], { BRAAVO_TEST_RESPONSE: JSON.stringify(outcome) });
+    expect(result.status).toBe(EXIT.OK); expect(JSON.parse(result.stdout).result).toEqual(JSON.parse(JSON.stringify(outcome))); expect(f.calls()).toHaveLength(1);
+  });
 });

@@ -117,11 +117,27 @@ export async function directChat(
     method: "POST",
     headers: spec.headers(apiKey),
     body: JSON.stringify(spec.body(model, question)),
+    redirect: "manual",
   });
+  // Provider-specific auth headers (including x-api-key) must not be replayed
+  // to a redirect target. Keep the same fail-closed boundary as apiFetch.
+  if ((res.status >= 300 && res.status < 400) || res.redirected === true) {
+    throw new DirectApiError(provider, 502, "Refusing a redirected provider response");
+  }
+  if (typeof res.url === "string" && res.url) {
+    let origin: string;
+    try { origin = new URL(res.url).origin; }
+    catch { throw new DirectApiError(provider, 502, "Invalid provider response URL"); }
+    if (origin !== new URL(spec.url).origin) {
+      throw new DirectApiError(provider, 502, "Provider response escaped its configured origin");
+    }
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message = json?.error?.message ?? json?.error ?? res.statusText ?? `request failed (${res.status})`;
-    throw new DirectApiError(provider, res.status, String(message));
+    // Some providers echo the rejected credential in their error text.
+    const safeMessage = apiKey ? String(message).split(apiKey).join("[redacted]") : String(message);
+    throw new DirectApiError(provider, res.status, safeMessage);
   }
   return { content: spec.parse(json), model, provider };
 }

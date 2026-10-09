@@ -301,11 +301,8 @@ export interface SpawnVendorBridgedOptions {
  * companion-less rather than not running at all. Registration happens
  * CONCURRENTLY with spawning the child (not awaited beforehand) so a slow or
  * unreachable relay cannot delay launching the vendor CLI itself — the
- * accepted trade-off is a narrow race for a near-instantly-exiting child
- * (its `exit` could fire before `bridge.start()` resolves, in which case
- * `bridge.stop()` is a no-op and the relay is left with a session that never
- * got an explicit "ended" mirror); a real interactive vendor session runs
- * far longer than that window.
+ * bridge invalidates a pending registration if the child exits first. A late
+ * registration mirrors "ended" without opening a command subscription.
  */
 export function spawnVendorBridged(
   binPath: string,
@@ -353,8 +350,8 @@ export function spawnVendorBridged(
       reject(err);
     });
     // A signal-terminated child has code === null; surface that as non-zero,
-    // matching spawnVendor. bridge.stop() itself mirrors status:"ended"
-    // before unsubscribing (see relay-bridge.ts) — no separate setStatus
+    // matching spawnVendor. bridge.stop() itself unsubscribes immediately and
+    // mirrors status:"ended" (see relay-bridge.ts) — no separate setStatus
     // call is needed here.
     child.on("exit", (code) => {
       childRef.current = null; // a late steer/kill must not touch a dead child
