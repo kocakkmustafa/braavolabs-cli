@@ -17,17 +17,14 @@
  *     EventSource) — the same reason the Desktop mirror hand-parses SSE from
  *     its webview.
  *
- * Deliberately THIN (per the module's scope): no reconnect-on-drop, no
- * token-refresh-on-401 for the long-lived stream. Both are real gaps for a
- * production-grade relay connection, called out here rather than silently
- * left implicit — closing them is headed-runtime follow-up work (a dropped
- * SSE connection needs a live server + a live client to verify against, not
- * something the headless test suite can exercise meaningfully). The pure
- * SSE-frame parsing below (`splitSseEvents` / `parseSseEvent`) IS unit
- * tested — that's the part that can go wrong independent of the network.
+ * Stream establishment uses apiFetch's credential-host, redirect and single
+ * 401-refresh controls too. The subscription belongs to its captured session;
+ * logout/account replacement and unsubscribe suppress subsequent commands.
+ * Reconnect-on-drop remains a separate runtime gap: replay safety and actual
+ * phone/server delivery require their own evidence.
  */
-import { apiFetch } from "./client";
-import type { Config } from "./config";
+import { apiFetch, ApiError, captureSession, isCurrentSession } from "./client";
+import { isConfigOwnerCurrent, type Config } from "./config";
 import type { RelayTransport } from "./relay-bridge";
 import type { SessionEventInput, SessionRegistration } from "./relay-protocol";
 
@@ -75,7 +72,7 @@ export interface RelayTransportOptions {
  * no I/O — so it is exercised directly in tests without a real stream.
  */
 export function splitSseEvents(buffer: string): { events: string[]; rest: string } {
-  const parts = buffer.split("\n\n");
+  const parts = buffer.replace(/\r\n/g, "\n").split("\n\n");
   const rest = parts.pop() ?? "";
   return { events: parts, rest };
 }
@@ -111,7 +108,6 @@ export function parseSseEvent(block: string): unknown | null {
 
 export function createRelayTransport(opts: RelayTransportOptions): RelayTransport {
   const { cfg } = opts;
-  const streamFetch: FetchLike = opts.fetchImpl ?? (globalThis.fetch as FetchLike);
 
   return {
     async register(reg: SessionRegistration) {
@@ -126,7 +122,10 @@ export function createRelayTransport(opts: RelayTransportOptions): RelayTranspor
         RELAY_REQUEST_TIMEOUT_MS,
         "register",
       );
-      return { sessionId: String(res?.sessionId ?? "") };
+      if (typeof res?.sessionId !== "string" || !res.sessionId.trim()) {
+        throw new ApiError(502, "Invalid relay registration response");
+      }
+      return { sessionId: res.sessionId };
     },
 
     async postEvent(sessionId: string, ev: SessionEventInput) {
@@ -145,35 +144,33 @@ export function createRelayTransport(opts: RelayTransportOptions): RelayTranspor
 
     subscribeCommands(sessionId: string, onCmd: (raw: unknown) => void) {
       const controller = new AbortController();
+      const owner = captureSession(cfg);
       let stopped = false;
+      const active = () => !stopped && isCurrentSession(cfg, owner) && isConfigOwnerCurrent(cfg);
 
       void (async () => {
+        let reader: any;
         try {
-          const res = await streamFetch(
-            `${cfg.apiUrl}/relay/sessions/${encodeURIComponent(sessionId)}/commands`,
-            {
-              method: "GET",
-              headers: {
-                Accept: "text/event-stream",
-                ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}),
-              },
-              signal: controller.signal,
-            },
-          );
+          const res = await apiFetch(`/relay/sessions/${encodeURIComponent(sessionId)}/commands`, {
+            cfg, fetchImpl: opts.fetchImpl, save: opts.save,
+            stream: true, signal: controller.signal,
+          });
           const body = res?.body;
           if (!body || typeof body.getReader !== "function") return;
-          const reader = body.getReader();
+          reader = body.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
-          while (!stopped) {
+          while (active()) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || !active()) break;
             buffer += decoder.decode(value, { stream: true });
             const { events, rest } = splitSseEvents(buffer);
             // Drop an oversized partial frame (a relay flooding without a
             // "\n\n" terminator) rather than growing the buffer to OOM.
             buffer = rest.length > MAX_SSE_BUFFER ? "" : rest;
             for (const block of events) {
+              if (!active()) break;
+              if (block.length > MAX_SSE_BUFFER) continue;
               const payload = parseSseEvent(block);
               if (payload !== null) onCmd(payload);
             }
@@ -182,6 +179,10 @@ export function createRelayTransport(opts: RelayTransportOptions): RelayTranspor
           // Aborted via unsubscribe(), or a network failure — either way the
           // stream is over. Reconnect-on-drop is a headed follow-up (see
           // module header), not this slice's scope.
+        } finally {
+          controller.abort();
+          try { await reader?.cancel?.(); } catch { /* already aborted/closed */ }
+          reader?.releaseLock?.();
         }
       })();
 

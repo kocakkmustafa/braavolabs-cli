@@ -1,6 +1,6 @@
 /** Real API client with synthetic fetch/persistence; no network, disk or native calls. */
 import { describe, expect, it, vi } from "vitest";
-import { apiFetch } from "../client";
+import { apiFetch, startCompare } from "../client";
 import type { Config } from "../config";
 
 function deferred<T>() {
@@ -199,5 +199,21 @@ describe("request session ownership", () => {
       ? resp(200, { refreshToken: "unusable" }) : resp(401, {}));
     await expect(apiFetch("/billing/savings", { cfg, fetchImpl, save })).rejects.toMatchObject({ name: "ApiError", status: 503 });
     expect(cfg).toEqual(cfgA()); expect(save).not.toHaveBeenCalled(); expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe("explicit compare contract", () => {
+  it("sends exact ordered selections to the fail-closed endpoint", async () => {
+    const selections = [{provider: "OPENAI", model: "gpt-4o"}, {provider: "GROQ", model: "llama-3.3-70b-versatile"}];
+    const fetchImpl = vi.fn(async (_url: string, _init?: any) => resp(201, {id: "session", status: "PENDING"}));
+    await startCompare(cfgA(), {companyId: "company", query: "question", selections}, {fetchImpl});
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://braavolabs.com/api/v1/research/compare/selected");
+    expect(JSON.parse((fetchImpl.mock.calls[0] as any)[1].body).selections).toEqual(selections);
+  });
+  it("does not retry on the legacy endpoint when old platform returns 404", async () => {
+    const fetchImpl = vi.fn(async () => resp(404, {error: "not found"}));
+    await expect(startCompare(cfgA(), {companyId: "company", query: "question", selections: [{provider: "OPENAI", model: "gpt-4o"}]}, {fetchImpl})).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });

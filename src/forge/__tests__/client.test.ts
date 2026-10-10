@@ -125,6 +125,15 @@ describe("apiFetch", () => {
 });
 
 describe("command wrappers", () => {
+  it("preserves independently selected effort and order in the selected request", async () => {
+    const selections = [{provider: "CEREBRAS", model: "gpt-oss-120b", reasoningEffort: "high" as const}, {provider: "GROQ", model: "llama-3.3-70b-versatile"}];
+    const fetchImpl = vi.fn(async () => resp(201, {id: "s1", status: "PENDING"}));
+    await startCompare({...baseCfg(), token: "t"}, {companyId: "c1", query: "question", selections}, {fetchImpl});
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, any];
+    expect(url).toBe("https://braavolabs.com/api/v1/research/compare/selected");
+    expect(JSON.parse(init.body)).toEqual({companyId: "c1", query: "question", selections});
+  });
   it("startCompare POSTs /research/compare with companyId + query + maxCandidates", async () => {
     let captured: any;
     const fetchImpl = vi.fn(async (url: string, init: any) => {

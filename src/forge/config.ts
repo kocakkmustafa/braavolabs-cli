@@ -256,6 +256,22 @@ export function loadConfig(path: string = CONFIG_PATH): Config {
   });
 }
 
+/** Recheck a loaded config's disk generation before a relay command acts.
+ * Pure reads: a second CLI process can log out without mutating this object.
+ * Ephemeral configs have only the in-memory session contract. */
+export function isConfigOwnerCurrent(cfg: Config): boolean {
+  const owner = configOwners.get(cfg);
+  if (!owner) return true;
+  try {
+    const nonce = readNonce(owner.path);
+    const disk = readConfig(owner.path);
+    return nonce === readNonce(owner.path) && matchesOwner(owner.path, owner, nonce, disk) &&
+      samePair(disk.config, cfg);
+  } catch {
+    return false;
+  }
+}
+
 /** Capture before prompts/network; a previously loaded owner cannot be rebound to B. */
 export function captureConfigOwner(cfg: Config, path: string = CONFIG_PATH): ConfigOwner {
   return withConfigLock(path, () => {

@@ -87,3 +87,53 @@ it("manual CLI token replacement does not retain the previous account's refresh 
   expect(cfg.token).toBe("B-manual-token"); expect(cfg.refreshToken).toBeUndefined();
   expect(saveConfig).toHaveBeenCalledOnce();
 });
+
+describe("actual CLI handoff and session outcomes", () => {
+  const pending = "Checkpoint not frozen yet — the live loop hasn't reached a turn boundary. Retry shortly.";
+  const claimed = { success: true, handoffId: "handoff", toProvider: "OPENAI", toModel: "model", status: "RUNNING" };
+  function continueCommand(results: { status: number; body: unknown }[]) {
+    const apiFetch = vi.fn(async () => ({ statusText: "fixture", ...results.shift() }));
+    const sleep = vi.fn(async () => {}); const ok = vi.fn();
+    const action = commandCase("continue", { cfg: cfgA(), positionals: ["run"], flags: {},
+      flag: (_flags: unknown, name: string) => name === "provider" ? "OPENAI" : undefined,
+      requireAuth: vi.fn(), requireConfirmation: vi.fn(), apiFetch, sleep, ui: { ok }, console: { log: vi.fn() } });
+    return { action, apiFetch, sleep, ok };
+  }
+
+  it.each([401, 403, 404, 409, 503])("keeps handoff HTTP %s terminal instead of retrying unrelated conflicts", async status => {
+    const test = continueCommand([{ status, body: { error: "not claimable" } }]);
+    await expect(test.action()).rejects.toMatchObject({ name: "ApiError", status, message: "not claimable" });
+    expect(test.apiFetch).toHaveBeenCalledOnce(); expect(test.sleep).not.toHaveBeenCalled(); expect(test.ok).not.toHaveBeenCalled();
+  });
+
+  it.each([{ error: pending }, { code: "CHECKPOINT_PENDING", error: "freeze pending" }])("retries only explicit checkpoint readiness %#", async body => {
+    const test = continueCommand([{ status: 409, body }, { status: 200, body: claimed }]);
+    await test.action(); expect(test.apiFetch).toHaveBeenCalledTimes(2); expect(test.sleep).toHaveBeenCalledExactlyOnceWith(2000);
+    expect(test.ok).toHaveBeenCalledOnce();
+  });
+
+  it("bounds checkpoint retries and returns API failure after five attempts", async () => {
+    const test = continueCommand(Array.from({ length: 5 }, () => ({ status: 409, body: { error: pending } })));
+    await expect(test.action()).rejects.toMatchObject({ name: "ApiError", status: 409 });
+    expect(test.apiFetch).toHaveBeenCalledTimes(5); expect(test.sleep).toHaveBeenCalledTimes(4); expect(test.ok).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { ...claimed, success: false }, { ...claimed, handoffId: "" }, { ...claimed, toModel: null }])("does not claim success from malformed HTTP 200 %#", async body => {
+    const test = continueCommand([{ status: 200, body }]);
+    await expect(test.action()).rejects.toMatchObject({ name: "ApiError", status: 502 });
+    expect(test.apiFetch).toHaveBeenCalledOnce(); expect(test.ok).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 404, 503])("does not render HTTP %s as an empty active-session list", async status => {
+    const emit = vi.fn(); const fetchImpl = vi.fn(async () => resp(status, { error: "denied" }));
+    await expect(commandCase("session", { cfg: { ...cfgA(), refreshToken: undefined }, flags: {}, requireAuth: vi.fn(), emit,
+      apiFetch: (path: string, options: client.RequestOpts) => client.apiFetch(path, { ...options, fetchImpl }) })())
+      .rejects.toMatchObject({ name: "ApiError", status });
+    expect(emit).not.toHaveBeenCalled(); expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([{ body: [] }, { body: { sessions: [{ id: "relay", state: "running" }] } }])("retains successful active-session envelopes %#", async ({ body }) => {
+    const emit = vi.fn(); await commandCase("session", { cfg: cfgA(), flags: {}, requireAuth: vi.fn(), emit, apiFetch: async () => body })();
+    expect(emit).toHaveBeenCalledWith({}, { sessions: Array.isArray(body) ? body : body.sessions }, expect.any(Function));
+  });
+});
