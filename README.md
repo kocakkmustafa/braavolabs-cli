@@ -360,8 +360,13 @@ session remotely.
   the relay is unreachable.
 - Opening the command stream applies the configured API host consent and rejects redirects.
   An expired access token gets one refresh attempt. Unsubscribing or replacing the active
-  session suppresses commands from its old stream. A dropped stream does not reconnect automatically;
-  this build does not establish reliable phone delivery across connection drops.
+  session suppresses commands from its old stream. Dropped streams reconnect with backoff from
+  0.5 to 10 seconds and resume after the last delivered command sequence. Duplicate and stale
+  replay frames are ignored; a server `done` marker ends the subscription. Recovery is limited
+  by the server's replay buffer (250 commands, one-hour retention). Sessions lasting over an
+  hour can lose command delivery when the current server's sequence counter expires; that
+  limitation requires a separate platform fix. Local mock tests do not establish real
+  phone/provider delivery.
 - Implementation: `src/forge/relay-protocol.ts` / `relay-bridge.ts` / `relay-transport.ts` (the CLI-side
   mirror of the sealed relay contract, ported from the Braavolabs Desktop app's own companion bridge)
   and `spawnVendorBridged` in `src/forge/spawn.ts`.

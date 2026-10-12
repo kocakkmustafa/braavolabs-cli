@@ -20,13 +20,15 @@
  * Stream establishment uses apiFetch's credential-host, redirect and single
  * 401-refresh controls too. The subscription belongs to its captured session;
  * logout/account replacement and unsubscribe suppress subsequent commands.
- * Reconnect-on-drop remains a separate runtime gap: replay safety and actual
- * phone/server delivery require their own evidence.
+ * Dropped streams reconnect with bounded backoff and the server's lastEventId
+ * resume query. The subscription retains its delivered sequence cursor and
+ * ignores replayed commands. A server done marker ends it permanently. This
+ * does not guarantee phone delivery beyond the server's bounded replay buffer.
  */
-import { apiFetch, ApiError, captureSession, isCurrentSession } from "./client";
-import { isConfigOwnerCurrent, type Config } from "./config";
+import { apiFetch, ApiError, SessionChangedError, captureSession, isCurrentSession } from "./client";
+import { isConfigOwnerCurrent, UntrustedHostError, type Config } from "./config";
 import type { RelayTransport } from "./relay-bridge";
-import type { SessionEventInput, SessionRegistration } from "./relay-protocol";
+import { ControlCommandSchema, type SessionEventInput, type SessionRegistration } from "./relay-protocol";
 
 type FetchLike = (url: string, init?: any) => Promise<any>;
 
@@ -45,6 +47,46 @@ const RELAY_REQUEST_TIMEOUT_MS = 10_000;
 // the receive buffer to OOM. Past this bound we drop the oversized partial
 // frame (fail-closed) rather than killing the stream.
 const MAX_SSE_BUFFER = 256 * 1024;
+const RECONNECT_INITIAL_MS = 500;
+const RECONNECT_MAX_MS = 10_000;
+
+/** Backoff must be cancellable so a stopped bridge leaves no retry timer. */
+function waitForReconnect(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal.aborted) { resolve(); return; }
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+function retryable(error: unknown): boolean {
+  if (error instanceof SessionChangedError || error instanceof UntrustedHostError) return false;
+  if (error instanceof ApiError) {
+    return error.status === 408 || error.status === 429 || (error.status >= 500 && error.status < 600);
+  }
+  return true; // Network/stream failure; ownership is checked before retry.
+}
+
+/** The server emits id:seq plus a session-bound command envelope. */
+function parseCommandFrame(block: string, sessionId: string) {
+  const payload = parseSseEvent(block);
+  if (!payload || typeof payload !== "object") return null;
+  const envelope = payload as { sessionId?: unknown; seq?: unknown; ts?: unknown };
+  if (envelope.sessionId !== sessionId || typeof envelope.seq !== "number"
+      || !Number.isSafeInteger(envelope.seq) || envelope.seq <= 0 || typeof envelope.ts !== "string") return null;
+  let id = "";
+  for (const line of block.split("\n")) {
+    if (line.startsWith("id:")) id = line.slice(3).trim();
+  }
+  if (!/^\d+$/.test(id) || Number(id) !== envelope.seq) return null;
+  const parsed = ControlCommandSchema.safeParse(payload);
+  return parsed.success ? { command: parsed.data, seq: envelope.seq } : null;
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -149,40 +191,58 @@ export function createRelayTransport(opts: RelayTransportOptions): RelayTranspor
       const active = () => !stopped && isCurrentSession(cfg, owner) && isConfigOwnerCurrent(cfg);
 
       void (async () => {
-        let reader: any;
-        try {
-          const res = await apiFetch(`/relay/sessions/${encodeURIComponent(sessionId)}/commands`, {
-            cfg, fetchImpl: opts.fetchImpl, save: opts.save,
-            stream: true, signal: controller.signal,
-          });
-          const body = res?.body;
-          if (!body || typeof body.getReader !== "function") return;
-          reader = body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          while (active()) {
-            const { done, value } = await reader.read();
-            if (done || !active()) break;
-            buffer += decoder.decode(value, { stream: true });
-            const { events, rest } = splitSseEvents(buffer);
-            // Drop an oversized partial frame (a relay flooding without a
-            // "\n\n" terminator) rather than growing the buffer to OOM.
-            buffer = rest.length > MAX_SSE_BUFFER ? "" : rest;
-            for (const block of events) {
-              if (!active()) break;
-              if (block.length > MAX_SSE_BUFFER) continue;
-              const payload = parseSseEvent(block);
-              if (payload !== null) onCmd(payload);
+        let lastSeq = 0;
+        let retryDelay = RECONNECT_INITIAL_MS;
+        while (active()) {
+          const connection = new AbortController();
+          const abortConnection = () => connection.abort();
+          controller.signal.addEventListener("abort", abortConnection, { once: true });
+          let reader: any;
+          try {
+            const cursor = lastSeq > 0 ? `?lastEventId=${lastSeq}` : "";
+            const res = await apiFetch(`/relay/sessions/${encodeURIComponent(sessionId)}/commands${cursor}`, {
+              cfg, fetchImpl: opts.fetchImpl, save: opts.save,
+              stream: true, signal: connection.signal,
+            });
+            if (!active()) break;
+            const body = res?.body;
+            if (!body || typeof body.getReader !== "function") { stopped = true; break; }
+            reader = body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            while (active()) {
+              const { done, value } = await reader.read();
+              if (done || !active()) break;
+              buffer += decoder.decode(value, { stream: true });
+              const { events, rest } = splitSseEvents(buffer);
+              buffer = rest.length > MAX_SSE_BUFFER ? "" : rest;
+              for (const block of events) {
+                if (!active()) break;
+                if (block.length > MAX_SSE_BUFFER) continue;
+                if (block.split("\n").some(line => line.startsWith("event:") && line.slice(6).trim() === "done")) {
+                  stopped = true;
+                  break;
+                }
+                const frame = parseCommandFrame(block, sessionId);
+                if (!frame || frame.seq <= lastSeq) continue;
+                // Record delivery before the callback: it may throw after
+                // taking effect, which must not cause that command to replay.
+                lastSeq = frame.seq;
+                retryDelay = RECONNECT_INITIAL_MS;
+                try { onCmd(frame.command); } catch { /* isolate local callbacks */ }
+              }
             }
+          } catch (error) {
+            if (!retryable(error)) stopped = true;
+          } finally {
+            controller.signal.removeEventListener("abort", abortConnection);
+            connection.abort();
+            try { await reader?.cancel?.(); } catch { /* already aborted/closed */ }
+            try { reader?.releaseLock?.(); } catch { /* already released */ }
           }
-        } catch {
-          // Aborted via unsubscribe(), or a network failure — either way the
-          // stream is over. Reconnect-on-drop is a headed follow-up (see
-          // module header), not this slice's scope.
-        } finally {
-          controller.abort();
-          try { await reader?.cancel?.(); } catch { /* already aborted/closed */ }
-          reader?.releaseLock?.();
+          if (!active()) break;
+          await waitForReconnect(retryDelay, controller.signal);
+          retryDelay = Math.min(RECONNECT_MAX_MS, retryDelay * 2);
         }
       })();
 
