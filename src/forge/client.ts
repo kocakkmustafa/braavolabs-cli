@@ -21,6 +21,11 @@ export class ApiError extends Error {
   }
 }
 
+// Keep this distinct from malformed refresh data, persistence and host errors.
+// Raw callers handle HTTP failures as results; normal callers need the status
+// so a relay can retry a temporary authentication-service outage.
+class TransientRefreshError extends ApiError {}
+
 type FetchLike = (url: string, init?: any) => Promise<any>;
 
 export interface RequestOpts {
@@ -117,7 +122,12 @@ async function refreshSession(
         body: JSON.stringify({ refreshToken: owner.refreshToken }),
       });
       assertSession(cfg, owner);
-      if (!r.ok) return undefined;
+      if (!r.ok) {
+        if (r.status === 408 || r.status === 429 || (r.status >= 500 && r.status < 600)) {
+          throw new TransientRefreshError(r.status, "Authentication refresh temporarily unavailable");
+        }
+        return undefined;
+      }
       const d = (await r.json()) as { token?: string; refreshToken?: string };
       assertSession(cfg, owner);
       if (typeof d?.token !== "string" || !d.token.trim() ||
@@ -219,7 +229,16 @@ export async function apiFetch(path: string, opts: RequestOpts): Promise<any> {
 
   // Transparent single refresh on 401 (never on /auth/* to avoid loops).
   if (res.status === 401 && authed && owner.refreshToken && !path.startsWith("/auth/")) {
-    const token = await refreshSession(cfg, owner, checkedFetch, save);
+    let token: string | undefined;
+    try {
+      token = await refreshSession(cfg, owner, checkedFetch, save);
+    } catch (error) {
+      assertSession(cfg, owner);
+      if (opts.raw && error instanceof TransientRefreshError) {
+        return { status: error.status, statusText: error.message, body: { error: error.message } } satisfies RawResult;
+      }
+      throw error;
+    }
     if (token) res = await req(token);
     assertSession(cfg, owner);
   }

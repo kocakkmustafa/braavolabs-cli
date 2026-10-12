@@ -217,3 +217,73 @@ describe("explicit compare contract", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });
+
+
+describe("transient authentication refresh failure status", () => {
+  it.each([408, 429, 500, 503])("preserves refresh HTTP %s without rotating or persisting the owner", async status => {
+    const cfg = cfgA(), save = vi.fn();
+    const fetchImpl = vi.fn(async (url: string) => url.endsWith("/auth/refresh")
+      ? resp(status, { error: "refresh unavailable" }) : resp(401, { error: "expired" }));
+    await expect(apiFetch("/billing/savings", { cfg, fetchImpl, save })).rejects.toMatchObject({ name: "ApiError", status });
+    expect(cfg).toEqual(cfgA()); expect(save).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([408, 429, 500, 503])("keeps raw response handling with refresh HTTP %s", async status => {
+    const cfg = cfgA(), save = vi.fn();
+    const fetchImpl = vi.fn(async (url: string) => url.endsWith("/auth/refresh")
+      ? resp(status, { error: "refresh unavailable" }) : resp(401, { error: "expired" }));
+    const result = await apiFetch("/billing/savings", { cfg, fetchImpl, save, raw: true });
+    expect(result.status).toBe(status); expect(result.body.error).toBeTypeOf("string");
+    expect(cfg).toEqual(cfgA()); expect(save).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([400, 401, 403])("keeps rejected refresh HTTP %s as the original authentication failure", async status => {
+    const cfg = cfgA(), save = vi.fn();
+    const fetchImpl = vi.fn(async (url: string) => url.endsWith("/auth/refresh")
+      ? resp(status, { error: "refresh rejected" }) : resp(401, { error: "expired" }));
+    await expect(apiFetch("/billing/savings", { cfg, fetchImpl, save })).rejects.toMatchObject({ name: "ApiError", status: 401 });
+    expect(cfg).toEqual(cfgA()); expect(save).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a transient failed refresh and starts a fresh flight when the service recovers", async () => {
+    const cfg = cfgA(), save = vi.fn(), pending = deferred<ReturnType<typeof resp>>(), started = deferred<void>();
+    let refreshCalls = 0;
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      if (url.endsWith("/auth/refresh")) {
+        if (++refreshCalls === 1) { started.resolve(); return pending.promise; }
+        return resp(200, rotateA);
+      }
+      return init.headers.Authorization === "Bearer A-new" ? resp(200, { ok: true }) : resp(401, { error: "expired" });
+    });
+    const outcomes = Promise.allSettled([
+      apiFetch("/one", { cfg, fetchImpl, save }), apiFetch("/two", { cfg, fetchImpl, save, raw: true }),
+    ]);
+    await started.promise; await new Promise(resolve => setImmediate(resolve)); pending.resolve(resp(503, {}));
+    const failed = await outcomes;
+    expect(failed).toEqual([
+      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ name: "ApiError", status: 503 }) }),
+      expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ status: 503 }) }),
+    ]);
+    expect(refreshCalls).toBe(1); expect(cfg).toEqual(cfgA()); expect(save).not.toHaveBeenCalled();
+    expect(await apiFetch("/three", { cfg, fetchImpl, save })).toEqual({ ok: true });
+    expect(refreshCalls).toBe(2); expect(save).toHaveBeenCalledOnce(); expect(cfg.token).toBe("A-new");
+  });
+});
+
+
+describe("transient refresh owner priority", () => {
+  it.each([false, true])("prioritizes a replaced owner over transient refresh status (raw=%s)", async raw => {
+    const cfg = cfgA(), pending = deferred<ReturnType<typeof resp>>(), started = deferred<void>(), save = vi.fn();
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/auth/refresh")) { started.resolve(); return pending.promise; }
+      return resp(401, {});
+    });
+    const settled = apiFetch("/one", { cfg, fetchImpl, save, raw }).catch(error => error);
+    await started.promise; switchToB(cfg); pending.resolve(resp(429, {}));
+    expect(await settled).toMatchObject({ name: "SessionChangedError" });
+    expect(cfg.token).toBe("B-token"); expect(save).not.toHaveBeenCalled(); expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});

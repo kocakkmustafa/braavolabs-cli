@@ -359,7 +359,9 @@ session remotely.
 - A relay outage never blocks or kills the session — the vendor CLI keeps running companion-less if
   the relay is unreachable.
 - Opening the command stream applies the configured API host consent and rejects redirects.
-  An expired access token gets one refresh attempt. Unsubscribing or replacing the active
+  An expired access token gets one refresh attempt per request; a temporary refresh
+  408/429/5xx failure preserves its status so the stream can retry with backoff.
+  Unsubscribing or replacing the active
   session suppresses commands from its old stream. Dropped streams reconnect with backoff from
   0.5 to 10 seconds and resume after the last delivered command sequence. Duplicate and stale
   replay frames are ignored; a server `done` marker ends the subscription. Recovery is limited
