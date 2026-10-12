@@ -228,4 +228,46 @@ describe("relay reconnect, replay and dedup against the server envelope", () => 
     await bridge.stop(); await vi.advanceTimersByTimeAsync(30_000);
     expect(connections).toBe(2);
   });
+
+  it.each([408, 429, 500, 503])("recovers a dropped command stream after refresh HTTP %s with its cursor intact", async status => {
+    const cfg = cfgA(); let connections = 0, refreshes = 0;
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      if (url.endsWith("/auth/refresh")) return ++refreshes === 1 ? response(status)
+        : response(200, undefined, { token: "A-new", refreshToken: "A-refresh-new" });
+      if (++connections === 1) return response(200, stream([frame(1)], "eof"));
+      return init.headers.Authorization === "Bearer A-new"
+        ? response(200, stream([frame(1), frame(2)])) : response(401);
+    });
+    const { receive, save } = subscribe(cfg, fetchImpl); await flush(); await vi.advanceTimersByTimeAsync(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(3); expect(save).not.toHaveBeenCalled(); expect(cfg.token).toBe("A-old");
+    expect(receive).toHaveBeenCalledExactlyOnceWith({ type: "steer", message: "step 1" });
+    await vi.advanceTimersByTimeAsync(999); expect(fetchImpl).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(6); expect(refreshes).toBe(2); expect(save).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[5][0]).toContain("lastEventId=1");
+    expect(receive.mock.calls.map(([command]) => command.message)).toEqual(["step 1", "step 2"]);
+  });
+
+  it("uses backoff for repeated transient refresh failures instead of permanently stopping or spinning", async () => {
+    const fetchImpl = vi.fn(async (url: string) => response(url.endsWith("/auth/refresh") ? 503 : 401));
+    subscribe(cfgA(), fetchImpl); await flush(); expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(499); expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1); expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(999); expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1); expect(fetchImpl).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(2000); expect(fetchImpl).toHaveBeenCalledTimes(8);
+  });
+
+  it.each(["unsubscribe", "logout", "account", "api"])("does not retry a transient refresh failure after %s", async transition => {
+    const cfg = cfgA();
+    const fetchImpl = vi.fn(async (url: string) => response(url.endsWith("/auth/refresh") ? 429 : 401));
+    const { stop, receive, save } = subscribe(cfg, fetchImpl); await flush();
+    if (transition === "logout") { invalidateSession(cfg); cfg.token = undefined; cfg.refreshToken = undefined; }
+    if (transition === "account") { cfg.token = "B-token"; cfg.refreshToken = "B-refresh"; }
+    if (transition === "api") cfg.apiUrl = "https://api.braavolabs.com/api/v2";
+    if (transition === "unsubscribe") stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); expect(save).not.toHaveBeenCalled(); expect(receive).not.toHaveBeenCalled();
+  });
+
 });

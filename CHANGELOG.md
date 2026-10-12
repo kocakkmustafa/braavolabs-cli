@@ -8,6 +8,9 @@ development history remains grouped by date.
 ## [Unreleased]
 
 ### Fixed
+- Preserve transient authentication-refresh HTTP failures so a companion stream
+  can reconnect after 408/429/5xx recovery; keep raw response handling and
+  permanent authentication rejection behavior.
 - Reconnect dropped companion command streams with bounded backoff, resume from
   the last delivered sequence, and suppress duplicate/stale replay commands.
 - Stop retrying on terminal relay markers, permanent HTTP failures, unsubscribe,
