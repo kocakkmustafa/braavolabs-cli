@@ -133,9 +133,9 @@ describe("createRelayTransport — subscribeCommands (fetch+SSE)", () => {
 
   it("parses each data: frame and calls onCmd, skipping keepalive comments", async () => {
     const chunks = [
-      "id: 1\ndata: {\"type\":\"steer\",\"message\":\"hi\"}\n\n",
+      'id: 1\ndata: {"type":"steer","message":"hi","sessionId":"sess_1","seq":1,"ts":"now"}\n\n',
       ": keepalive 123\n\n",
-      "id: 2\ndata: {\"type\":\"kill\"}\n\n",
+      'id: 2\ndata: {"type":"kill","sessionId":"sess_1","seq":2,"ts":"now"}\n\n',
     ];
     const fetchImpl = vi.fn(async () => ({ ...resp(200, {}), body: fakeBody(chunks) }));
     const transport = createRelayTransport({ cfg: baseCfg(), fetchImpl });

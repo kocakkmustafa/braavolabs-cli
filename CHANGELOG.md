@@ -7,7 +7,15 @@ development history remains grouped by date.
 
 ## [Unreleased]
 
-- _(nothing yet)_
+### Fixed
+- Reconnect dropped companion command streams with bounded backoff, resume from
+  the last delivered sequence, and suppress duplicate/stale replay commands.
+- Stop retrying on terminal relay markers, permanent HTTP failures, unsubscribe,
+  logout, or session replacement.
+
+### Tests
+- Cover disconnect/replay, sequence dedup, terminal markers, cancellation,
+  transient/permanent failures, and authentication refresh with injected streams.
 
 ## 0.1.1 — release candidate
 

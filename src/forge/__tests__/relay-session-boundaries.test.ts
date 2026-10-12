@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const cfgA = (): Config => ({ apiUrl: "https://braavolabs.com/api/v1", token: "A-old", refreshToken: "A-refresh" });
+const commandFrame = (command: object, seq = 1) =>
+  `id: ${seq}\ndata: ${JSON.stringify({ ...command, sessionId: "id", seq, ts: "now" })}\n\n`;
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 function response(status: number, data: unknown, body?: unknown) {
   return { status, ok: status >= 200 && status < 300, statusText: String(status), json: async () => data, body };
@@ -60,7 +62,7 @@ describe("relay command session boundaries", () => {
     await tick();
     expect(fetchImpl).toHaveBeenCalledTimes(3); expect(save).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[2]?.[1]).toMatchObject({ redirect: "manual", headers: { Authorization: "Bearer A-new", Accept: "text/event-stream" } });
-    wire.send('data: {"type":"steer","message":"after refresh"}\n\n'); await tick();
+    wire.send(commandFrame({ type: "steer", message: "after refresh" })); await tick();
     expect(received).toHaveBeenCalledExactlyOnceWith({ type: "steer", message: "after refresh" });
     unsubscribe(); wire.send(""); await tick();
     expect(wire.cancel).toHaveBeenCalledOnce(); expect(wire.releaseLock).toHaveBeenCalledOnce();
@@ -75,7 +77,7 @@ describe("relay command session boundaries", () => {
     if (transition === "account") { cfg.token = "B-token"; cfg.refreshToken = "B-refresh"; }
     if (transition === "api") cfg.apiUrl = "https://api.braavolabs.com/api/v2";
     if (transition === "same-pair-restored") invalidateSession(cfg);
-    wire.send('data: {"type":"kill"}\n\n'); await tick();
+    wire.send(commandFrame({ type: "kill" })); await tick();
     expect(received).not.toHaveBeenCalled(); expect(wire.cancel).toHaveBeenCalledOnce();
     expect(wire.releaseLock).toHaveBeenCalledOnce(); unsubscribe();
   });
@@ -84,7 +86,7 @@ describe("relay command session boundaries", () => {
     const wire = controlledBody(); const received: unknown[] = [];
     const unsubscribe = createRelayTransport({ cfg: cfgA(), fetchImpl: async () => response(200, {}, wire.body) })
       .subscribeCommands("id", command => { received.push(command); unsubscribe(); });
-    await tick(); wire.send('data: {"type":"steer","message":"first"}\n\ndata: {"type":"kill"}\n\n'); await tick();
+    await tick(); wire.send(commandFrame({ type: "steer", message: "first" }) + commandFrame({ type: "kill" }, 2)); await tick();
     expect(received).toEqual([{ type: "steer", message: "first" }]);
   });
 
@@ -97,7 +99,7 @@ describe("relay command session boundaries", () => {
     if (transition === "logout") clearConfig(configPath);
     else saveConfig({ ...cfgA(), token: "B-token", refreshToken: "B-refresh" }, configPath);
     expect(cfg.token).toBe("A-old"); // The old process's object was never modified.
-    wire.send('data: {"type":"kill"}\n\n'); await tick();
+    wire.send(commandFrame({ type: "kill" })); await tick();
     expect(received).not.toHaveBeenCalled(); expect(wire.cancel).toHaveBeenCalledOnce(); unsubscribe();
   });
 
