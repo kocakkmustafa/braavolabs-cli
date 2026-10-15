@@ -5,7 +5,10 @@ here. The format loosely follows [Keep a Changelog](https://keepachangelog.com/)
 Versioned entries describe release candidates and published packages; older
 development history remains grouped by date.
 
-## [Unreleased]
+## 0.1.2 — release candidate
+
+Not published. The npm registry already contains 0.1.1; this candidate keeps the
+merged reconnect/replay and authentication-refresh fixes in a new patch version.
 
 ### Fixed
 - Preserve transient authentication-refresh HTTP failures so a companion stream
