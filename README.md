@@ -2,6 +2,8 @@
 
 Braavolabs CLI — one terminal command, `braavo`, for both the multi-model council and pipeline control.
 
+Support: [support@yulalab.com](mailto:support@yulalab.com).
+
 ## Overview
 
 `braavo` is a single, near-dependency-free (Node 20+) CLI with two families of commands. The one
