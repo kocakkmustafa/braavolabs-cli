@@ -8,9 +8,22 @@ development history remains grouped by date.
 ## 0.1.2 — release candidate
 
 Not published. The npm registry already contains 0.1.1; this candidate keeps the
-merged reconnect/replay and authentication-refresh fixes in a new patch version.
+merged reconnect/replay and authentication-refresh fixes, plus research cancellation
+and polling lifecycle handling, in a new patch version.
+
+### Added
+- Add `cancel <researchId> --yes [--json]` for explicit research soft-cancellation,
+  preserving the server's completed/failed status when work already finished.
 
 ### Fixed
+- Stop local `ask`/`watch` waits on Ctrl-C with exit 130 and an explicit remote
+  cancel/stop hint; do not implicitly cancel remote work.
+- Keep polling with its original account, API, and persisted config owner;
+  release interrupted delays and avoid an extra delay after the final attempt.
+- Reject malformed start/stop/cancel acknowledgements and polling statuses;
+  emit the actual started run response for `run --json`.
+- Stop relay retries on malformed refresh JSON/data or persistence failure,
+  while preserving retries for dropped network response bodies.
 - Preserve transient authentication-refresh HTTP failures so a companion stream
   can reconnect after 408/429/5xx recovery; keep raw response handling and
   permanent authentication rejection behavior.
@@ -20,6 +33,9 @@ merged reconnect/replay and authentication-refresh fixes in a new patch version.
   logout, or session replacement.
 
 ### Tests
+- Exercise the compiled CLI's selection, polling, cancellation, Ctrl-C, terminal
+  statuses, JSON output, and failure exits with isolated synthetic fixtures;
+  cover account replacement and refresh protocol/persistence boundaries.
 - Cover disconnect/replay, sequence dedup, terminal markers, cancellation,
   transient/permanent failures, and authentication refresh with injected streams.
 

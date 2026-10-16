@@ -25,7 +25,7 @@
  * ignores replayed commands. A server done marker ends it permanently. This
  * does not guarantee phone delivery beyond the server's bounded replay buffer.
  */
-import { apiFetch, ApiError, SessionChangedError, captureSession, isCurrentSession } from "./client";
+import { apiFetch, ApiError, AuthenticationProtocolError, AuthenticationPersistenceError, SessionChangedError, captureSession, isCurrentSession } from "./client";
 import { isConfigOwnerCurrent, UntrustedHostError, type Config } from "./config";
 import type { RelayTransport } from "./relay-bridge";
 import { ControlCommandSchema, type SessionEventInput, type SessionRegistration } from "./relay-protocol";
@@ -65,7 +65,8 @@ function waitForReconnect(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function retryable(error: unknown): boolean {
-  if (error instanceof SessionChangedError || error instanceof UntrustedHostError) return false;
+  if (error instanceof SessionChangedError || error instanceof UntrustedHostError ||
+      error instanceof AuthenticationProtocolError || error instanceof AuthenticationPersistenceError) return false;
   if (error instanceof ApiError) {
     return error.status === 408 || error.status === 429 || (error.status >= 500 && error.status < 600);
   }

@@ -29,6 +29,8 @@ export const EXIT = {
   API: 7,
   /** A local verification failed (e.g. `audit verify` hash-chain mismatch). */
   VERIFICATION_FAILED: 8,
+  /** Ctrl-C stopped a local wait; remote work may still be running. */
+  INTERRUPTED: 130,
 } as const;
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -48,4 +50,5 @@ export const EXIT_MEANING: Record<keyof typeof EXIT, string> = {
   NOT_FOUND: "resource not found or not visible to this tenant",
   API: "the API returned an error",
   VERIFICATION_FAILED: "local verification failed",
+  INTERRUPTED: "interrupted while waiting; remote work may still be running",
 };

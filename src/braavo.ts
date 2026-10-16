@@ -36,6 +36,8 @@ import {
   logout,
   startCompare,
   pollCompare,
+  pollRun,
+  cancelCompare,
   cascade,
   savings,
   mediaPreview,
@@ -362,6 +364,17 @@ function resolveRepoBlock(enabled: boolean, die: (msg: string) => never, ui: Ui)
 }
 
 // ── interactive helpers ───────────────────────────────────────────────────────
+class CommandInterruptedError extends Error {}
+
+/** Ctrl-C stops the local wait; remote mutations require their explicit command. */
+async function interruptible<T>(message: () => string, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort(new CommandInterruptedError(message()));
+  process.once("SIGINT", interrupt);
+  try { return await action(controller.signal); }
+  finally { process.removeListener("SIGINT", interrupt); }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -404,6 +417,7 @@ ${ui.steel("Council")}
   ${p("braavo login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
   ${p("braavo use")}     <companyId>                 set the default company
   ${p("braavo ask")}     "<question>" [--company <id>] [--models PROVIDER/model,...] [--repo]
+  ${p("braavo cancel")}  <researchId> --yes           soft-cancel research/compare          [--json]
   ${p("braavo cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
   ${p("braavo savings")} [--days <1-90>]
   ${p("braavo keys")}    add <provider> [--key <secret>] | list | rm <provider>
@@ -433,7 +447,7 @@ ${ui.steel("Control (contract)")}
 ${ui.steel("Pipelines")}
   ${p("braavo whoami")}
   ${p("braavo runs")}
-  ${p("braavo run")}       <pipelineId>
+  ${p("braavo run")}       <pipelineId> --yes                                                    [--json]
   ${p("braavo steer")}     <runId> <message...>
   ${p("braavo handoffs")}  [--open]
   ${p("braavo handoff")}   <runId> [--reason <text>]
@@ -594,10 +608,17 @@ async function main(): Promise<void> {
       const n = selections?.length ?? 3;
       const spin = ui.spinner(`asking ${n} faces…`);
       try {
-        const stub = await startCompare(cfg, { companyId, query, selections });
-        spin.update(`asking ${n} faces… (session ${stub.id})`);
-        const session = await pollCompare(cfg, stub.id, {
-          onTick: (status) => spin.update(`asking ${n} faces… (${status.toLowerCase()})`),
+        let sessionId: string | undefined;
+        const session = await interruptible(() => sessionId
+          ? `Stopped waiting. Research may still be running; cancel explicitly: braavo cancel ${sessionId} --yes`
+          : "Stopped waiting. The compare request may have started; inspect research sessions before retrying.", async signal => {
+          const stub = await startCompare(cfg, { companyId, query, selections }, { signal });
+          sessionId = stub.id;
+          spin.update(`asking ${n} faces… (session ${stub.id})`);
+          return pollCompare(cfg, stub.id, {
+            signal,
+            onTick: (status) => spin.update(`asking ${n} faces… (${status.toLowerCase()})`),
+          });
         });
         spin.stop();
         if (String(session.status) !== "COMPLETED") {
@@ -608,6 +629,16 @@ async function main(): Promise<void> {
         spin.stop();
         throw e;
       }
+      return;
+    }
+
+    case "cancel": {
+      requireAuth(cfg);
+      const id = positionals[0];
+      if (!id) usage("usage: braavo cancel <researchId> --yes [--json]");
+      requireConfirmation(flags, `cancel research session ${id}`);
+      const result = await cancelCompare(cfg, id);
+      emit(flags, { id, action: "cancel", result }, () => `${result.status}  ${id}`);
       return;
     }
 
@@ -1080,10 +1111,14 @@ async function main(): Promise<void> {
     case "run": {
       requireAuth(cfg);
       const id = positionals[0];
-      if (!id) usage("usage: braavo run <pipelineId>");
+      if (!id) usage("usage: braavo run <pipelineId> --yes [--json]");
       requireConfirmation(flags, `start run for pipeline ${id}`);
-      const d = await apiFetch(`/pipelines/${id}/run`, { method: "POST", body: { input: {} }, cfg });
-      ui.ok(`Run started: ${d.id}`);
+      const d = await apiFetch(`/pipelines/${encodeURIComponent(id)}/run`, { method: "POST", body: { input: {} }, cfg });
+      if (typeof d?.id !== "string" || !d.id.trim()) {
+        throw new ApiError(502, "Invalid run response; inspect recent runs before retrying.");
+      }
+      if (flags.json) emit(flags, d, () => "");
+      else ui.ok(`Run started: ${d.id}`);
       return;
     }
 
@@ -1222,20 +1257,17 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo watch <runId> [--json]");
-      // Poll rather than SSE: a scriptable `watch` must terminate on a terminal
-      // state and return a usable exit code, which an open stream does not.
-      const TERMINAL = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
-      for (;;) {
-        const r = await apiFetch(`/runs/${id}`, { cfg });
-        const status = String(r.status ?? "UNKNOWN");
-        if (TERMINAL.has(status)) {
-          emit(flags, { id, status, terminal: true }, () => `${status}  ${id}`);
-          if (status !== "COMPLETED") process.exitCode = EXIT.GENERAL;
-          return;
-        }
-        if (!flags.json) console.log(`${status}  ${id}`);
-        await sleep(3000);
-      }
+      const terminal = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
+      const result = await interruptible(
+        () => `Stopped watching ${id}. The run may still be running; stop explicitly: braavo stop ${id} --yes`,
+        signal => pollRun(cfg, id, {
+          signal,
+          onTick: status => { if (!flags.json && !terminal.has(status)) console.log(`${status}  ${id}`); },
+        }),
+      );
+      emit(flags, { id, status: result.status, terminal: true }, () => `${result.status}  ${id}`);
+      if (result.status !== "COMPLETED") process.exitCode = EXIT.GENERAL;
+      return;
     }
 
     case "approve": {
@@ -1274,7 +1306,10 @@ async function main(): Promise<void> {
       const id = positionals[0];
       if (!id) usage("usage: braavo stop <runId> [--yes]");
       requireConfirmation(flags, `stop run ${id}`);
-      const d = await apiFetch(`/runs/${id}/stop`, { method: "POST", body: {}, cfg });
+      const d = await apiFetch(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST", body: {}, cfg });
+      if (d?.success !== true || d.status !== "CANCELLED") {
+        throw new ApiError(502, "Invalid stop response; inspect the run before retrying.");
+      }
       emit(flags, { id, action: "stop", result: d }, () => `Stopped ${id}`);
       return;
     }
@@ -1400,6 +1435,7 @@ if (require.main === module) {
     console.error(ui.fail(e instanceof ApiError ? `API ${e.status}: ${e.message}` : e instanceof Error ? e.message : String(e)));
     // Documented exit codes (forge/exit-codes.ts) — a non-interactive caller
     // branches on these, so "1 for everything" is not a contract.
+    if (e instanceof CommandInterruptedError) process.exit(EXIT.INTERRUPTED);
     if (e instanceof ConfirmationRequiredError) process.exit(e.exitCode);
     if (e instanceof UntrustedHostError) process.exit(EXIT.UNTRUSTED_HOST);
     if (e instanceof ApiError) process.exit(e.status === 401 ? EXIT.AUTH : e.status === 404 ? EXIT.NOT_FOUND : EXIT.API);

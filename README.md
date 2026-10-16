@@ -166,6 +166,8 @@ braavo models
 `ask --models CEREBRAS/gpt-oss-120b --reasoning-effort high` explicitly selects `low`, `medium`, or `high` effort for every selected candidate. The initial verified profile is exactly `CEREBRAS/gpt-oss-120b` at `https://api.cerebras.ai/v1`; tenant proxies and other provider/model combinations reject explicit effort before inference. Omit the flag to retain provider defaults. The tenant-default synthesizer receives no candidate effort. This requires a platform supporting the nested `reasoningEffort` selector field; an older strict selector API rejects the request, with no automatic fallback. Effort selects a model control, not a guaranteed reasoning-token budget or quality level.
 
 
+`braavo cancel <researchId> --yes [--json]` requests a soft cancellation of research or compare work. The server returns `CANCELLED`, or preserves `COMPLETED` / `FAILED` if it already finished. A successful cancellation response acknowledges the stored status; an in-flight provider call may still finish. Ctrl-C during `ask` exits with code 130 and stops the local wait. If a session ID is known, the CLI prints the explicit cancel command.
+
 ### Pipelines
 
 ```bash
@@ -176,7 +178,7 @@ braavo whoami
 braavo runs
 
 # Trigger a pipeline
-braavo run pipeline_abc123
+braavo run pipeline_abc123 --yes
 
 # Steer a live run (send a real-time message to the agent)
 braavo steer run_xyz789 "Try a different approach"
@@ -477,8 +479,13 @@ List recent runs; trigger a new one.
 
 ```bash
 braavo runs                    # Show last 20 runs
-braavo run pipeline_abc        # Start a new run on pipeline_abc
+braavo run pipeline_abc --yes   # Start a new run on pipeline_abc
+braavo run pipeline_abc --yes --json
+braavo watch run_xyz --json    # Wait for a terminal state
+braavo stop run_xyz --yes      # Request pipeline cancellation
 ```
+
+`watch` exits 0 for `COMPLETED` and 1 for `FAILED`, `CANCELLED`, or legacy `STOPPED`. Ctrl-C exits 130 and stops the local watch; use `stop --yes` to cancel the run on the server. Polling stays with the account and API that started the wait.
 
 ### steer
 

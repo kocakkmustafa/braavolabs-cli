@@ -10,7 +10,7 @@
  *   POST /research/cascade    → synchronous result (NO companyId in body)
  *   GET  /billing/savings     → savings report (tenant-scoped, no companyId)
  */
-import { Config, saveConfigIfCurrent, assertHostSafeForCredentials, UntrustedHostError } from "./config";
+import { Config, isConfigOwnerCurrent, saveConfigIfCurrent, assertHostSafeForCredentials, UntrustedHostError } from "./config";
 
 export class ApiError extends Error {
   status: number;
@@ -18,6 +18,15 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
     this.status = status;
+  }
+}
+
+/** Authentication response/persistence failures are terminal for a relay. */
+export class AuthenticationProtocolError extends ApiError {}
+export class AuthenticationPersistenceError extends Error {
+  constructor(cause: unknown) {
+    super("Could not persist refreshed authentication", { cause });
+    this.name = "AuthenticationPersistenceError";
   }
 }
 
@@ -128,17 +137,24 @@ async function refreshSession(
         }
         return undefined;
       }
-      const d = (await r.json()) as { token?: string; refreshToken?: string };
+      let d: { token?: string; refreshToken?: string };
+      try { d = await r.json(); }
+      catch (error) {
+        if (error instanceof SyntaxError) throw new AuthenticationProtocolError(503, "Invalid authentication response");
+        throw error; // A dropped refresh response body is still a transport failure.
+      }
       assertSession(cfg, owner);
       if (typeof d?.token !== "string" || !d.token.trim() ||
           (d.refreshToken !== undefined && (typeof d.refreshToken !== "string" || !d.refreshToken.trim()))) {
-        throw new ApiError(503, "Invalid authentication response");
+        throw new AuthenticationProtocolError(503, "Invalid authentication response");
       }
       cfg.token = d.token;
       if (d.refreshToken !== undefined) cfg.refreshToken = d.refreshToken;
       // These writes are our own rotation, not a new account/session.
       current.token = cfg.token; current.refreshToken = cfg.refreshToken;
-      try { await save(cfg); } finally { assertSession(cfg, owner); }
+      try { await save(cfg); }
+      catch (error) { throw new AuthenticationPersistenceError(error); }
+      finally { assertSession(cfg, owner); }
       return cfg.token;
     })();
     flight = { owner, promise };
@@ -301,49 +317,128 @@ export interface CompareParams {
 export async function startCompare(
   cfg: Config,
   p: CompareParams,
-  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void; signal?: AbortSignal } = {},
 ): Promise<{ id: string; status: string }> {
   const body: Record<string, unknown> = { companyId: p.companyId, query: p.query };
   if (p.maxCandidates !== undefined) body.maxCandidates = p.maxCandidates;
   if (p.maxTokensPerCandidate !== undefined) body.maxTokensPerCandidate = p.maxTokensPerCandidate;
   if (p.maxCostUsd !== undefined) body.maxCostUsd = p.maxCostUsd;
   if (p.selections !== undefined) body.selections = p.selections;
-  return apiFetch(p.selections === undefined ? "/research/compare" : "/research/compare/selected", { method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save });
+  const result = await abortable(apiFetch(p.selections === undefined ? "/research/compare" : "/research/compare/selected", {
+    method: "POST", body, cfg, fetchImpl: o.fetchImpl, save: o.save, signal: o.signal,
+  }), o.signal);
+  if (typeof result?.id !== "string" || !result.id.trim()) {
+    throw new ApiError(502, "Invalid compare response; inspect research sessions before retrying.");
+  }
+  return result;
 }
 
-const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+const COMPARE_TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+const RUN_TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
+
+export interface PollOptions {
+  fetchImpl?: FetchLike;
+  save?: (c: Config) => void;
+  signal?: AbortSignal;
+  intervalMs?: number;
+  maxAttempts?: number;
+  onTick?: (status: string, attempt: number) => void;
+}
+
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new Error("Request aborted");
+}
+
+/** A caller can leave a shared token refresh without cancelling other requests. */
+function abortable<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(signal.reason ?? new Error("Request aborted")); };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    pending.then(value => { cleanup(); signal.aborted ? abort() : resolve(value); },
+      error => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function pollDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); };
+    const abort = () => { cleanup(); reject(signal?.reason ?? new Error("Request aborted")); };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+}
 
 /** GET /research/:id — the poll endpoint for both /research and /research/compare. */
 export async function getSession(
   cfg: Config,
   id: string,
-  o: { fetchImpl?: FetchLike; save?: (c: Config) => void } = {},
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void; signal?: AbortSignal } = {},
 ): Promise<any> {
-  return apiFetch(`/research/${encodeURIComponent(id)}`, { cfg, fetchImpl: o.fetchImpl, save: o.save });
+  return abortable(apiFetch(`/research/${encodeURIComponent(id)}`, { cfg, ...o }), o.signal);
 }
 
-/** Poll GET /research/:id until it reaches a terminal state. */
-export async function pollCompare(
-  cfg: Config,
-  id: string,
-  o: {
-    fetchImpl?: FetchLike;
-    save?: (c: Config) => void;
-    intervalMs?: number;
-    maxAttempts?: number;
-    onTick?: (status: string, attempt: number) => void;
-  } = {},
+async function pollResource(
+  cfg: Config, path: string, terminal: Set<string>, label: string, o: PollOptions,
 ): Promise<any> {
-  const interval = o.intervalMs ?? 2000;
-  const maxAttempts = o.maxAttempts ?? 150; // ~5 min at 2s
+  const owner = captureSession(cfg);
+  const assertOwner = () => {
+    assertSession(cfg, owner);
+    if (!isConfigOwnerCurrent(cfg)) throw new SessionChangedError();
+  };
+  const maxAttempts = o.maxAttempts ?? 150;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const session = await getSession(cfg, id, { fetchImpl: o.fetchImpl, save: o.save });
-    const status = String(session?.status ?? "");
-    o.onTick?.(status, attempt);
-    if (TERMINAL_STATES.has(status)) return session;
-    await new Promise((r) => setTimeout(r, interval));
+    assertNotAborted(o.signal);
+    assertOwner();
+    const result = await abortable(apiFetch(path, {
+      cfg, fetchImpl: o.fetchImpl, save: o.save, signal: o.signal,
+    }), o.signal);
+    assertNotAborted(o.signal);
+    assertOwner();
+    if (typeof result?.status !== "string" || !result.status.trim()) {
+      throw new ApiError(502, `Invalid status while polling ${label}`);
+    }
+    o.onTick?.(result.status, attempt);
+    assertNotAborted(o.signal);
+    assertOwner();
+    if (terminal.has(result.status)) return result;
+    if (attempt < maxAttempts) await pollDelay(o.intervalMs ?? 2000, o.signal);
   }
-  throw new ApiError(408, `Timed out polling research session ${id}`);
+  throw new ApiError(408, `Timed out polling ${label}`);
+}
+
+/** Stop waiting by aborting signal; this does not cancel remote inference. */
+export async function pollCompare(cfg: Config, id: string, o: PollOptions = {}): Promise<any> {
+  return pollResource(cfg, `/research/${encodeURIComponent(id)}`, COMPARE_TERMINAL_STATES,
+    `research session ${id}`, o);
+}
+
+/** Watch a pipeline until terminal; by default it has no attempt limit. */
+export async function pollRun(cfg: Config, id: string, o: PollOptions = {}): Promise<any> {
+  return pollResource(cfg, `/runs/${encodeURIComponent(id)}`, RUN_TERMINAL_STATES, `run ${id}`,
+    { intervalMs: 3000, maxAttempts: Infinity, ...o });
+}
+
+export interface CancelCompareResult {
+  success: true;
+  status: "COMPLETED" | "FAILED" | "CANCELLED";
+}
+
+/** Explicit server soft-cancel; terminal COMPLETED/FAILED results are preserved. */
+export async function cancelCompare(
+  cfg: Config, id: string,
+  o: { fetchImpl?: FetchLike; save?: (c: Config) => void; signal?: AbortSignal } = {},
+): Promise<CancelCompareResult> {
+  const result = await abortable(apiFetch(`/research/${encodeURIComponent(id)}/cancel`, {
+    cfg, method: "POST", body: {}, ...o,
+  }), o.signal);
+  if (result?.success !== true || !COMPARE_TERMINAL_STATES.has(result?.status)) {
+    throw new ApiError(502, "Invalid cancellation response; inspect the research session before retrying.");
+  }
+  return result;
 }
 
 export interface CascadeParams {
