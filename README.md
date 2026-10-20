@@ -97,6 +97,35 @@ provider-specific and legacy runtime errors may use the general code 1.
 use stderr. A refused command may have empty stdout, so inspect the exit status
 before attempting to parse a result.
 
+### Language and bounded waiting
+
+`braavo --lang tr help` selects Turkish. Supported codes are `tr`, `en`,
+`es-419`, `pt-BR`, `de`, `fr`, `ja`, and `ar`. `BRAAVO_LOCALE` sets the default;
+an explicit `--lang` takes precedence. Unknown codes warn and fall back to English.
+Put the option before `spawn <vendor>`; arguments after the vendor or an MCP
+`--` separator belong to the child. `braavo <command> --help` shows command help
+without reading saved config or making requests. Provider output, command names,
+protocol values, JSON results, and exit codes keep their original form. Human
+numbers and USD amounts use the chosen locale; human dates use UTC.
+
+Ordinary API requests have a 30-second total deadline, including response bodies,
+refresh waiting and replay. Shared refresh work has its own 30-second limit;
+one cancelled caller does not cancel other callers' refresh. Local/direct/cascade
+completion requests allow 120 seconds. Compare polling stops after five minutes
+and run watching after 30 minutes. Ctrl-C stops supported inference/polling waits
+locally. A timeout or cancelled wait does not prove that remote work stopped;
+inspect status before retrying a mutation or use the explicit cancel/stop command.
+An established relay SSE stream stays open until caller cancellation, EOF or a
+transport failure; its header deadline does not cut off healthy streams.
+
+`fix` bounds its direct shell process to 120 seconds and Node's 1 MiB `maxBuffer`
+option. An incomplete execution never calls a model. This is not a process-tree
+sandbox or a guarantee that independently spawned descendants stopped. MCP
+responses are limited to 1 MiB per UTF-8 frame. The optional companion mirror
+allows at most eight pending output posts and 128 KiB per chunk; excess chunks
+are omitted with a local warning. Local vendor output is unchanged. The mirror
+is best-effort and is not a durable transcript or chat-history backup.
+
 ### Appearance and motion
 
 Interactive progress uses a small Braavolabs coin sequence (`◉ ◐ │ ◑ ◉`) on
@@ -339,7 +368,7 @@ braavo spawn --list                             # which vendor CLIs are installe
 
 - **`--dir <path>`** sets the working directory for the session (default: current cwd). This flag is consumed by braavo and **not** forwarded to the vendor; every other token after the vendor name is passed through unchanged.
 - **`--quiet`** suppresses the one-line ToS-risk note printed before the session.
-- Before each run, braavo prints a single steel line stating the vendor's ToS-risk level (`claude` = SAFE / volatile; `codex` = SAFE / lowest risk).
+- Before each run, braavo reminds you that your own account and the provider's terms apply. This is not a provider authorization or a legal compliance guarantee.
 - If the binary isn't found (or the spawn fails), braavo degrades gracefully and points you at API-key mode, e.g. `braavo direct anthropic "<question>"` — it never fabricates a result.
 - `braavo` exits with the child's own exit code.
 
@@ -353,9 +382,11 @@ session remotely.
 
 - Requires login (`braavo login`) — registering the session with the relay needs the same bearer
   token every other authenticated command uses.
-- The mirrored output is **client-side redacted** (`sk-…`/`Bearer …`/long-opaque-token patterns) before
-  it ever leaves this process — the relay server redacts again independently, so this is defense in
-  depth, not the only guard.
+- The mirrored output passes through client-side pattern redaction (`sk-…`/`Bearer …`/long opaque
+  tokens); the relay server redacts again independently. Short or split secrets and personal
+  content can remain. Opt in only for output you intend to send through the cloud relay.
+- Bridge mode uses pipes and does not forward local stdin or provide a PTY. Interactive local
+  vendor prompts are not supported by this path; real vendor/phone acceptance remains required.
 - A companion `steer` command writes the message straight into the vendor's stdin (as if you'd typed
   it); a companion `kill` command sends `SIGTERM`. A companion `approve`/`reject` command is a
   **logged no-op** — braavo's spawn has no local approval gate of its own; the vendor CLI manages its
@@ -369,10 +400,10 @@ session remotely.
   session suppresses commands from its old stream. Dropped streams reconnect with backoff from
   0.5 to 10 seconds and resume after the last delivered command sequence. Duplicate and stale
   replay frames are ignored; a server `done` marker ends the subscription. Recovery is limited
-  by the server's replay buffer (250 commands, one-hour retention). Sessions lasting over an
-  hour can lose command delivery when the current server's sequence counter expires; that
-  limitation requires a separate platform fix. Local mock tests do not establish real
-  phone/provider delivery.
+  by the server's replay buffer (250 commands, one-hour retention). Replay retention does not
+  establish sequence-counter lifetime or full recovery after a new server boot. The CLI does
+  not automatically register a new session after a terminal missing-session response. Local
+  mock tests do not establish real phone/provider delivery or prove a command was applied.
 - Implementation: `src/forge/relay-protocol.ts` / `relay-bridge.ts` / `relay-transport.ts` (the CLI-side
   mirror of the sealed relay contract, ported from the Braavolabs Desktop app's own companion bridge)
   and `spawnVendorBridged` in `src/forge/spawn.ts`.
@@ -386,7 +417,7 @@ session remotely.
 - Pass all vendor arguments as an **argument array** (execFile/spawn semantics) — never via a shell — so there is no command-injection seam.
 - Treat the child's `stdout`/`stderr` as an **opaque stream**: `stdio: "inherit"`, rendered straight to your terminal, never captured.
 - Run each session in the user-provided working directory (`--dir`, or the current cwd).
-- Surface the per-vendor **ToS-risk level** before running.
+- Remind users that their account and the provider's terms apply before running.
 - Degrade gracefully to API-key mode when the binary is absent or the spawn fails.
 - Propagate the child's **exit code** verbatim.
 

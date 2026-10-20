@@ -5,6 +5,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as client from "../client";
 import * as config from "../config";
+import * as locale from "../locale";
 import type { Config } from "../config";
 
 const source = ts.createSourceFile("braavo.ts", readFileSync(join(process.cwd(), "src/braavo.ts"), "utf8"), ts.ScriptTarget.Latest, true);
@@ -19,7 +20,7 @@ function loginCommand(context: Record<string, unknown>): () => Promise<void> {
   const compiled = ts.transpileModule(`async function actualCommand(){${found.statements.map(node => node.getText(source)).join("\n")}}\nreturn actualCommand;`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const scope = {
-    ...client, ...config,
+    ...client, ...config, ...locale,
     saveConfig: (cfg: Config) => config.saveConfig(cfg, path),
     captureConfigOwner: (cfg: Config) => (config as any).captureConfigOwner(cfg, path),
     commitLoginIfCurrent: (cfg: Config, pair: Config, owner: unknown) => (config as any).commitLoginIfCurrent(cfg, pair, owner, path),

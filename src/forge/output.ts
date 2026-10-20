@@ -1,3 +1,4 @@
+import { t, getLocale } from "./locale";
 /**
  * Non-interactive output + mutation safety (BR-P1-002, roadmap §5.2:
  * "Default human output kısa. Her read/action command için --json. Mutating
@@ -32,6 +33,8 @@ export class ConfirmationRequiredError extends Error {
  * a mistyped command confirm itself.
  */
 export function requireConfirmation(flags: Flags, action: string): void {
+  if (getLocale() !== "en" && flags.approval !== undefined) throw new ConfirmationRequiredError(t("Refusing to {0}: --approval is not server-verified. Use a bare --yes for local confirmation. Nothing has been changed.", action));
+  if (getLocale() !== "en" && flags.yes !== true && flags.approval === undefined) throw new ConfirmationRequiredError(t("Refusing to {0} without confirmation. Re-run with a bare --yes to confirm locally. Nothing has been changed.", action));
   if (flags.approval !== undefined) {
     throw new ConfirmationRequiredError(
       `Refusing to ${action}: --approval is not yet server-verified or bound to this action.\n` +

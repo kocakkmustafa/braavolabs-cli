@@ -9,6 +9,7 @@ import { chmodSync, closeSync, openSync, readFileSync, renameSync, writeFileSync
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
+import { t, getLocale } from "./locale";
 
 export interface Config {
   apiUrl: string;
@@ -112,12 +113,13 @@ export function assertHostSafeForCredentials(
 
   if (c.kind === "invalid") {
     throw new UntrustedHostError(
-      `Refusing to send credentials: API URL is unusable (${c.reason}).`,
+      t("Refusing to send credentials: API URL is unusable ({0}).", apiHostReasonText(c.reason)),
     );
   }
   if (c.kind === "official" || c.kind === "loopback") return;
 
   if (!opts.allowCustomHost) {
+    if (getLocale() !== "en") throw new UntrustedHostError(t("Untrusted API host {0}. Credentials will not be sent. For your own HTTPS server, explicitly use --allow-custom-host.", c.origin));
     throw new UntrustedHostError(
       `Refusing to send credentials to an unrecognised host.\n` +
         `  Destination: ${c.origin}\n` +
@@ -128,10 +130,14 @@ export function assertHostSafeForCredentials(
   }
   if (!c.https) {
     throw new UntrustedHostError(
-      `Refusing to send credentials over plaintext HTTP to ${c.origin}. ` +
-        `Use https:// — --allow-custom-host permits an unknown host, not an unencrypted one.`,
+      t("Refusing to send credentials over plaintext HTTP to {0}. Use https:// — --allow-custom-host permits an unknown host, not an unencrypted one.", c.origin),
     );
   }
+}
+
+/** Only authored classification prose is translated; the raw classification is stable. */
+export function apiHostReasonText(reason: string): string {
+  return reason.startsWith("unsupported scheme ") ? t("unsupported scheme {0}", reason.slice(19)) : t(reason);
 }
 
 
@@ -150,7 +156,7 @@ export interface ConfigOwner extends Pick<Config, "apiUrl" | "token" | "refreshT
 const configOwners = new WeakMap<Config, ConfigOwner>();
 
 function changedOwner(): Error {
-  const error = new Error("Session changed while the command was pending");
+  const error = new Error(t("Session changed while the command was pending"));
   error.name = "SessionChangedError";
   return error;
 }
@@ -165,7 +171,7 @@ function readConfig(path: string): DiskConfig {
   }
   try {
     const parsed = JSON.parse(contents);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid config");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(t("Invalid config"));
     return { config: { apiUrl: DEFAULT_API, ...parsed }, present: true, valid: true };
   } catch {
     return { config: { apiUrl: DEFAULT_API }, present: true, valid: false };
@@ -182,7 +188,7 @@ function withConfigLock<T>(path: string, write: () => T): T {
     lock = openSync(lockPath, "wx", 0o600);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error("Config is being updated by another process; retry the command.");
+      throw new Error(t("Config is being updated by another process; retry the command."));
     }
     throw error;
   }
@@ -215,7 +221,7 @@ function readNonce(path: string): string | undefined {
   }
   const marker = JSON.parse(contents) as { version?: unknown; nonce?: unknown };
   if (marker?.version !== 1 || typeof marker.nonce !== "string" || !marker.nonce) {
-    throw new Error("Invalid config session owner marker");
+    throw new Error(t("Invalid config session owner marker"));
   }
   return marker.nonce;
 }
@@ -332,7 +338,7 @@ export function commitLoginIfCurrent(
     if (!matchesOwner(path, owner, readNonce(path), disk) || !samePair(cfg, owner)) return false;
     if (typeof pair.token !== "string" || !pair.token.trim() ||
         (pair.refreshToken !== undefined && (typeof pair.refreshToken !== "string" || !pair.refreshToken.trim()))) {
-      throw new Error("Invalid authentication response");
+      throw new Error(t("Invalid authentication response"));
     }
     const committed = { ...disk.config, token: pair.token, refreshToken: pair.refreshToken };
     const nonce = writeNonce(path);

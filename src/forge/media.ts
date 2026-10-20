@@ -1,3 +1,4 @@
+import { t, numberText, moneyText } from "./locale";
 /**
  * `braavo image` / `braavo voice` — terminal front-end for the FAZ E media
  * orchestration backend (fal.ai FLUX image, Google/ElevenLabs TTS). BYOK-only:
@@ -30,11 +31,11 @@ export interface Size {
 export function parseSize(s: string | undefined): Size {
   if (!s) return { width: 1024, height: 1024 };
   const m = /^(\d{2,4})(?:x(\d{2,4}))?$/i.exec(s.trim());
-  if (!m) throw new Error(`bad --size "${s}" — use e.g. 1024x768 or 1024`);
+  if (!m) throw new Error(t('bad --size "{0}" — use e.g. 1024x768 or 1024', s));
   const width = Number(m[1]);
   const height = m[2] ? Number(m[2]) : width;
   for (const [k, v] of [["width", width], ["height", height]] as const) {
-    if (v < 256 || v > 1536) throw new Error(`--size ${k} ${v} out of range (256..1536)`);
+    if (v < 256 || v > 1536) throw new Error(t("--size {0} {1} out of range (256..1536)", k, numberText(v)));
   }
   return { width, height };
 }
@@ -62,15 +63,15 @@ export function renderMediaPreview(
 ): string[] {
   const usd = estimateUsd(estimate);
   const out: string[] = [
-    ui.primary("── media preview ──"),
-    ui.ember(`≈ $${usd.toFixed(usd >= 1 || usd === 0 ? 2 : 4)} (estimate)`),
+    ui.primary(`── ${t("media preview")} ──`),
+    ui.ember(`≈ ${moneyText(usd)} (${t("estimate")})`),
   ];
   if (estimate?.note) out.push(ui.dim(`  ${estimate.note}`));
   if (!keyConfigured) {
-    out.push(ui.fail("  no provider key — generation will fail (402). Add one:"));
-    out.push(ui.dim("  braavo keys add <FAL|GOOGLE_TTS|ELEVENLABS>  (media keys are provider-scoped)"));
+    out.push(ui.fail(`  ${t("No provider key — generation will fail (402). Add one:")}`));
+    out.push(ui.dim("  braavo media-key add <FAL|GOOGLE_TTS|ELEVENLABS> <secret>"));
   } else if (!optedIn) {
-    out.push(ui.dim("  add --yes to generate (this spends on your provider key)"));
+    out.push(ui.dim(`  ${t("Add --yes to generate (this spends on your provider key)")}`));
   }
   return out;
 }
@@ -78,8 +79,8 @@ export function renderMediaPreview(
 /** Image result: the provider-CDN URLs (never stored on our server). */
 export function renderImageResult(ui: UiLike, result: { images?: Array<{ url?: string }>; urlNote?: string }): string[] {
   const urls = (result?.images ?? []).map((i) => i?.url).filter((u): u is string => !!u);
-  if (urls.length === 0) return [ui.fail("no image URL in response")];
-  const out = [ui.primary(`── ${urls.length} image${urls.length > 1 ? "s" : ""} ──`)];
+  if (urls.length === 0) return [ui.fail(t("no image URL in response"))];
+  const out = [ui.primary(`── ${t("{0} images", numberText(urls.length))} ──`)];
   for (const u of urls) out.push(ui.steel(`  ${u}`));
   if (result?.urlNote) out.push(ui.dim(`  ${result.urlNote}`));
   return out;

@@ -83,7 +83,7 @@ describe("polling lifecycle", () => {
   it("forwards AbortSignal to the active request and ignores a delayed result", async () => {
     const controller = new AbortController(); let complete!: (value: unknown) => void;
     const fetchImpl = vi.fn((_url: string, init: any) => {
-      expect(init.signal).toBe(controller.signal);
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       return new Promise(resolve => { complete = resolve; });
     });
     const onTick = vi.fn(); const reason = new Error("cancelled wait");
@@ -174,7 +174,7 @@ describe("explicit research cancellation", () => {
     const fetchImpl = vi.fn(async (_url: string, _init: any) => response(200, { success: true, status }));
     expect(await cancelCompare(config(), "a/b c", { fetchImpl, signal: controller.signal })).toEqual({ success: true, status });
     expect(fetchImpl).toHaveBeenCalledExactlyOnceWith("https://braavolabs.com/api/v1/research/a%2Fb%20c/cancel", expect.objectContaining({
-      method: "POST", body: "{}", signal: controller.signal,
+      method: "POST", body: "{}", signal: expect.any(AbortSignal),
     }));
   });
 

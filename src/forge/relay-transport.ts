@@ -1,3 +1,4 @@
+import { t } from "./locale";
 /**
  * Real relay transport — the runtime implementation of RelayBridge's
  * injected `RelayTransport` (relay-bridge.ts). A near-verbatim port of the
@@ -89,16 +90,6 @@ function parseCommandFrame(block: string, sessionId: string) {
   return parsed.success ? { command: parsed.data, seq: envelope.seq } : null;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`relay ${label} timed out after ${ms}ms`)), ms);
-    p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
 export interface RelayTransportOptions {
   cfg: Config;
   /** Injectable for tests; defaults to global fetch. */
@@ -154,35 +145,29 @@ export function createRelayTransport(opts: RelayTransportOptions): RelayTranspor
 
   return {
     async register(reg: SessionRegistration) {
-      const res = await withTimeout(
-        apiFetch("/relay/sessions", {
+      const res = await apiFetch("/relay/sessions", {
           method: "POST",
           body: reg,
           cfg,
           fetchImpl: opts.fetchImpl,
           save: opts.save,
-        }),
-        RELAY_REQUEST_TIMEOUT_MS,
-        "register",
-      );
+          timeoutMs: RELAY_REQUEST_TIMEOUT_MS,
+        });
       if (typeof res?.sessionId !== "string" || !res.sessionId.trim()) {
-        throw new ApiError(502, "Invalid relay registration response");
+        throw new ApiError(502, t("Invalid relay registration response"));
       }
       return { sessionId: res.sessionId };
     },
 
     async postEvent(sessionId: string, ev: SessionEventInput) {
-      await withTimeout(
-        apiFetch(`/relay/sessions/${encodeURIComponent(sessionId)}/events`, {
+      await apiFetch(`/relay/sessions/${encodeURIComponent(sessionId)}/events`, {
           method: "POST",
           body: ev,
           cfg,
           fetchImpl: opts.fetchImpl,
           save: opts.save,
-        }),
-        RELAY_REQUEST_TIMEOUT_MS,
-        "postEvent",
-      );
+          timeoutMs: RELAY_REQUEST_TIMEOUT_MS,
+        });
     },
 
     subscribeCommands(sessionId: string, onCmd: (raw: unknown) => void) {

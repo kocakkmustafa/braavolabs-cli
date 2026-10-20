@@ -1,3 +1,5 @@
+import { withRequestScope, DEFAULT_INFERENCE_TIMEOUT_MS } from "./request-scope";
+import { t } from "./locale";
 /**
  * braavo direct — single-shot BYOK completions straight to a provider's API,
  * bypassing the Braavolabs server entirely. Uses whatever key `braavo keys
@@ -109,30 +111,32 @@ export async function directChat(
   apiKey: string,
   model: string,
   question: string,
-  o: { fetchImpl?: FetchLike } = {},
+  o: { fetchImpl?: FetchLike; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<DirectChatResult> {
   const fetchImpl = o.fetchImpl ?? (globalThis.fetch as FetchLike);
   const spec = SPECS[provider];
-  const res = await fetchImpl(spec.url, {
+  return withRequestScope({ ...o, timeoutMs: o.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS }, async scope => {
+  const res = await scope.wait(fetchImpl(spec.url, {
+    signal: scope.signal,
     method: "POST",
     headers: spec.headers(apiKey),
     body: JSON.stringify(spec.body(model, question)),
     redirect: "manual",
-  });
+  }));
   // Provider-specific auth headers (including x-api-key) must not be replayed
   // to a redirect target. Keep the same fail-closed boundary as apiFetch.
   if ((res.status >= 300 && res.status < 400) || res.redirected === true) {
-    throw new DirectApiError(provider, 502, "Refusing a redirected provider response");
+    throw new DirectApiError(provider, 502, t("Refusing a redirected provider response"));
   }
   if (typeof res.url === "string" && res.url) {
     let origin: string;
     try { origin = new URL(res.url).origin; }
-    catch { throw new DirectApiError(provider, 502, "Invalid provider response URL"); }
+    catch { throw new DirectApiError(provider, 502, t("Invalid provider response URL")); }
     if (origin !== new URL(spec.url).origin) {
-      throw new DirectApiError(provider, 502, "Provider response escaped its configured origin");
+      throw new DirectApiError(provider, 502, t("Provider response escaped its configured origin"));
     }
   }
-  const json = await res.json().catch(() => ({}));
+  const json: any = await scope.wait(res.json()).catch(error => { if (scope.signal.aborted) throw scope.signal.reason; if (error instanceof SyntaxError) return {}; throw error; });
   if (!res.ok) {
     const message = json?.error?.message ?? json?.error ?? res.statusText ?? `request failed (${res.status})`;
     // Some providers echo the rejected credential in their error text.
@@ -140,4 +144,5 @@ export async function directChat(
     throw new DirectApiError(provider, res.status, safeMessage);
   }
   return { content: spec.parse(json), model, provider };
+  });
 }

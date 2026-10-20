@@ -55,11 +55,12 @@ describe("isSpawnVendor / VENDOR_SPECS", () => {
     expect(isSpawnVendor("gemini")).toBe(false);
   });
 
-  it("carries the per-vendor ToS-risk levels the blueprint mandates (rule f)", () => {
-    expect(VENDOR_SPECS.claude.risk).toContain("SAFE");
-    expect(VENDOR_SPECS.claude.risk.toLowerCase()).toContain("volatile");
-    expect(VENDOR_SPECS.codex.risk).toContain("SAFE");
-    expect(VENDOR_SPECS.codex.risk.toLowerCase()).toContain("lowest");
+  it("names the account and provider terms without claiming legal approval", () => {
+    for (const vendor of SPAWN_VENDORS) {
+      expect(VENDOR_SPECS[vendor].risk).toContain("your account");
+      expect(VENDOR_SPECS[vendor].risk).toContain("provider terms");
+      expect(VENDOR_SPECS[vendor].risk).not.toContain("SAFE");
+    }
     // Fallback (rule g) points at the API-key path, never a vendor OAuth flow.
     expect(VENDOR_SPECS.claude.fallback).toBe('braavo direct anthropic "<question>"');
     expect(VENDOR_SPECS.codex.fallback).toBe('braavo direct openai "<question>"');
@@ -204,7 +205,7 @@ describe("probeVendor — installed-or-not only (rules d, 2)", () => {
 describe("spawn renderers (terminal-noir, no green)", () => {
   it("risk line is a single steel line carrying the vendor risk note", () => {
     const line = spawnRiskLine(colorUi, "claude");
-    expect(line).toContain("SAFE");
+    expect(line).toContain("provider terms");
     expect(line).toContain("38;5;246"); // steel
     assertNoGreen(line);
   });

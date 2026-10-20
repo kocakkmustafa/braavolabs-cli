@@ -12,6 +12,8 @@ import {
   callServerTool,
   MCP_PROTOCOL_VERSION,
   McpTimeoutError,
+  McpClient,
+  MAX_MCP_FRAME_BYTES,
   type McpChildLike,
   type McpTool,
 } from "../mcp";
@@ -129,6 +131,7 @@ function makeFakeServer(opts: FakeServerOpts = {}) {
     rawWrites,
     sent,
     emitStderr: (s: string) => stderrCb(Buffer.from(s)),
+    emitStdout: (s: string) => stdoutCb(Buffer.from(s)),
     get killed() {
       return killed;
     },
@@ -136,6 +139,35 @@ function makeFakeServer(opts: FakeServerOpts = {}) {
 }
 
 const DEF = { command: "my-mcp", args: ["--stdio"] };
+
+describe("bounded MCP output", () => {
+  it.each(["", "\n"])("closes an oversized UTF-8 frame, with terminator %j", async suffix => {
+    const server = makeFakeServer({ respond: false });
+    const client = new McpClient(server.child, { timeoutMs: 1000 });
+    const result = client.request("tools/list").catch(error => error);
+    server.emitStdout("é".repeat(MAX_MCP_FRAME_BYTES / 2 + 1) + suffix);
+    expect(await result).toMatchObject({ name: "McpError", message: expect.stringContaining("1 MiB") });
+    expect(server.killed).toBe(true);
+    await expect(client.request("tools/list")).rejects.toThrow("client closed");
+    expect(server.sent).toHaveLength(1);
+  });
+
+  it("accepts several bounded frames delivered in one large stdout chunk", async () => {
+    const server = makeFakeServer({ respond: false });
+    const client = new McpClient(server.child, { timeoutMs: 1000 });
+    const a = client.request("tools/call"); const b = client.request("tools/call");
+    const content = "界".repeat(200_000);
+    server.emitStdout([1, 2].map(id => JSON.stringify({ id, result: { content } }) + "\n").join(""));
+    expect((await a).content).toBe(content); expect((await b).content).toBe(content);
+    expect(server.killed).toBe(false); client.close();
+  });
+
+  it.each([NaN, Infinity, 0, -1, 2_147_483_648])("rejects invalid timeouts before starting a child: %s", async timeoutMs => {
+    const spawnImpl = vi.fn();
+    await expect(listServerTools(DEF, spawnImpl, { timeoutMs })).rejects.toThrow("timeoutMs");
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+});
 
 describe("listServerTools — full JSON-RPC handshake", () => {
   it("runs initialize → notifications/initialized → tools/list and returns the tools", async () => {

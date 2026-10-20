@@ -21,7 +21,7 @@
  *   (e) Each session runs in the user-supplied working directory (--dir, or the
  *       current cwd). braavo does NOT impose directory isolation; --dir is the
  *       documented knob.
- *   (f) Per-vendor ToS-risk level is surfaced in-product (see VENDOR_SPECS.risk).
+ *   (f) Account/provider-terms responsibility is surfaced (VENDOR_SPECS.risk).
  *   (g) If the binary is absent or fails, braavo degrades gracefully by pointing
  *       at the API-key path (see VENDOR_SPECS.fallback) — it never fabricates a
  *       result or silently retries.
@@ -56,13 +56,13 @@ export interface VendorSpec {
 export const VENDOR_SPECS: Record<SpawnVendor, VendorSpec> = {
   claude: {
     bin: "claude",
-    risk: "ToS risk: SAFE — volatile (policy can shift; runs your own authenticated CLI)",
+    risk: "Official CLI; your account and the provider terms apply.",
     fallback: 'braavo direct anthropic "<question>"',
     versionArgs: ["--version"],
   },
   codex: {
     bin: "codex",
-    risk: "ToS risk: SAFE — lowest risk (runs your own authenticated CLI)",
+    risk: "Official CLI; your account and the provider terms apply.",
     fallback: 'braavo direct openai "<question>"',
     versionArgs: ["--version"],
   },
@@ -97,7 +97,7 @@ export interface FindDeps {
 function defaultWhich(bin: string): string | undefined {
   try {
     // execFile (arg array) — no shell, so `bin` is never interpolated into a command line.
-    const out = execFileSync("which", [bin], { encoding: "utf8" }).trim();
+    const out = execFileSync("which", [bin], { encoding: "utf8", timeout: 3_000, maxBuffer: 64 * 1024 }).trim();
     return out || undefined;
   } catch {
     return undefined;
@@ -289,10 +289,10 @@ export interface SpawnVendorBridgedOptions {
  * Spawn the resolved binary in OPT-IN piped mode (`braavo spawn --bridge`).
  * stdout/stderr are TEE'd to BOTH the terminal (`process.stdout`/`stderr` —
  * the user still sees everything live, unchanged from the default) AND the
- * relay bridge (`bridge.emitOutput`, client-side redacted — see
- * relay-protocol.ts). stdin is left for the vendor's own terminal input as
- * usual; a companion `steer` command ALSO writes into it (see
- * makeSpawnBridgeHandlers).
+ * relay bridge (`bridge.emitOutput`, pattern-redacted and bounded — see
+ * relay-protocol.ts). This piped mode does not forward local stdin or provide
+ * a PTY; only a companion `steer` writes into child stdin (see
+ * makeSpawnBridgeHandlers). Interactive local vendor prompts remain unverified.
  *
  * A relay outage must never block or kill the user's vendor CLI session —
  * matches every other best-effort-mirror boundary in this feature

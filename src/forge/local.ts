@@ -1,3 +1,5 @@
+import { t } from "./locale";
+import { withRequestScope, waitWithAbort, DEFAULT_INFERENCE_TIMEOUT_MS } from "./request-scope";
 /**
  * braavo local — talk directly to a local Ollama server. No keys, no server
  * round-trip, works fully offline. Base URL defaults to
@@ -20,7 +22,7 @@ export function resolveOllamaHost(explicit?: string): string {
 
 export class OllamaUnreachableError extends Error {
   constructor(host: string) {
-    super("Ollama not reachable — is it running?");
+    super(t("Ollama not reachable — is it running?"));
     this.name = "OllamaUnreachableError";
     this.host = host;
   }
@@ -29,8 +31,9 @@ export class OllamaUnreachableError extends Error {
 
 async function doFetch(fetchImpl: FetchLike, host: string, path: string, init?: any): Promise<any> {
   try {
-    return await fetchImpl(`${host}${path}`, init);
-  } catch {
+    return await waitWithAbort(fetchImpl(`${host}${path}`, init), init?.signal);
+  } catch (error) {
+    if (init?.signal?.aborted) throw init.signal.reason ?? error;
     // Network-level failure (connection refused, DNS, etc.) — Ollama isn't up.
     throw new OllamaUnreachableError(host);
   }
@@ -43,14 +46,16 @@ export interface OllamaModel {
 /** GET /api/tags — installed local models. */
 export async function listOllamaModels(
   host: string,
-  o: { fetchImpl?: FetchLike } = {},
+  o: { fetchImpl?: FetchLike; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<string[]> {
   const fetchImpl = o.fetchImpl ?? (globalThis.fetch as FetchLike);
-  const res = await doFetch(fetchImpl, host, "/api/tags");
+  return withRequestScope(o, async scope => {
+  const res = await scope.wait(doFetch(fetchImpl, host, "/api/tags", { signal: scope.signal }));
   if (!res.ok) throw new OllamaUnreachableError(host);
-  const body = await res.json();
+  const body: any = await scope.wait(res.json());
   const models: OllamaModel[] = Array.isArray(body?.models) ? body.models : [];
   return models.map((m) => m.name).filter(Boolean);
+  });
 }
 
 export interface OllamaChatResult {
@@ -63,10 +68,12 @@ export async function ollamaChat(
   host: string,
   model: string,
   question: string,
-  o: { fetchImpl?: FetchLike } = {},
+  o: { fetchImpl?: FetchLike; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<OllamaChatResult> {
   const fetchImpl = o.fetchImpl ?? (globalThis.fetch as FetchLike);
-  const res = await doFetch(fetchImpl, host, "/api/chat", {
+  return withRequestScope({ ...o, timeoutMs: o.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS }, async scope => {
+  const res = await scope.wait(doFetch(fetchImpl, host, "/api/chat", {
+    signal: scope.signal,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -74,14 +81,15 @@ export async function ollamaChat(
       stream: false,
       messages: [{ role: "user", content: question }],
     }),
-  });
+  }));
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.error ?? `Ollama request failed (${res.status})`);
+    const body: any = await scope.wait(res.json()).catch(error => { if (scope.signal.aborted) throw scope.signal.reason; if (error instanceof SyntaxError) return {}; throw error; });
+    throw new Error(body?.error ?? t("Ollama request failed ({0})", res.status));
   }
-  const body = await res.json();
+  const body: any = await scope.wait(res.json());
   const content = body?.message?.content ?? "";
   return { content: String(content), model: String(body?.model ?? model) };
+  });
 }
 
 /**
@@ -92,12 +100,12 @@ export async function ollamaChat(
 export async function resolveOllamaModel(
   host: string,
   explicit: string | undefined,
-  o: { fetchImpl?: FetchLike } = {},
+  o: { fetchImpl?: FetchLike; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<string> {
   if (explicit) return explicit;
   const models = await listOllamaModels(host, o);
   if (!models.length) {
-    throw new Error("No local Ollama models installed. Run: ollama pull <model>");
+    throw new Error(t("No local Ollama models installed. Run: ollama pull <model>"));
   }
   return models[0];
 }

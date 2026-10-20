@@ -1,7 +1,8 @@
-import { afterAll, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { rmSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { runDoctor } from "../doctor";
+import { runDoctor, humanDoctorCheck } from "../doctor";
+import { LOCALES, catalogue, setLocale } from "../locale";
 import { CONFIG_DIR, type Config } from "../config";
 import { addMcpServer, loadMcpConfig, MCP_PATH, removeMcpServer, saveMcpConfig } from "../mcp";
 
@@ -21,6 +22,7 @@ beforeEach(() => {
   vi.mocked(spawn).mockClear();
 });
 afterAll(() => rmSync(CONFIG_DIR, { recursive: true, force: true }));
+afterEach(() => setLocale("en"));
 
 /**
  * BR-P1-002 — `braavo doctor` (roadmap §5.2: checks API host fingerprint,
@@ -34,6 +36,28 @@ const find = (checks: Awaited<ReturnType<typeof runDoctor>>, name: string) =>
   checks.find((c) => c.name === name)!;
 
 describe("braavo doctor", () => {
+  it("translates authored human diagnostics while preserving the JSON contract and transport detail", async () => {
+    const checks = await runDoctor(base, deadFetch);
+    const raw = JSON.stringify(checks);
+    for (const locale of LOCALES) {
+      setLocale(locale);
+      for (const check of checks) {
+        const human = humanDoctorCheck(check);
+        expect(human.name).toBe(catalogue[locale][check.name]);
+        expect(human.status).toBe(check.status);
+      }
+      expect(humanDoctorCheck(find(checks, "api reachable")).detail).toContain("ECONNREFUSED");
+      expect(JSON.stringify(checks)).toBe(raw);
+    }
+    setLocale("tr"); expect(humanDoctorCheck(find(checks, "credentials")).detail).toContain("oturum");
+  });
+
+  it("cancels its unused health body within the request scope", async () => {
+    const cancel = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, body: { cancel } })) as unknown as typeof fetch;
+    expect(find(await runDoctor(base, fetchImpl), "api reachable").status).toBe("ok");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
   it("reads the same persisted registry as mcp add/list without starting a server", async () => {
     saveMcpConfig(addMcpServer({}, "audit-local", "never-start-this-command", ["private-fixture-argument"]));
 

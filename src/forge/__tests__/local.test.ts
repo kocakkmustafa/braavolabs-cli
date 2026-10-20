@@ -50,7 +50,7 @@ describe("listOllamaModels", () => {
     const fetchImpl = vi.fn(async () => resp(200, { models: [{ name: "llama3.1" }, { name: "mistral" }] }));
     const models = await listOllamaModels("http://localhost:11434", { fetchImpl });
     expect(models).toEqual(["llama3.1", "mistral"]);
-    expect(fetchImpl).toHaveBeenCalledWith("http://localhost:11434/api/tags", undefined);
+    expect(fetchImpl).toHaveBeenCalledWith("http://localhost:11434/api/tags", expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
   it("throws OllamaUnreachableError when the connection is refused", async () => {

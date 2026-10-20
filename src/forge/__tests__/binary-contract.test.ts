@@ -396,3 +396,39 @@ describe("compiled CLI handoff outcome contract", () => {
     expect(result.status).toBe(EXIT.OK); expect(JSON.parse(result.stdout).result).toEqual(JSON.parse(JSON.stringify(outcome))); expect(f.calls()).toHaveLength(1);
   });
 });
+
+// Actual compiled command entry, temporary homes, injected fetch only.
+describe("compiled eight-language CLI", () => {
+  const locales = ["tr", "en", "es-419", "pt-BR", "de", "fr", "ja", "ar"];
+  const commands = ["login","logout","use","ask","cancel","cascade","savings","keys","media-key","image","voice","local","direct","models","spawn","fix","mcp","whoami","runs","run","steer","handoffs","handoff","continue","connections","doctor","init","watch","approve","pause","stop","cost","policy","audit","connect","agent","session"];
+  for (const locale of locales) {
+    it(`${locale}: help and all37 command-help routes require no config, credential or network`, () => {
+      const f = fixture(); const full = f.run(["--lang", locale, "help"]);
+      expect(full.status).toBe(EXIT.OK); expect(full.stdout).not.toContain("�");
+      for (const command of commands) {
+        expect(full.stdout).toContain(`braavo ${command}`);
+        const result = f.run(["--lang", locale, command, "--help"]);
+        expect(result.status, result.stderr).toBe(EXIT.OK); expect(result.stdout).toContain(`braavo ${command}`);
+      }
+      expect(f.calls()).toHaveLength(0); expect(f.config()).toBeUndefined();
+    }, 30000);
+    it(`${locale}: refusal sends no request and leaves the account untouched`, () => {
+      const f = fixture(authenticated); const result = f.run(["--lang", locale, "stop", "synthetic-run"]);
+      expect(result.status).toBe(EXIT.CONFIRMATION_REQUIRED); expect(result.stderr).toContain("synthetic-run");
+      expect(f.calls()).toHaveLength(0); expect(f.config()).toEqual(authenticated);
+    });
+    it(`${locale}: JSON retains raw protocol and provider text`, () => {
+      const body = { status: "COMPLETED", providerText: "No keys stored. 日本語 العربية", costUsd: 1234.5 };
+      const f = fixture(authenticated); const result = f.run(["cost", "--json", "--lang", locale], { BRAAVO_TEST_RESPONSE: JSON.stringify(body) });
+      expect(result.status).toBe(EXIT.OK); expect(JSON.parse(result.stdout)).toEqual({ usage: body, savings: body, days: 30 });
+      expect(f.calls()).toHaveLength(2);
+    });
+  }
+  it("BRAAVO_LOCALE selects Japanese and an explicit flag overrides it", () => {
+    const f = fixture(); expect(f.run(["help"], { BRAAVO_LOCALE: "ja" }).stdout).toContain("コマンド");
+    expect(f.run(["help", "--lang", "tr"], { BRAAVO_LOCALE: "ja" }).stdout).toContain("Komutlar");
+    const fallback = f.run(["help"], { BRAAVO_LOCALE: "unknown" });
+    expect(fallback.status).toBe(EXIT.OK); expect(fallback.stdout).toContain("Commands"); expect(fallback.stderr).toContain("using en");
+    expect(f.calls()).toHaveLength(0); expect(f.config()).toBeUndefined();
+  });
+});

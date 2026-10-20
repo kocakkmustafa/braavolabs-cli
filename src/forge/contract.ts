@@ -37,7 +37,7 @@ export type ContractCommand = (typeof CONTRACT_COMMANDS)[number];
  */
 export function helpCoversContract(sourcePath?: string): string[] {
   const src = readFileSync(
-    sourcePath ?? join(process.cwd(), "src", "braavo.ts"),
+    sourcePath ?? join(process.cwd(), "src", "forge", "help.ts"),
     "utf8",
   );
   // Only look inside the HELP template so a command merely being implemented

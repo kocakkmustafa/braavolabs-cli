@@ -241,3 +241,22 @@ describe("RelayBridge — inbound command dispatch", () => {
     expect(handlers.killed).toBe(1);
   });
 });
+
+describe("bounded best-effort terminal mirror", () => {
+  it("caps output requests, warns once and leaves the local producer unblocked", async () => {
+    const releases: Array<() => void> = []; let calls = 0; let warnings = 0;
+    const transport: RelayTransport = {
+      async register() { return { sessionId: "owned" }; },
+      postEvent(_id, event) { if (event.type !== "output") return Promise.resolve(); calls++; return new Promise(resolve => releases.push(resolve)); },
+      subscribeCommands() { return () => {}; },
+    };
+    const bridge = new RelayBridge(transport, fakeHandlers(), { onOutputDropped: () => { warnings++; } });
+    await bridge.start({ surface: "cli" });
+    const admitted = Array.from({ length: 8 }, () => bridge.emitOutput("ordinary output"));
+    await bridge.emitOutput("ninth chunk"); await bridge.emitOutput("tenth chunk");
+    expect(calls).toBe(8); expect(bridge.getDroppedOutputCount()).toBe(2); expect(warnings).toBe(1);
+    releases.splice(0).forEach(resolve => resolve()); await Promise.all(admitted);
+    const next = bridge.emitOutput("after recovery"); expect(calls).toBe(9); releases.shift()!(); await next;
+    await bridge.stop();
+  });
+});

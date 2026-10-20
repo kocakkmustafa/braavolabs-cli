@@ -18,6 +18,7 @@
  * the green short-circuit and the failure payload without a real shell or model.
  */
 import { spawnSync } from "node:child_process";
+import { t } from "./locale";
 
 /** Steel note stamped ahead of every suggestion — braavo never auto-applies. */
 export const SUGGESTION_NOTE = "suggestion only — review before applying";
@@ -28,6 +29,7 @@ export const FIX_TAIL_LINES = 80;
 export interface RunResult {
   code: number;
   output: string;
+  incomplete?: boolean;
 }
 
 /** Turns a failure payload into a suggested fix (a model backend). */
@@ -52,9 +54,9 @@ export type FixOutcome =
 export function defaultRunCmd(cmd: string): RunResult {
   // Combined stream so the model sees stderr (where most test failures print)
   // alongside stdout. A signal-killed process has status null → treat as failure.
-  const r = spawnSync("sh", ["-c", cmd], { encoding: "utf8" });
+  const r = spawnSync("sh", ["-c", cmd], { encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
   const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-  return { code: r.status ?? 1, output };
+  return { code: r.status ?? 1, output, ...(r.error ? { incomplete: true } : {}) };
 }
 
 /** Keep the last `n` lines of `text` (after trimming trailing whitespace). */
@@ -83,6 +85,7 @@ export function buildFixPrompt(tail: string, repoBlock?: string): string {
  */
 export async function runFix(cmd: string, deps: FixDeps): Promise<FixOutcome> {
   const res = deps.run(cmd);
+  if (res.incomplete) throw new Error(t("Test command exceeded its time/output limit or failed to start. No model was called; inspect the command before retrying."));
   if (res.code === 0) {
     return { green: true, code: 0 };
   }

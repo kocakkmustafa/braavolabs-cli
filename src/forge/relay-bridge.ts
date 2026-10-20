@@ -95,8 +95,11 @@ export class RelayBridge {
   private sessionId: string | null = null;
   private unsubscribe: (() => void) | null = null;
   private generation = 0;
+  private outputInFlight = 0;
+  private outputLossNotified = false;
+  private droppedOutput = 0;
 
-  constructor(transport: RelayTransport, handlers: BridgeHandlers) {
+  constructor(transport: RelayTransport, handlers: BridgeHandlers, private options: { onOutputDropped?: () => void } = {}) {
     this.transport = transport;
     this.handlers = handlers;
   }
@@ -211,8 +214,23 @@ export class RelayBridge {
   /** Mirror a chunk of terminal/agent output (base64, bounded). This is what
    * `spawn --bridge` calls with each TEE'd vendor stdout/stderr chunk. */
   emitOutput(text: string): Promise<void> {
-    return this.post({ type: "output", textB64: toBase64(text) });
+    if (!this.sessionId) return Promise.resolve();
+    // Best-effort mirror never backpressures the local terminal or accumulates
+    // an unbounded queue. Eight bounded chunks at most; omitted output is explicit.
+    if (this.outputInFlight >= 8 || Buffer.byteLength(text, "utf8") > 128 * 1024) {
+      this.droppedOutput++;
+      if (!this.outputLossNotified) {
+        this.outputLossNotified = true;
+        try { this.options.onOutputDropped?.(); } catch { /* notification must not interrupt local output */ }
+      }
+      return Promise.resolve();
+    }
+    this.outputInFlight++;
+    return this.post({ type: "output", textB64: toBase64(text) }).finally(() => { this.outputInFlight--; });
   }
+
+  /** A mirror is not a durable transcript; local stdout/stderr remain complete. */
+  getDroppedOutputCount(): number { return this.droppedOutput; }
 
   /** Mirror a redacted audit-ledger line. */
   emitAudit(summary: string): Promise<void> {

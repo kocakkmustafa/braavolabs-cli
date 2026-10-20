@@ -1,3 +1,4 @@
+import { t, numberText } from "./locale";
 /**
  * braavo mcp — a dependency-free Model Context Protocol stdio client.
  *
@@ -19,6 +20,7 @@
  * child spawn is injectable so tests drive a mock stdio server end-to-end.
  */
 import { spawn } from "node:child_process";
+import { positiveTimeout } from "./request-scope";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { CONFIG_DIR } from "./config";
@@ -27,6 +29,8 @@ export const MCP_PATH = join(CONFIG_DIR, "mcp.json");
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const BRAAVO_VERSION = "0.1.0";
 export const DEFAULT_MCP_TIMEOUT_MS = 10_000;
+/** Maximum UTF-8 bytes in one JSON-RPC line or incomplete frame. */
+export const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 
 const CLIENT_INFO = { name: "braavo", version: BRAAVO_VERSION };
 
@@ -74,9 +78,9 @@ export function parseMcpAdd(afterAdd: string[]): ParsedMcpAdd {
   const name = afterAdd[0];
   if (!name || name === "--") return { error: "usage: braavo mcp add <name> -- <command> [args...]" };
   const dashIdx = afterAdd.indexOf("--");
-  if (dashIdx < 0) return { error: 'missing "--" separator before the server command' };
+  if (dashIdx < 0) return { error: t('missing "--" separator before the server command') };
   const command = afterAdd[dashIdx + 1];
-  if (!command) return { error: 'no command after "--"' };
+  if (!command) return { error: t('no command after "--"') };
   const args = afterAdd.slice(dashIdx + 2);
   return { name, command, args };
 }
@@ -92,7 +96,7 @@ export class McpError extends Error {
 
 export class McpTimeoutError extends Error {
   constructor(method: string, ms: number) {
-    super(`MCP request "${method}" timed out after ${ms}ms`);
+    super(t('MCP request "{0}" timed out after {1}ms', method, numberText(ms)));
     this.name = "McpTimeoutError";
   }
 }
@@ -137,10 +141,13 @@ export class McpClient {
   }
 
   private onData(chunk: string): void {
+    if (this.closed) return;
     this.buf += chunk;
     let idx: number;
     while ((idx = this.buf.indexOf("\n")) >= 0) {
-      const line = this.buf.slice(0, idx).trim();
+      const raw = this.buf.slice(0, idx);
+      if (Buffer.byteLength(raw, "utf8") > MAX_MCP_FRAME_BYTES) { this.failAll(new McpError(t("MCP output exceeded the 1 MiB frame limit"))); this.close(); return; }
+      const line = raw.trim();
       this.buf = this.buf.slice(idx + 1);
       if (!line) continue;
       let msg: any;
@@ -161,6 +168,11 @@ export class McpClient {
         p.resolve(msg.result);
       }
     }
+    if (Buffer.byteLength(this.buf, "utf8") > MAX_MCP_FRAME_BYTES) {
+      this.buf = "";
+      this.failAll(new McpError(t("MCP output exceeded the 1 MiB frame limit")));
+      this.close();
+    }
   }
 
   private failAll(err: Error): void {
@@ -173,6 +185,7 @@ export class McpClient {
 
   /** Send a request and resolve with its `result` (or reject on error/timeout). */
   request(method: string, params?: unknown): Promise<any> {
+    if (this.closed) return Promise.reject(new McpError(t("client closed")));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -193,7 +206,8 @@ export class McpClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.failAll(new McpError("client closed"));
+    this.buf = "";
+    this.failAll(new McpError(t("client closed")));
     try {
       this.child.kill();
     } catch {
@@ -217,9 +231,10 @@ export async function withMcpServer<T>(
   opts: WithMcpOpts,
   fn: (client: McpClient) => Promise<T>,
 ): Promise<T> {
+  const timeoutMs = positiveTimeout(opts.timeoutMs, DEFAULT_MCP_TIMEOUT_MS);
   const child = spawnImpl(def.command, def.args);
   const client = new McpClient(child, {
-    timeoutMs: opts.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS,
+    timeoutMs,
     onStderr: opts.onStderr,
   });
   try {

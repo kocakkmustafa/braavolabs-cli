@@ -1,3 +1,4 @@
+import { t } from "./locale";
 /**
  * braavo --repo — structured git context, prepended to a prompt.
  *
@@ -52,10 +53,10 @@ export function collectRepoContext(deps: RepoDeps): RepoContext {
   try {
     inside = git(["rev-parse", "--is-inside-work-tree"]).trim();
   } catch {
-    return { ok: false, error: `not a git repository: ${deps.cwd}` };
+    return { ok: false, error: t("not a git repository: {0}", deps.cwd) };
   }
   if (inside !== "true") {
-    return { ok: false, error: `not a git repository: ${deps.cwd}` };
+    return { ok: false, error: t("not a git repository: {0}", deps.cwd) };
   }
 
   // Each of these can legitimately fail (e.g. a repo with no commits yet) — a

@@ -18,14 +18,16 @@
  *
  * ai morghulis · ai dohaeris.
  */
+import { t, getLocale, setLocale, localeArgs, numberText, moneyText, dateText, statusText } from "./forge/locale";
+import { renderHelp } from "./forge/help";
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 import { Config, loadConfig, saveConfig, clearConfig, captureConfigOwner, commitLoginIfCurrent, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
 import { parseApprovalDecision } from "./forge/approvalDecision";
 import { EXIT, type ExitCode } from "./forge/exit-codes";
 import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
-import { runDoctor } from "./forge/doctor";
-import { verifyEvidenceChain } from "./forge/audit";
+import { runDoctor, humanDoctorCheck } from "./forge/doctor";
+import { verifyEvidenceChain, humanChainReason } from "./forge/audit";
 import { makeUi, Ui } from "./forge/ui";
 import {
   ApiError,
@@ -151,15 +153,8 @@ const has = (flags: Record<string, string | boolean>, key: string): boolean =>
   flags[key] === true || flags[key] === "true";
 
 // ── formatting helpers (money / tokens) ──────────────────────────────────────
-function usd(n: unknown): string {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return "$0";
-  return v >= 1 || v === 0 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
-}
-function tokens(n: unknown): string {
-  const v = Number(n);
-  return Number.isFinite(v) ? v.toLocaleString("en-US") : "0";
-}
+function usd(n: unknown): string { return moneyText(n); }
+function tokens(n: unknown): string { return numberText(n); }
 
 /** Extract a genuine savings figure from compare findings, or null. Never fabricated. */
 export function extractSaved(findings: any): { usd: number; tokens: number } | null {
@@ -193,13 +188,13 @@ export function renderCompareLines(ui: Ui, session: any): string[] {
 
   const synthesis = mm.finalAnswer ?? mm.consensus ?? findings.summary;
   if (synthesis) {
-    out.push(ui.primary("── synthesis ──"));
+    out.push(ui.primary(`── ${t("synthesis")} ──`));
     out.push(String(synthesis));
   }
 
   const saved = extractSaved(findings);
   if (saved) {
-    out.push(ui.ember(`≈ saved ${usd(saved.usd)} · ${tokens(saved.tokens)} tokens`));
+    out.push(ui.ember(t("≈ saved {0} · {1} tokens", usd(saved.usd), tokens(saved.tokens))));
   }
   return out;
 }
@@ -208,20 +203,20 @@ export function renderCascadeLines(ui: Ui, res: any): string[] {
   const out: string[] = [];
   out.push(String(res?.answer ?? ""));
   out.push("");
-  const conf = typeof res?.confidence === "number" ? `${Math.round(res.confidence * 100)}%` : "?";
-  const esc = res?.escalated ? "escalated" : "no escalation";
+  const conf = typeof res?.confidence === "number" ? numberText(res.confidence, { style: "percent", maximumFractionDigits: 0 }) : "?";
+  const esc = t(res?.escalated ? "escalated" : "no escalation");
   out.push(
     ui.steel(
-      `${res?.provider ?? "?"}/${res?.model ?? "?"} · tier=${res?.tier ?? "?"} · confidence=${conf} · ${esc} · ${usd(res?.totalCostUsd)}`,
+      `${res?.provider ?? "?"}/${res?.model ?? "?"} · ${t("tier")}=${res?.tier ?? "?"} · ${t("confidence")}=${conf} · ${esc} · ${usd(res?.totalCostUsd)}`,
     ),
   );
   const attempts: any[] = Array.isArray(res?.attempts) ? res.attempts : [];
   if (attempts.length > 1) {
     for (const a of attempts) {
-      out.push(ui.dim(`  ↳ ${a?.provider}/${a?.model} tier=${a?.tier} conf=${Math.round((a?.confidence ?? 0) * 100)}% ${usd(a?.costUsd)}`));
+      out.push(ui.dim(`  ↳ ${a?.provider}/${a?.model} ${t("tier")}=${a?.tier} ${t("confidence")}=${numberText(a?.confidence ?? 0, { style: "percent", maximumFractionDigits: 0 })} ${usd(a?.costUsd)}`));
     }
   }
-  if (res?.stoppedReason) out.push(ui.dim(`  stopped: ${res.stoppedReason}`));
+  if (res?.stoppedReason) out.push(ui.dim(`  ${t("stopped: {0}", res.stoppedReason)}`));
   return out;
 }
 
@@ -229,20 +224,20 @@ export function renderSavingsTable(ui: Ui, data: any): string[] {
   const r = data?.report ?? {};
   const b = r.breakdown ?? {};
   const days = data?.period?.days ?? "?";
-  const pct = typeof r.savedPct === "number" ? ` (${Math.round(r.savedPct)}%)` : "";
+  const pct = typeof r.savedPct === "number" ? ` (${numberText(r.savedPct / 100, { style: "percent", maximumFractionDigits: 0 })})` : "";
   const row = (label: string, value: string, accent = false): string =>
     `${ui.steel(label.padEnd(16))}${accent ? ui.primary(value) : value}`;
 
   const out: string[] = [];
-  out.push(row("period", `${days} days`));
-  out.push(row("actual", usd(r.actualUsd)));
-  out.push(row("baseline", usd(r.baselineUsd)));
-  out.push(row("saved", `${usd(r.savedUsd)}${pct}`, true));
-  out.push(row("saved tokens", tokens(r.savedTokens)));
-  out.push(ui.primary("── breakdown ──"));
-  out.push(row("cheap routing", usd(b.cheapRoutingUsd)));
-  out.push(row("cache", usd(b.cacheUsd)));
-  out.push(row("retrieval", usd(b.retrievalUsd)));
+  out.push(row(t("period"), t("{0} days", numberText(days))));
+  out.push(row(t("actual"), usd(r.actualUsd)));
+  out.push(row(t("baseline"), usd(r.baselineUsd)));
+  out.push(row(t("saved"), `${usd(r.savedUsd)}${pct}`, true));
+  out.push(row(t("saved tokens"), tokens(r.savedTokens)));
+  out.push(ui.primary(`── ${t("breakdown")} ──`));
+  out.push(row(t("cheap routing"), usd(b.cheapRoutingUsd)));
+  out.push(row(t("cache"), usd(b.cacheUsd)));
+  out.push(row(t("retrieval"), usd(b.retrievalUsd)));
   if (data?.note) out.push(ui.dim(String(data.note)));
   return out;
 }
@@ -252,20 +247,20 @@ export function renderModelsTable(
   data: { ollamaHost: string; ollamaReachable: boolean; ollamaModels: string[]; keyProviders: string[] },
 ): string[] {
   const out: string[] = [];
-  out.push(ui.primary("── local (Ollama) ──"));
-  out.push(ui.steel(`  host: ${data.ollamaHost}`));
+  out.push(ui.primary(`── ${t("local (Ollama)")} ──`));
+  out.push(ui.steel(`  ${t("host: {0}", data.ollamaHost)}`));
   if (!data.ollamaReachable) {
-    out.push(ui.dim("  not reachable — is it running?"));
+    out.push(ui.dim(`  ${t("not reachable — is it running?")}`));
   } else if (!data.ollamaModels.length) {
-    out.push(ui.dim("  no models installed — run: ollama pull <model>"));
+    out.push(ui.dim(`  ${t("no models installed — run: ollama pull <model>")}`));
   } else {
     for (const m of data.ollamaModels) out.push(`  ${ui.primary(m)}`);
   }
   out.push("");
-  out.push(ui.primary("── direct (BYOK) ──"));
+  out.push(ui.primary(`── ${t("direct (BYOK)")} ──`));
   for (const provider of DIRECT_PROVIDERS) {
     const has = data.keyProviders.includes(provider);
-    const label = has ? ui.primary("key stored") : ui.dim("no key — braavo keys add " + provider);
+    const label = has ? ui.primary(t("key stored")) : ui.dim(t("no key — braavo keys add {0}", provider));
     out.push(`  ${provider.padEnd(10)} ${label}`);
   }
   return out;
@@ -274,13 +269,13 @@ export function renderModelsTable(
 // ── spawn (Lane-B) renderers ──────────────────────────────────────────────────
 /** One-line, steel ToS-risk note shown before a spawn (suppressible via --quiet). */
 export function spawnRiskLine(ui: Ui, vendor: SpawnVendor): string {
-  return ui.steel(`· ${VENDOR_SPECS[vendor].risk}`);
+  return ui.steel(`· ${t("Official CLI; your account and the provider terms apply.")}`);
 }
 
 /** Honest "not installed" message + the graceful API-key fallback (rule g). */
 export function spawnFallbackLines(ui: Ui, vendor: SpawnVendor): string[] {
   return [
-    ui.fail(`${vendor} CLI not found. Log in with the official ${vendor} binary first, or use API-key mode:`),
+    ui.fail(t("{0} CLI not found. Log in with the official {1} binary first, or use API-key mode:", vendor, vendor)),
     `  ${ui.primary(VENDOR_SPECS[vendor].fallback)}`,
   ];
 }
@@ -288,13 +283,13 @@ export function spawnFallbackLines(ui: Ui, vendor: SpawnVendor): string[] {
 /** `spawn --list`: installed-or-not + version, per vendor. Never probes login state. */
 export function renderSpawnList(ui: Ui, statuses: VendorStatus[]): string[] {
   const out: string[] = [];
-  out.push(ui.primary("── spawn vendors (your own authenticated CLI) ──"));
+  out.push(ui.primary(`── ${t("spawn vendors (your own authenticated CLI)")} ──`));
   for (const s of statuses) {
     const state = s.installed
-      ? ui.primary(`installed${s.version ? ` · ${s.version}` : ""}`)
-      : ui.dim("not installed");
+      ? ui.primary(t("installed{0}", s.version ? ` · ${s.version}` : ""))
+      : ui.dim(t("not installed"));
     out.push(`  ${s.vendor.padEnd(8)} ${state}`);
-    out.push(`  ${" ".repeat(8)} ${ui.steel(s.risk)}`);
+    out.push(`  ${" ".repeat(8)} ${ui.steel(t("Official CLI; your account and the provider terms apply."))}`);
   }
   return out;
 }
@@ -303,11 +298,11 @@ export function renderSpawnList(ui: Ui, statuses: VendorStatus[]): string[] {
 /** Suggestion-only output; green short-circuit prints an arc line and no model text. */
 export function renderFixLines(ui: Ui, outcome: FixOutcome): string[] {
   if (outcome.green) {
-    return [ui.primary("✓ tests already green")];
+    return [ui.primary(t("✓ tests already green"))];
   }
   return [
-    ui.steel(`· ${SUGGESTION_NOTE}`),
-    ui.dim(`  (exit ${outcome.code} — braavo never applies changes)`),
+    ui.steel(`· ${t(SUGGESTION_NOTE)}`),
+    ui.dim(`  ${t("(exit {0} — braavo never applies changes)", outcome.code)}`),
     "",
     String(outcome.suggestion ?? ""),
   ];
@@ -317,9 +312,9 @@ export function renderFixLines(ui: Ui, outcome: FixOutcome): string[] {
 export function renderMcpList(ui: Ui, cfg: McpConfig): string[] {
   const names = Object.keys(cfg).sort();
   if (!names.length) {
-    return [ui.dim("No MCP servers. Add one: braavo mcp add <name> -- <command> [args...]")];
+    return [ui.dim(t("No MCP servers. Add one: braavo mcp add <name> -- <command> [args...]"))];
   }
-  const out = [ui.primary("── mcp servers ──")];
+  const out = [ui.primary(`── ${t("mcp servers")} ──`)];
   for (const name of names) {
     const def = cfg[name];
     out.push(`  ${ui.primary(name.padEnd(16))} ${ui.steel(`${def.command} ${def.args.join(" ")}`.trim())}`);
@@ -328,9 +323,9 @@ export function renderMcpList(ui: Ui, cfg: McpConfig): string[] {
 }
 
 export function renderMcpTools(ui: Ui, server: string, tools: McpTool[]): string[] {
-  const out = [ui.primary(`── ${server} · tools (${tools.length}) ──`)];
+  const out = [ui.primary(`── ${t("{0} · tools ({1})", server, numberText(tools.length))} ──`)];
   if (!tools.length) {
-    out.push(ui.dim("  (server exposed no tools)"));
+    out.push(ui.dim(`  ${t("(server exposed no tools)")}`));
     return out;
   }
   const width = Math.min(28, Math.max(...tools.map((t) => t.name.length)));
@@ -343,9 +338,9 @@ export function renderMcpTools(ui: Ui, server: string, tools: McpTool[]): string
 
 export function renderMcpCallResult(ui: Ui, result: McpCallResult): string[] {
   const texts = result.content.filter((c) => typeof c.text === "string").map((c) => String(c.text));
-  const body = texts.length ? texts.join("\n") : "(no textual content)";
+  const body = texts.length ? texts.join("\n") : t("(no textual content)");
   if (result.isError) {
-    return [ui.fail("tool reported an error:"), body];
+    return [ui.fail(t("tool reported an error:")), body];
   }
   return [body];
 }
@@ -359,7 +354,7 @@ function resolveRepoBlock(enabled: boolean, die: (msg: string) => never, ui: Ui)
   if (!enabled) return undefined;
   const res = collectRepoContext({ cwd: process.cwd() });
   if (!res.ok) die(res.error);
-  if (res.truncated) console.error(ui.dim("· repo context exceeded 4KB — truncated"));
+  if (res.truncated) console.error(ui.dim(`· ${t("repo context exceeded 4KB — truncated")}`));
   return res.text;
 }
 
@@ -409,74 +404,11 @@ function promptHidden(question: string): Promise<string> {
   });
 }
 
-const HELP = (ui: Ui): string => {
-  const p = (s: string) => ui.primary(s);
-  return `${ui.bold("> braavo")} — ${ui.ember("ai morghulis · ai dohaeris")}
-
-${ui.steel("Council")}
-  ${p("braavo login")}   --api <url> --token <jwt>   |  --email <e> --password <p>
-  ${p("braavo use")}     <companyId>                 set the default company
-  ${p("braavo ask")}     "<question>" [--company <id>] [--models PROVIDER/model,...] [--repo]
-  ${p("braavo cancel")}  <researchId> --yes           soft-cancel research/compare          [--json]
-  ${p("braavo cascade")} "<question>" [--threshold <0-1>] [--second-opinion] [--budget <usd>]
-  ${p("braavo savings")} [--days <1-90>]
-  ${p("braavo keys")}    add <provider> [--key <secret>] | list | rm <provider>
-  ${p("braavo local")}   "<question>" [--model <name>] [--host <url>] [--repo]
-  ${p("braavo direct")}  <provider> "<question>" [--model <name>] [--repo]
-  ${p("braavo fix")}     --cmd "<test-command>" [--via local|direct|ask] [--provider <p>] [--repo]
-  ${p("braavo mcp")}     add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json '<args>']
-  ${p("braavo spawn")}   <claude|codex> [...args] [--dir <path>] [--quiet] [--bridge]  |  --list
-  ${p("braavo models")}  list local Ollama models + BYOK providers with a stored key
-  ${p("braavo logout")}
-
-${ui.steel("Control (contract)")}
-  ${p("braavo doctor")}    local health: config perms, api host, credentials, sandbox, mcp   [--json]
-  ${p("braavo init")}      [--api <url>]                write ~/.braavo/config.json
-  ${p("braavo watch")}     <runId>                      poll until a terminal state          [--json]
-  ${p("braavo approve")}   <approvalId> [--deny] [--reason <t>] --yes                        [--json]
-  ${p("braavo pause")}     <runId> --yes                                                     [--json]
-  ${p("braavo stop")}      <runId> --yes                                                     [--json]
-  ${p("braavo policy")}    test                         governance config + risk posture     [--json]
-  ${p("braavo audit")}     verify [--run <runId>] --anchor-count <n> --anchor-genesis <sha256> --anchor-head <sha256> [--json]
-  ${p("braavo cost")}      [--days <n>]                                                      [--json]
-  ${p("braavo connect")}                                external connections                 [--json]
-  ${p("braavo agent")}     [--company <id>]                                                  [--json]
-  ${p("braavo session")}                                active relay sessions                [--json]
-  ${ui.dim("mutating commands refuse without a bare --yes; unverified --approval is rejected; exit 4 = refused")}
-
-${ui.steel("Pipelines")}
-  ${p("braavo whoami")}
-  ${p("braavo runs")}
-  ${p("braavo run")}       <pipelineId> --yes                                                    [--json]
-  ${p("braavo steer")}     <runId> <message...>
-  ${p("braavo handoffs")}  [--open]
-  ${p("braavo handoff")}   <runId> [--reason <text>]
-  ${p("braavo continue")}  <runId> --provider <P> [--model <m>] [--base-url <u>]
-  ${p("braavo connections")}
-
-${ui.steel("ask")}      one question, several models, side-by-side (async compare + poll)
-         --models selects 1..3 tenant-configured PROVIDER/model pairs in order.
-         --reasoning-effort low|medium|high applies to each explicit selection.
-         Currently verified: CEREBRAS/gpt-oss-120b on its built-in endpoint.
-         Omit it for automatic first-N selection; synthesis uses the tenant default.
-${ui.steel("cascade")}  cheapest-capable-first; escalates only on low confidence
-${ui.steel("keys")}     LOCAL BYOK storage (macOS keychain / chmod-600 file) — never sent to the server
-${ui.steel("local")}    serverless, keyless — talks straight to a local Ollama daemon
-${ui.steel("direct")}   serverless BYOK — one-shot completion straight to ${DIRECT_PROVIDERS.join("/")}
-${ui.steel("fix")}      runs YOUR test command; on failure asks a model for a fix (suggestion-only, never applied)
-${ui.steel("mcp")}      dep-free Model Context Protocol stdio client — register servers, list & call their tools
-${ui.steel("--repo")}   ask/local/direct/fix: prepend git branch + status + recent commits + diff --stat (≤4KB)
-${ui.steel("spawn")}    runs YOUR own authenticated ${SPAWN_VENDORS.join("/")} CLI as a child — opaque passthrough, no vendor OAuth
-${ui.steel("steer")}    send a real-time message to a live run; agent picks it up on its next turn
-${ui.steel("handoff")}  hand a live run to a different AI provider (freeze checkpoint → continue on --provider)
-
-Version: braavo --version (or -v)
-Custom API: --api <url> saves the address; a bare --allow-custom-host trusts the current HTTPS host.
-Config: ~/.braavo/config.json   ·   Env: BRAAVO_API_URL is the default when no API URL is saved.
-Ollama: OLLAMA_HOST overrides the local daemon base (default http://localhost:11434).`;
-};
+const HELP = (ui: Ui): string => renderHelp(ui);
 
 async function main(): Promise<void> {
+  const language = localeArgs(process.argv.slice(2));
+  setLocale(language.locale);
   const ui = makeUi();
   // Function declarations (not const arrows) so control-flow analysis narrows
   // through the `never` guard sites below (e.g. `if (!x) die(...)`).
@@ -485,21 +417,27 @@ async function main(): Promise<void> {
     process.exit(code);
   }
   function usage(msg: string): never {
-    return die(msg, EXIT.USAGE);
+    return die(msg.startsWith("usage: ") ? t("Usage: {0}", msg.slice(7)) : msg, EXIT.USAGE);
   }
   function requireAuth(cfg: Config): void {
-    if (!cfg.token) die("Not logged in. Run: braavo login", EXIT.AUTH);
+    if (!cfg.token) die(t("Not logged in. Run: braavo login"), EXIT.AUTH);
   }
 
-  const { cmd, positionals, flags } = parseArgs(process.argv.slice(2));
-  if (Object.keys(flags).some(key => key.startsWith("reasoning-effort="))) usage("Use --reasoning-effort low|medium|high (separate flag and value)");
+  const { cmd, positionals, flags } = parseArgs(language.argv);
+  if (language.missing) usage(t("--lang requires a language code."));
+  if (language.unsupported) console.error(ui.fail(t("Unsupported language {0}; using en.", language.unsupported)));
+  if (Object.keys(flags).some(key => key.startsWith("reasoning-effort="))) usage(t("Use --reasoning-effort low|medium|high (separate flag and value)"));
   const effort = flag(flags, "reasoning-effort");
   if (flags["reasoning-effort"] !== undefined) {
-    if (cmd !== "ask" || flags.models === undefined) usage("--reasoning-effort requires ask with --models PROVIDER/model,...");
-    if (effort !== "low" && effort !== "medium" && effort !== "high") usage("--reasoning-effort requires low, medium or high");
+    if (cmd !== "ask" || flags.models === undefined) usage(t("--reasoning-effort requires ask with --models PROVIDER/model,..."));
+    if (effort !== "low" && effort !== "medium" && effort !== "high") usage(t("--reasoning-effort requires low, medium or high"));
   }
   if (cmd === "--version" || cmd === "-v") {
     console.log((require("../package.json") as { version: string }).version);
+    return;
+  }
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h" || (flags.help === true && (cmd !== "spawn" || positionals.length === 0) && (language.argv.indexOf("--") < 0 || language.argv.indexOf("--help") < language.argv.indexOf("--")))) {
+    console.log(renderHelp(ui, flags.help === true ? cmd : undefined));
     return;
   }
   const cfg = loadConfig();
@@ -520,12 +458,12 @@ async function main(): Promise<void> {
       // see where their password would go. `origin` deliberately omits path
       // and query, which can carry a token.
       ui.warn(
-        `API host is not an official Braavolabs address: ${c.origin}` +
+        t("API host is not an official Braavolabs address: {0}", c.origin) +
           (!c.https
-            ? " — plaintext HTTP; credentials will be refused. Use https://."
+            ? t(" — plaintext HTTP; credentials will be refused. Use https://.")
             : cfg.allowCustomHost
-            ? " — allowed by --allow-custom-host."
-            : " — credentials will be refused. Re-run with --allow-custom-host if you self-host."),
+            ? t(" — allowed by --allow-custom-host.")
+            : t(" — credentials will be refused. Re-run with --allow-custom-host if you self-host.")),
       );
     }
     saveConfig(cfg);
@@ -539,19 +477,19 @@ async function main(): Promise<void> {
         cfg.token = token;
         cfg.refreshToken = undefined;
         saveConfig(cfg);
-        ui.ok(`Token saved · ${cfg.apiUrl}`);
+        ui.ok(t("Token saved · {0}", cfg.apiUrl));
         return;
       }
       const owner = captureConfigOwner(cfg);
-      const email = flag(flags, "email") ?? (await prompt("Email: "));
-      const password = flag(flags, "password") ?? (await promptHidden("Password: "));
+      const email = flag(flags, "email") ?? (await prompt(t("Email: ")));
+      const password = flag(flags, "password") ?? (await promptHidden(t("Password: ")));
       if (captureConfigOwner(cfg).nonce !== owner.nonce) throw new SessionChangedError();
       const d = await login(cfg, { email, password });
       if (!commitLoginIfCurrent(cfg, { token: d.token, refreshToken: d.refreshToken }, owner)) {
         throw new SessionChangedError();
       }
       invalidateSession(cfg);
-      ui.ok(`Logged in as ${d.user?.email ?? email} · ${d.tenant?.name ?? cfg.apiUrl}`);
+      ui.ok(t("Logged in as {0} · {1}", d.user?.email ?? email, d.tenant?.name ?? cfg.apiUrl));
       return;
     }
 
@@ -569,7 +507,7 @@ async function main(): Promise<void> {
           /* offline / expired — local credentials are already cleared */
         }
       }
-      ui.ok("Logged out.");
+      ui.ok(t("Logged out."));
       return;
     }
 
@@ -578,7 +516,7 @@ async function main(): Promise<void> {
       if (!company) usage("usage: braavo use <companyId>");
       cfg.defaultCompany = company;
       saveConfig(cfg);
-      ui.ok(`Default company set: ${company}`);
+      ui.ok(t("Default company set: {0}", company));
       return;
     }
 
@@ -589,7 +527,7 @@ async function main(): Promise<void> {
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const companyId = flag(flags, "company") ?? cfg.defaultCompany;
-      if (!companyId) usage("No company. Run: braavo use <companyId>  (or pass --company <id>)");
+      if (!companyId) usage(t("No company. Run: braavo use <companyId>  (or pass --company <id>)"));
 
       // Explicit pairs prevent ambiguous aliases and silent provider substitution.
       const modelsFlag = flag(flags, "models");
@@ -597,32 +535,32 @@ async function main(): Promise<void> {
       if (flags.models !== undefined) {
         selections = (modelsFlag ?? "").split(",").map(value => {
           const separator = value.trim().indexOf("/");
-          if (separator <= 0 || separator === value.trim().length - 1) usage("--models requires PROVIDER/model pairs, e.g. OPENAI/gpt-4o");
+          if (separator <= 0 || separator === value.trim().length - 1) usage(t("--models requires PROVIDER/model pairs, e.g. OPENAI/gpt-4o"));
           return { provider: value.trim().slice(0, separator).toUpperCase(), model: value.trim().slice(separator + 1) };
         });
-        if (selections.length > 3 || new Set(selections.map(s => JSON.stringify(s))).size !== selections.length) usage("--models requires 1..3 distinct PROVIDER/model pairs");
+        if (selections.length > 3 || new Set(selections.map(s => JSON.stringify(s))).size !== selections.length) usage(t("--models requires 1..3 distinct PROVIDER/model pairs"));
         if (effort === "low" || effort === "medium" || effort === "high") {
           selections = selections.map(selection => ({...selection, reasoningEffort: effort}));
         }
       }
       const n = selections?.length ?? 3;
-      const spin = ui.spinner(`asking ${n} faces…`);
+      const spin = ui.spinner(t("asking {0} faces…", numberText(n)));
       try {
         let sessionId: string | undefined;
         const session = await interruptible(() => sessionId
-          ? `Stopped waiting. Research may still be running; cancel explicitly: braavo cancel ${sessionId} --yes`
-          : "Stopped waiting. The compare request may have started; inspect research sessions before retrying.", async signal => {
+          ? t("Stopped waiting. Research may still be running; cancel explicitly: {0}", `braavo cancel ${sessionId} --yes`)
+          : t("Stopped waiting. The compare request may have started; inspect research sessions before retrying."), async signal => {
           const stub = await startCompare(cfg, { companyId, query, selections }, { signal });
           sessionId = stub.id;
-          spin.update(`asking ${n} faces… (session ${stub.id})`);
+          spin.update(`${t("asking {0} faces…", numberText(n))} (${stub.id})`);
           return pollCompare(cfg, stub.id, {
             signal,
-            onTick: (status) => spin.update(`asking ${n} faces… (${status.toLowerCase()})`),
+            onTick: (status) => spin.update(`${t("asking {0} faces…", numberText(n))} (${statusText(status)})`),
           });
         });
         spin.stop();
         if (String(session.status) !== "COMPLETED") {
-          throw new ApiError(502, `Compare ${String(session.status).toLowerCase()}: ${session.error ?? "no completed result"}`);
+          throw new ApiError(502, `${t(session.status === "CANCELLED" ? "Compare cancelled" : "Compare failed")}${session.error ? `: ${session.error}` : ""}`);
         }
         for (const line of renderCompareLines(ui, session)) console.log(line);
       } catch (e) {
@@ -636,9 +574,9 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo cancel <researchId> --yes [--json]");
-      requireConfirmation(flags, `cancel research session ${id}`);
+      requireConfirmation(flags, t("cancel research session {0}", id));
       const result = await cancelCompare(cfg, id);
-      emit(flags, { id, action: "cancel", result }, () => `${result.status}  ${id}`);
+      emit(flags, { id, action: "cancel", result }, () => `${statusText(result.status)}  ${id}`);
       return;
     }
 
@@ -653,9 +591,9 @@ async function main(): Promise<void> {
       const budget = flag(flags, "budget");
       if (budget) params.budgetUsdCap = Number(budget);
 
-      const spin = ui.spinner("cascading…");
+      const spin = ui.spinner(t("cascading…"));
       try {
-        const res = await cascade(cfg, params);
+        const res = await interruptible(() => t("Local waiting has a deadline. Remote work may continue after cancellation or timeout."), signal => cascade(cfg, params, { signal }));
         spin.stop();
         for (const line of renderCascadeLines(ui, res)) console.log(line);
       } catch (e) {
@@ -682,9 +620,9 @@ async function main(): Promise<void> {
       const sub = positionals[0];
       if (sub === "list") {
         const cat = await mediaCatalog(cfg);
-        console.log(ui.primary("── media provider keys ──"));
+        console.log(ui.primary(`── ${t("media provider keys")} ──`));
         for (const p of cat?.providers ?? []) {
-          console.log(p?.configured ? `  ${ui.primary(p.provider)} ${ui.dim(p.keyMasked ?? "")}` : `  ${ui.dim(p.provider + " — no key")}`);
+          console.log(p?.configured ? `  ${ui.primary(p.provider)} ${ui.dim(p.keyMasked ?? "")}` : `  ${ui.dim(`${p.provider} — ${t("no key")}`)}`);
         }
         return;
       }
@@ -696,10 +634,10 @@ async function main(): Promise<void> {
         const secret = positionals[2];
         if (!secret) usage(`usage: braavo media-key add ${provider} <secret>`);
         const r = await mediaKeyPut(cfg, provider, secret);
-        console.log(ui.primary(`✓ ${provider} media key stored ${ui.dim(r?.keyMasked ?? "")}`));
+        console.log(ui.primary(`✓ ${t("Stored {0} key {1}", provider, ui.dim(r?.keyMasked ?? ""))}`));
       } else if (sub === "rm") {
         await mediaKeyDelete(cfg, provider);
-        console.log(ui.primary(`✓ ${provider} media key removed`));
+        console.log(ui.primary(`✓ ${t("Removed {0} key.", provider)}`));
       } else {
         usage("usage: braavo media-key <add|list|rm> …");
       }
@@ -711,9 +649,9 @@ async function main(): Promise<void> {
       const prompt = positionals.join(" ").trim();
       if (!prompt) usage('usage: braavo image "<prompt>" [--model fal-ai/flux/schnell|dev] [--n 1] [--size 1024x1024] [--yes]');
       const model = flag(flags, "model") ?? IMAGE_MODELS[0];
-      if (!(IMAGE_MODELS as readonly string[]).includes(model)) usage(`--model must be one of: ${IMAGE_MODELS.join(", ")}`);
+      if (!(IMAGE_MODELS as readonly string[]).includes(model)) usage(t("--model must be one of: {0}", IMAGE_MODELS.join(", ")));
       const n = Number(flag(flags, "n") ?? 1);
-      if (!Number.isInteger(n) || n < 1 || n > 4) usage("--n must be an integer 1..4");
+      if (!Number.isInteger(n) || n < 1 || n > 4) usage(t("--n must be an integer 1..4"));
       let size: { width: number; height: number };
       try {
         size = parseSize(flag(flags, "size"));
@@ -726,15 +664,15 @@ async function main(): Promise<void> {
       const optedIn = has(flags, "yes");
       for (const line of renderMediaPreview(ui, preview?.estimate, !!preview?.keyConfigured, optedIn)) console.log(line);
       if (!optedIn) return;
-      const spin = ui.spinner("generating image…");
+      const spin = ui.spinner(t("generating image…"));
       const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
       spin.stop();
-      if (res.status === 402) die(res.body?.message ?? "no FAL media key — run: braavo media-key add FAL <secret>");
+      if (res.status === 402) die(res.body?.message ?? t("No {0} media key — run: braavo media-key add {0} <secret>", "FAL"));
       if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
         for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
-        die("cost changed since preview — re-run to acknowledge the new estimate");
+        die(t("cost changed since preview — re-run to acknowledge the new estimate"));
       }
-      if (res.status < 200 || res.status >= 300) die(`generate failed (${res.status}): ${res.body?.message ?? res.statusText}`);
+      if (res.status < 200 || res.status >= 300) die(t("generation failed ({0}): {1}", res.status, res.body?.message ?? res.statusText));
       for (const line of renderImageResult(ui, res.body?.result)) console.log(line);
       return;
     }
@@ -744,7 +682,7 @@ async function main(): Promise<void> {
       const text = positionals.join(" ").trim();
       if (!text) usage('usage: braavo voice "<text>" [--provider GOOGLE_TTS|ELEVENLABS] [--voice <name>] [--model <id>] [--out voice.mp3] [--yes]');
       const provider = (flag(flags, "provider") ?? TTS_PROVIDERS[0]).toUpperCase();
-      if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) usage(`--provider must be one of: ${TTS_PROVIDERS.join(", ")}`);
+      if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) usage(t("--provider must be one of: {0}", TTS_PROVIDERS.join(", ")));
       const voice = flag(flags, "voice");
       const model = flag(flags, "model");
       const body: Record<string, unknown> = { kind: "tts", provider, text };
@@ -754,21 +692,21 @@ async function main(): Promise<void> {
       const optedIn = has(flags, "yes");
       for (const line of renderMediaPreview(ui, preview?.estimate, !!preview?.keyConfigured, optedIn)) console.log(line);
       if (!optedIn) return;
-      const spin = ui.spinner("synthesizing…");
+      const spin = ui.spinner(t("synthesizing…"));
       const res = await mediaGenerate(cfg, { ...body, acknowledgedCostUsd: estimateUsd(preview?.estimate) });
       spin.stop();
-      if (res.status === 402) die(res.body?.message ?? `no ${provider} media key — run: braavo media-key add ${provider} <secret>`);
+      if (res.status === 402) die(res.body?.message ?? t("No {0} media key — run: braavo media-key add {0} <secret>", provider));
       if (res.status === 400 && res.body?.code === "COST_ACK_REQUIRED") {
         for (const line of renderMediaPreview(ui, res.body?.estimate, true, false)) console.log(line);
-        die("cost changed since preview — re-run to acknowledge the new estimate");
+        die(t("cost changed since preview — re-run to acknowledge the new estimate"));
       }
-      if (res.status < 200 || res.status >= 300) die(`synthesis failed (${res.status}): ${res.body?.message ?? res.statusText}`);
+      if (res.status < 200 || res.status >= 300) die(t("generation failed ({0}): {1}", res.status, res.body?.message ?? res.statusText));
       const audioB64 = res.body?.result?.audioBase64;
-      if (!audioB64) die("no audio in response");
+      if (!audioB64) die(t("no audio in response"));
       const out = flag(flags, "out") ?? "voice.mp3";
       writeFileSync(out, decodeAudio(audioB64));
-      console.log(ui.primary("── saved ──"));
-      console.log(ui.steel(`  ${out} ${ui.dim(`(${res.body?.result?.chars ?? text.length} chars · ${res.body?.result?.mime ?? "audio/mpeg"})`)}`));
+      console.log(ui.primary(`── ${t("saved")} ──`));
+      console.log(ui.steel(`  ${out} ${ui.dim(`(${numberText(res.body?.result?.chars ?? text.length)} ${t("chars")} · ${res.body?.result?.mime ?? "audio/mpeg"})`)}`));
       return;
     }
 
@@ -778,11 +716,13 @@ async function main(): Promise<void> {
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const host = resolveOllamaHost(flag(flags, "host"));
-      const spin = ui.spinner("asking local model…");
+      const spin = ui.spinner(t("asking local model…"));
       try {
-        const model = await resolveOllamaModel(host, flag(flags, "model"));
-        spin.update(`asking ${model}…`);
-        const res = await ollamaChat(host, model, query);
+        const res = await interruptible(() => t("Local waiting has a deadline. Remote work may continue after cancellation or timeout."), async signal => {
+          const model = await resolveOllamaModel(host, flag(flags, "model"), { signal });
+          spin.update(t("asking {0}…", model));
+          return ollamaChat(host, model, query, { signal });
+        });
         spin.stop();
         console.log(res.content);
       } catch (e) {
@@ -798,17 +738,17 @@ async function main(): Promise<void> {
       let query = positionals.slice(1).join(" ").trim();
       if (!provider || !query) usage('usage: braavo direct <provider> "<question>" [--model <name>] [--repo]');
       if (!isDirectProvider(provider)) {
-        usage(`Unknown provider "${provider}". Supported: ${DIRECT_PROVIDERS.join(", ")}`);
+        usage(t("Unknown provider {0}. Supported: {1}", provider, DIRECT_PROVIDERS.join(", ")));
       }
       const repoBlock = resolveRepoBlock(flags.repo !== undefined, die, ui);
       if (repoBlock) query = prependRepoContext(repoBlock, query);
       const store = makeKeyStore();
       const apiKey = store.get(provider);
-      if (!apiKey) die(`no key stored — run: braavo keys add ${provider}`);
+      if (!apiKey) die(t("no key — braavo keys add {0}", provider));
       const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
-      const spin = ui.spinner(`asking ${provider}/${model}…`);
+      const spin = ui.spinner(t("asking {0}…", `${provider}/${model}`));
       try {
-        const res = await directChat(provider, apiKey, model, query);
+        const res = await interruptible(() => t("Local waiting has a deadline. Remote work may continue after cancellation or timeout."), signal => directChat(provider, apiKey, model, query, { signal }));
         spin.stop();
         console.log(res.content);
       } catch (e) {
@@ -855,7 +795,7 @@ async function main(): Promise<void> {
       let cwd: string | undefined;
       let quiet = false;
       let bridged = false;
-      const rest = process.argv.slice(2);
+      const rest = language.argv;
       const vIdx = rest.indexOf(vendor);
       for (let i = vIdx + 1; i < rest.length; i++) {
         const a = rest[i];
@@ -886,7 +826,7 @@ async function main(): Promise<void> {
         const childRef = makeChildRef();
         const handlers = makeSpawnBridgeHandlers(childRef);
         const transport = createRelayTransport({ cfg });
-        const bridge = new RelayBridge(transport, handlers);
+        const bridge = new RelayBridge(transport, handlers, { onOutputDropped: () => ui.warn(t("Companion output omitted: relay is slower than the local program. Local output is unchanged.")) });
         try {
           const code = await spawnVendorBridged(binPath, passthrough, { cwd, bridge, childRef, label: vendor });
           process.exit(code); // own the child's exit code verbatim
@@ -927,11 +867,11 @@ async function main(): Promise<void> {
       } else if (via === "direct") {
         const provider = flag(flags, "provider");
         if (!provider || !isDirectProvider(provider)) {
-          usage(`--via direct needs --provider <${DIRECT_PROVIDERS.join("|")}>`);
+          usage(t("--via direct needs --provider <{0}>", DIRECT_PROVIDERS.join("|")));
         }
         const store = makeKeyStore();
         const apiKey = store.get(provider);
-        if (!apiKey) die(`no key stored — run: braavo keys add ${provider}`);
+        if (!apiKey) die(t("no key — braavo keys add {0}", provider));
         const model = flag(flags, "model") ?? DIRECT_DEFAULT_MODEL[provider];
         ask = async (p) => (await directChat(provider, apiKey, model, p)).content;
       } else if (via === "ask") {
@@ -943,10 +883,10 @@ async function main(): Promise<void> {
           return String((await cascade(cfg, { prompt: p }))?.answer ?? "");
         };
       } else {
-        usage(`unknown --via "${via}". Use: local | direct | ask`);
+        usage(t("Unknown --via {0}. Use: local | direct | ask", via));
       }
 
-      const spin = ui.spinner(`running: ${testCmd}`);
+      const spin = ui.spinner(t("running: {0}", testCmd));
       try {
         const outcome = await runFix(testCmd, { run: defaultRunCmd, ask, repoBlock });
         spin.stop();
@@ -967,12 +907,12 @@ async function main(): Promise<void> {
         case "add": {
           // Parse from raw argv — the "--" separator is deliberately handled here
           // (parseArgs treats "--" as a flag), so the server command is verbatim.
-          const afterAdd = process.argv.slice(2).slice(2); // tokens after "mcp add"
+          const afterAdd = language.argv.slice(2); // tokens after "mcp add"
           const parsed = parseMcpAdd(afterAdd);
           if ("error" in parsed) usage(parsed.error);
           const next = addMcpServer(loadMcpConfig(), parsed.name, parsed.command, parsed.args);
           saveMcpConfig(next);
-          ui.ok(`Added MCP server "${parsed.name}" → ${parsed.command} ${parsed.args.join(" ")}`.trim());
+          ui.ok(`${t("Added MCP server {0}", parsed.name)} → ${parsed.command} ${parsed.args.join(" ")}`.trim());
           return;
         }
         case "list": {
@@ -983,18 +923,18 @@ async function main(): Promise<void> {
           const name = positionals[1];
           if (!name) usage("usage: braavo mcp rm <name>");
           const conf = loadMcpConfig();
-          if (!conf[name]) die(`no such MCP server: ${name}`);
+          if (!conf[name]) die(t("No such MCP server: {0}", name));
           saveMcpConfig(removeMcpServer(conf, name));
-          ui.ok(`Removed MCP server "${name}".`);
+          ui.ok(t("Removed MCP server {0}.", name));
           return;
         }
         case "tools": {
           const name = positionals[1];
           if (!name) usage("usage: braavo mcp tools <name>");
           const def = loadMcpConfig()[name];
-          if (!def) die(`no such MCP server: ${name}  (add it: braavo mcp add ${name} -- <command>)`);
+          if (!def) die(`${t("No such MCP server: {0}", name)}  (braavo mcp add ${name} -- <command>)`);
           const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
-          const spin = ui.spinner(`${name}: initializing…`);
+          const spin = ui.spinner(t("{0}: initializing…", name));
           try {
             const tools = await listServerTools(def, defaultMcpSpawn, {
               timeoutMs,
@@ -1013,18 +953,18 @@ async function main(): Promise<void> {
           const tool = positionals[2];
           if (!name || !tool) usage("usage: braavo mcp call <name> <tool> [--json '<args>'] [--timeout <ms>]");
           const def = loadMcpConfig()[name];
-          if (!def) die(`no such MCP server: ${name}`);
+          if (!def) die(t("No such MCP server: {0}", name));
           let toolArgs: Record<string, unknown> = {};
           const jsonFlag = flag(flags, "json");
           if (jsonFlag) {
             try {
               toolArgs = JSON.parse(jsonFlag);
             } catch {
-              usage(`--json is not valid JSON: ${jsonFlag}`);
+              usage(t("Invalid --json argument."));
             }
           }
           const timeoutMs = flag(flags, "timeout") ? Number(flag(flags, "timeout")) : undefined;
-          const spin = ui.spinner(`${name}: calling ${tool}…`);
+          const spin = ui.spinner(t("{0}: calling {1}…", name, tool));
           try {
             const result = await callServerTool(def, tool, toolArgs, defaultMcpSpawn, {
               timeoutMs,
@@ -1052,32 +992,32 @@ async function main(): Promise<void> {
         case "add": {
           const provider = positionals[1];
           if (!provider) usage("usage: braavo keys add <provider> [--key <secret>]");
-          const secret = flag(flags, "key") ?? process.env.BRAAVO_KEY ?? (await promptHidden(`${provider} key: `));
-          if (!secret) usage("No key provided.");
+          const secret = flag(flags, "key") ?? process.env.BRAAVO_KEY ?? (await promptHidden(t("{0} key: ", provider)));
+          if (!secret) usage(t("No key provided."));
           store.add(provider, secret);
           if (!store.secure) {
-            ui.warn("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform.");
+            ui.warn(t("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform."));
           }
           // Show only a masked fingerprint; never echo the key.
           const shown = store.list().find((k) => k.provider === provider);
-          ui.ok(`Stored ${provider} key ${shown?.masked ?? ""}`.trim());
+          ui.ok(t("Stored {0} key {1}", provider, shown?.masked ?? "").trim());
           return;
         }
         case "list": {
           const entries = store.list();
           if (!entries.length) {
-            ui.info("No keys stored.");
+            ui.info(t("No keys stored."));
             return;
           }
           for (const e of entries) console.log(`${ui.primary(e.provider.padEnd(12))} ${ui.steel(e.masked)}`);
-          if (!store.secure) ui.warn("Keys are in a plaintext file (chmod 600) — no OS keychain on this platform.");
+          if (!store.secure) ui.warn(t("Keys are in a plaintext file (chmod 600) — no OS keychain on this platform."));
           return;
         }
         case "rm": {
           const provider = positionals[1];
           if (!provider) usage("usage: braavo keys rm <provider>");
           store.remove(provider);
-          ui.ok(`Removed ${provider} key.`);
+          ui.ok(t("Removed {0} key.", provider));
           return;
         }
         default:
@@ -1099,11 +1039,11 @@ async function main(): Promise<void> {
       const d = await apiFetch("/dashboard/runs?limit=20", { cfg });
       const runs: any[] = d.runs ?? [];
       if (!runs.length) {
-        console.log("No runs yet.");
+        console.log(t("No runs yet."));
         return;
       }
       for (const r of runs) {
-        console.log(`${String(r.status ?? "").padEnd(10)}  ${r.id}  ${r.pipelineId ?? ""}`);
+        console.log(`${statusText(r.status).padEnd(10)}  ${r.id}  ${r.pipelineId ?? ""}${r.createdAt ? `  ${dateText(r.createdAt)}` : ""}`);
       }
       return;
     }
@@ -1112,13 +1052,13 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo run <pipelineId> --yes [--json]");
-      requireConfirmation(flags, `start run for pipeline ${id}`);
+      requireConfirmation(flags, t("start run for pipeline {0}", id));
       const d = await apiFetch(`/pipelines/${encodeURIComponent(id)}/run`, { method: "POST", body: { input: {} }, cfg });
       if (typeof d?.id !== "string" || !d.id.trim()) {
-        throw new ApiError(502, "Invalid run response; inspect recent runs before retrying.");
+        throw new ApiError(502, t("Invalid run response; inspect recent runs before retrying."));
       }
       if (flags.json) emit(flags, d, () => "");
-      else ui.ok(`Run started: ${d.id}`);
+      else ui.ok(t("Run started: {0}", d.id));
       return;
     }
 
@@ -1127,9 +1067,9 @@ async function main(): Promise<void> {
       const id = positionals[0];
       const message = positionals.slice(1).join(" ");
       if (!id || !message) usage("usage: braavo steer <runId> <message...>");
-      requireConfirmation(flags, `steer run ${id}`);
+      requireConfirmation(flags, t("steer run {0}", id));
       await apiFetch(`/runs/${id}/steer`, { method: "POST", body: { content: message }, cfg });
-      ui.ok("Steering sent — the agent picks it up on its next turn.");
+      ui.ok(t("Steering sent — the agent picks it up on its next turn."));
       return;
     }
 
@@ -1140,13 +1080,13 @@ async function main(): Promise<void> {
       const d = await apiFetch(path, { cfg });
       const list: any[] = d.handoffs ?? [];
       if (!list.length) {
-        console.log(openOnly ? "No open handoffs." : "No handoffs yet.");
+        console.log(t(openOnly ? "No open handoffs." : "No handoffs yet."));
         return;
       }
       for (const h of list) {
         const to = h.toProvider ? `→${h.toProvider}` : "";
         console.log(
-          `${String(h.status ?? "").padEnd(9)}  ${h.id}  run=${h.runId}  from=${h.fromProvider ?? "?"}${to}  ${h.reason ?? ""}`,
+          `${statusText(h.status).padEnd(9)}  ${h.id}  run=${h.runId}  from=${h.fromProvider ?? "?"}${to}  ${h.reason ?? ""}`,
         );
       }
       return;
@@ -1156,16 +1096,16 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo handoff <runId> [--reason <text>]");
-      requireConfirmation(flags, `open handoff for run ${id}`);
+      requireConfirmation(flags, t("open handoff for run {0}", id));
       const body: Record<string, unknown> = {};
       const reason = flag(flags, "reason");
       if (reason) body.reason = reason;
       const d = await apiFetch(`/runs/${id}/handoff`, { method: "POST", body, cfg });
-      ui.ok(`Handoff opened: ${d.handoffId}  (run ${d.status})`);
+      ui.ok(`${t("Handoff opened")}: ${d.handoffId}  (${statusText(d.status)})`);
       if (d.checkpointPending) {
-        console.log(`  Checkpoint is freezing at the next turn boundary — then run: braavo continue ${id} --provider <P>`);
+        console.log(`  ${t("Checkpoint is freezing at the next turn boundary — then run: {0}", `braavo continue ${id} --provider <P>`)}`);
       } else {
-        console.log(`  Ready to claim. Run: braavo continue ${id} --provider <P>`);
+        console.log(`  ${t("Ready to claim. Run: {0}", `braavo continue ${id} --provider <P>`)}`);
       }
       return;
     }
@@ -1175,7 +1115,7 @@ async function main(): Promise<void> {
       const id = positionals[0];
       const provider = flag(flags, "provider");
       if (!id || !provider) usage("usage: braavo continue <runId> --provider <P> [--model <m>] [--base-url <u>]");
-      requireConfirmation(flags, `continue run ${id} with provider ${provider}`);
+      requireConfirmation(flags, t("continue run {0} with provider {1}", id, provider));
       const body: Record<string, unknown> = { provider };
       const model = flag(flags, "model");
       if (model) body.model = model;
@@ -1191,9 +1131,9 @@ async function main(): Promise<void> {
         if (r.status >= 200 && r.status < 300) {
           if (r.body?.success !== true || ["handoffId", "toProvider", "toModel", "status"].some(key =>
             typeof r.body?.[key] !== "string" || !r.body[key].trim())) {
-            throw new ApiError(502, "Invalid handoff response; inspect the run before retrying.");
+            throw new ApiError(502, t("Invalid handoff response; inspect the run before retrying."));
           }
-          ui.ok(`Handoff claimed: ${r.body.handoffId}  →  ${r.body.toProvider}/${r.body.toModel}  (run ${r.body.status})`);
+          ui.ok(`${t("Handoff claimed")}: ${r.body.handoffId}  →  ${r.body.toProvider}/${r.body.toModel}  (${statusText(r.body.status)})`);
           return;
         }
         const errMsg = r.body?.error ?? r.body?.message ?? r.statusText;
@@ -1202,7 +1142,7 @@ async function main(): Promise<void> {
         const pending = r.body?.code === "CHECKPOINT_PENDING" || r.body?.error ===
           "Checkpoint not frozen yet — the live loop hasn't reached a turn boundary. Retry shortly.";
         if (r.status === 409 && pending && attempt < MAX_ATTEMPTS) {
-          console.log(`  Checkpoint still freezing (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in 2s…`);
+          console.log(`  ${t("Checkpoint still freezing (attempt {0}/{1}) — retrying in 2s…", numberText(attempt), numberText(MAX_ATTEMPTS))}`);
           await sleep(2000);
           continue;
         }
@@ -1215,11 +1155,11 @@ async function main(): Promise<void> {
       const d = await apiFetch("/external-connections", { cfg });
       const list: any[] = Array.isArray(d) ? d : [];
       if (!list.length) {
-        console.log("No connections.");
+        console.log(t("No connections."));
         return;
       }
       for (const c of list) {
-        console.log(`${String(c.status ?? "").padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`);
+        console.log(`${statusText(c.status).padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`);
       }
       return;
     }
@@ -1236,7 +1176,7 @@ async function main(): Promise<void> {
       const failed = checks.filter((c) => c.status === "fail");
       emit(flags, { checks, ok: failed.length === 0 }, () =>
         checks
-          .map((c) => `${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${c.name.padEnd(22)} ${c.detail}`)
+          .map((c) => { const human = humanDoctorCheck(c); return `${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${human.name.padEnd(22)} ${human.detail}`; })
           .join("\n"),
       );
       if (failed.length) process.exitCode = EXIT.GENERAL;
@@ -1248,7 +1188,7 @@ async function main(): Promise<void> {
       const c: Config = { ...cfg, apiUrl: api };
       saveConfig(c);
       emit(flags, { apiUrl: c.apiUrl, configPath: CONFIG_PATH }, () =>
-        `Initialised. API ${c.apiUrl}\nConfig ${CONFIG_PATH}\nNext: braavo login`,
+        t("Initialised. API {0}\nConfig {1}\nNext: braavo login", c.apiUrl, CONFIG_PATH),
       );
       return;
     }
@@ -1259,13 +1199,13 @@ async function main(): Promise<void> {
       if (!id) usage("usage: braavo watch <runId> [--json]");
       const terminal = new Set(["COMPLETED", "FAILED", "STOPPED", "CANCELLED"]);
       const result = await interruptible(
-        () => `Stopped watching ${id}. The run may still be running; stop explicitly: braavo stop ${id} --yes`,
+        () => t("Stopped watching {0}. The run may still be running; stop explicitly: {1}", id, `braavo stop ${id} --yes`),
         signal => pollRun(cfg, id, {
           signal,
-          onTick: status => { if (!flags.json && !terminal.has(status)) console.log(`${status}  ${id}`); },
+          onTick: status => { if (!flags.json && !terminal.has(status)) console.log(`${statusText(status)}  ${id}`); },
         }),
       );
-      emit(flags, { id, status: result.status, terminal: true }, () => `${result.status}  ${id}`);
+      emit(flags, { id, status: result.status, terminal: true }, () => `${statusText(result.status)}  ${id}`);
       if (result.status !== "COMPLETED") process.exitCode = EXIT.GENERAL;
       return;
     }
@@ -1275,7 +1215,7 @@ async function main(): Promise<void> {
       const id = positionals[0];
       if (!id) usage("usage: braavo approve <approvalId> [--deny] [--yes]");
       const decision = has(flags, "deny") ? "REJECTED" : "APPROVED";
-      requireConfirmation(flags, `${decision === "REJECTED" ? "deny" : "approve"} approval ${id}`);
+      requireConfirmation(flags, getLocale() === "en" ? `${decision === "REJECTED" ? "deny" : "approve"} approval ${id}` : t(decision === "REJECTED" ? "reject action {0}" : "approve action {0}", id));
       const d = await apiFetch(`/approvals/${id}/decide`, {
         method: "POST",
         body: { decision, reason: flag(flags, "reason") ?? "via braavo cli" },
@@ -1285,8 +1225,8 @@ async function main(): Promise<void> {
       try { outcome = parseApprovalDecision(d, decision); }
       catch (error) { throw new ApiError(502, (error as Error).message); }
       emit(flags, { id, decision, result: d }, () => outcome.claimFailed
-        ? `APPROVED  ${id} — approval recorded; handoff incomplete: ${outcome.error ?? "needs attention"}. Check the run.`
-        : `${decision}  ${id}`);
+        ? `${statusText("APPROVED")}  ${id} — ${t("approval recorded; handoff incomplete")}: ${outcome.error ?? "?"}. ${t("Check the run.")}`
+        : `${statusText(decision)}  ${id}`);
       if (outcome.claimFailed) process.exitCode = EXIT.API;
       return;
     }
@@ -1295,9 +1235,9 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo pause <runId> [--yes]");
-      requireConfirmation(flags, `pause run ${id}`);
+      requireConfirmation(flags, t("pause run {0}", id));
       const d = await apiFetch(`/runs/${id}/pause`, { method: "POST", body: {}, cfg });
-      emit(flags, { id, action: "pause", result: d }, () => `Paused ${id}`);
+      emit(flags, { id, action: "pause", result: d }, () => t("Paused {0}", id));
       return;
     }
 
@@ -1305,12 +1245,12 @@ async function main(): Promise<void> {
       requireAuth(cfg);
       const id = positionals[0];
       if (!id) usage("usage: braavo stop <runId> [--yes]");
-      requireConfirmation(flags, `stop run ${id}`);
+      requireConfirmation(flags, t("stop run {0}", id));
       const d = await apiFetch(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST", body: {}, cfg });
       if (d?.success !== true || d.status !== "CANCELLED") {
-        throw new ApiError(502, "Invalid stop response; inspect the run before retrying.");
+        throw new ApiError(502, t("Invalid stop response; inspect the run before retrying."));
       }
-      emit(flags, { id, action: "stop", result: d }, () => `Stopped ${id}`);
+      emit(flags, { id, action: "stop", result: d }, () => t("Stopped {0}", id));
       return;
     }
 
@@ -1323,10 +1263,10 @@ async function main(): Promise<void> {
       ]);
       const data = { usage, savings: savings?.body ?? null, days: Number(days) };
       emit(flags, data, () => {
-        const lines = [`Usage (${days}d)`];
+        const lines = [t("Usage ({0}d)", numberText(days))];
         for (const [k, v] of Object.entries(usage ?? {})) {
           if (typeof v === "object") continue;
-          lines.push(`  ${k.padEnd(24)} ${String(v)}`);
+          lines.push(`  ${k.padEnd(24)} ${typeof v === "number" ? numberText(v) : String(v)}`);
         }
         return lines.join("\n");
       });
@@ -1345,7 +1285,7 @@ async function main(): Promise<void> {
         apiFetch("/governance/risks", { cfg, raw: true }),
       ]);
       emit(flags, { config, risks: risks?.body ?? null }, () =>
-        `Governance config:\n${JSON.stringify(config, null, 2)}`,
+        `${t("Governance config:")}\n${JSON.stringify(config, null, 2)}`,
       );
       return;
     }
@@ -1362,11 +1302,11 @@ async function main(): Promise<void> {
       const anchorHead = flag(flags, "anchor-head");
       const anchorParts = [anchorCount, anchorGenesis, anchorHead];
       if (anchorParts.some(Boolean) && !anchorParts.every(Boolean)) {
-        usage("audit anchors are all-or-none: --anchor-count, --anchor-genesis, and --anchor-head");
+        usage(t("audit anchors are all-or-none: --anchor-count, --anchor-genesis, and --anchor-head"));
       }
       const parsedCount = anchorCount === undefined ? undefined : Number(anchorCount);
       if (parsedCount !== undefined && (!Number.isSafeInteger(parsedCount) || parsedCount < 1)) {
-        usage("--anchor-count must be a positive integer");
+        usage(t("--anchor-count must be a positive integer"));
       }
       const anchor = parsedCount === undefined ? undefined : {
         count: parsedCount,
@@ -1376,8 +1316,8 @@ async function main(): Promise<void> {
       const result = verifyEvidenceChain(d, anchor);
       emit(flags, result, () =>
         result.ok
-          ? `Evidence chain OK (${result.checked} record(s) verified)`
-          : `Evidence chain FAILED${result.brokenAt ? ` at ${result.brokenAt}` : ""}: ${result.reason}`,
+          ? t("Evidence chain OK ({0} record(s) verified)", numberText(result.checked))
+          : `${t("Evidence chain FAILED")}${result.brokenAt ? ` ${result.brokenAt}` : ""}: ${humanChainReason(result)}`,
       );
       if (!result.ok) process.exitCode = EXIT.VERIFICATION_FAILED;
       return;
@@ -1389,8 +1329,8 @@ async function main(): Promise<void> {
       const list: any[] = Array.isArray(d) ? d : [];
       emit(flags, { connections: list }, () =>
         list.length
-          ? list.map((c) => `${String(c.status ?? "").padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`).join("\n")
-          : "No connections.",
+          ? list.map((c) => `${statusText(c.status).padEnd(8)}  ${String(c.platform ?? "").padEnd(7)}  ${c.label}  ${c.baseUrl}`).join("\n")
+          : t("No connections."),
       );
       return;
     }
@@ -1403,8 +1343,8 @@ async function main(): Promise<void> {
       const agents: any[] = d.agents ?? [];
       emit(flags, { companyId: company, agents }, () =>
         agents.length
-          ? agents.map((a) => `${String(a.status ?? "").padEnd(10)}  ${a.role ?? ""}  ${a.name ?? a.id}`).join("\n")
-          : "No agents in this company.",
+          ? agents.map((a) => `${statusText(a.status).padEnd(10)}  ${a.role ?? ""}  ${a.name ?? a.id}`).join("\n")
+          : t("No agents in this company."),
       );
       return;
     }
@@ -1415,8 +1355,8 @@ async function main(): Promise<void> {
       const list: any[] = Array.isArray(d) ? d : (d?.sessions ?? []);
       emit(flags, { sessions: list }, () =>
         list.length
-          ? list.map((x: any) => `${String(x.state ?? "").padEnd(10)}  ${x.id}  ${x.deviceId ?? ""}`).join("\n")
-          : "No active sessions.",
+          ? list.map((x: any) => `${statusText(x.state ?? x.status).padEnd(10)}  ${x.id}  ${x.deviceId ?? ""}`).join("\n")
+          : t("No active sessions."),
       );
       return;
     }

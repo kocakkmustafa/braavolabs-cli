@@ -5,6 +5,7 @@ import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import * as client from "../client";
+import * as locale from "../locale";
 import type { Config } from "../config";
 
 const source = ts.createSourceFile("braavo.ts", readFileSync(join(process.cwd(), "src", "braavo.ts"), "utf8"), ts.ScriptTarget.Latest, true);
@@ -18,7 +19,7 @@ function commandCase(command: string, context: Record<string, unknown>) {
   if (!found) throw Error("Missing actual command " + command);
   const compiled = ts.transpileModule(`async function actualCommand(){${found.statements.map(node => node.getText(source)).join("\n")}}\nactualCommand;`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return runInNewContext(compiled, { ...client, ...context }) as () => Promise<void>;
+  return runInNewContext(compiled, { ...client, ...locale, ...context }) as () => Promise<void>;
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;

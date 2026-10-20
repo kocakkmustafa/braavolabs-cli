@@ -7,6 +7,7 @@
  * independently.
  */
 import { createHash } from "node:crypto";
+import { t, numberText } from "./locale";
 
 export interface ChainResult {
   ok: boolean;
@@ -20,6 +21,18 @@ export interface TrustedChainAnchor {
   count: number;
   genesisHash: string;
   headHash: string;
+}
+
+/** Authored local diagnostics only; ChainResult and --json remain unchanged. */
+export function humanChainReason(result: ChainResult): string {
+  const reason = result.reason ?? "";
+  const previous = /^previousHash (.+) does not match the prior record's hash (.+)$/.exec(reason);
+  if (previous) return t("previousHash {0} does not match the prior record's hash {1}", previous[1], previous[2]);
+  const content = /^content hash mismatch \(recomputed (.+)\)$/.exec(reason);
+  if (content) return t("content hash mismatch (recomputed {0})", content[1]);
+  const count = /^trusted count (\d+) does not match response count (\d+)$/.exec(reason);
+  if (count) return t("trusted count {0} does not match response count {1}", numberText(count[1]), numberText(count[2]));
+  return t(reason);
 }
 
 interface ChainRecord {
