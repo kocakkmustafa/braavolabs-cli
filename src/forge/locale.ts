@@ -1,12 +1,23 @@
 /** Authored CLI text only. Values, protocol tokens, provider output and JSON stay verbatim. */
-export const LOCALES = ["tr", "en", "es-419", "pt-BR", "de", "fr", "ja", "ar"] as const;
+import { EXTRA_LOCALES, extraRows } from "./locale-extra";
+export const LOCALES = ["tr", "en", "es-419", "pt-BR", "de", "fr", "ja", "ar", "it", "ko", "id", "pl", "hi", "zh-Hans"] as const;
 export type Locale = (typeof LOCALES)[number];
-const intlLocales: Record<Locale, string> = { tr: "tr-TR", en: "en-US", "es-419": "es-419", "pt-BR": "pt-BR", de: "de-DE", fr: "fr-FR", ja: "ja-JP", ar: "ar-u-nu-arab" };
+const intlLocales: Record<Locale, string> = { tr: "tr-TR", en: "en-US", "es-419": "es-419", "pt-BR": "pt-BR", de: "de-DE", fr: "fr-FR", ja: "ja-JP", ar: "ar-u-nu-arab", it: "it-IT", ko: "ko-KR", id: "id-ID", pl: "pl-PL", hi: "hi-IN", "zh-Hans": "zh-Hans-CN" };
 let active: Locale = "en";
-export function resolveLocale(value?: string): Locale {
-  const normalized = value?.trim().replace(/_/g, "-").toLowerCase();
-  return LOCALES.find(locale => locale.toLowerCase() === normalized) ?? "en";
+function supportedLocale(value?: string): Locale | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed = new Intl.Locale(value.trim().replace(/_/g, "-"));
+    const exact = LOCALES.find(locale => locale.toLowerCase() === parsed.baseName.toLowerCase());
+    if (exact) return exact;
+    // A Traditional Chinese preference must not silently select Simplified Chinese.
+    if (parsed.language === "zh") return parsed.maximize().script === "Hans" ? "zh-Hans" : undefined;
+    if (parsed.language === "pt") return !parsed.region || parsed.region === "BR" ? "pt-BR" : undefined;
+    if (parsed.language === "es") return !parsed.region || parsed.region !== "ES" ? "es-419" : undefined;
+    return LOCALES.find(locale => locale === parsed.language);
+  } catch { return undefined; }
 }
+export function resolveLocale(value?: string): Locale { return supportedLocale(value) ?? "en"; }
 export function setLocale(value?: string): Locale { active = resolveLocale(value); return active; }
 export function getLocale(): Locale { return active; }
 
@@ -26,7 +37,7 @@ export function localeArgs(argv: string[], env = process.env.BRAAVO_LOCALE): { a
     else clean.push(arg);
   }
   const locale = resolveLocale(selected);
-  const unsupported = selected && !LOCALES.some(x => x.toLowerCase() === selected!.trim().replace(/_/g, "-").toLowerCase()) ? selected : undefined;
+  const unsupported = selected && !supportedLocale(selected) ? selected : undefined;
   return { argv: clean, locale, unsupported: unsupported?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?").slice(0, 80), missing };
 }
 
@@ -63,7 +74,7 @@ const rows = [
 ["not installed", "kurulu değil", "no instalado", "não instalado", "nicht installiert", "non installé", "未インストール", "غير مثبّت"],
 ["spawn vendors (your own authenticated CLI)", "spawn sağlayıcıları (kendi oturumunuzdaki CLI)", "proveedores spawn (tu CLI autenticada)", "provedores spawn (sua CLI autenticada)", "spawn-Anbieter (eigene angemeldete CLI)", "fournisseurs spawn (votre CLI connectée)", "spawn プロバイダー（ログイン済みの自分の CLI）", "مزوّدو spawn (واجهة CLI الخاصة بك بعد تسجيل الدخول)"],
 ["Official CLI; your account and the provider terms apply.", "Resmî CLI; kendi hesabınız ve sağlayıcı koşulları geçerlidir.", "CLI oficial; se aplican tu cuenta y los términos del proveedor.", "CLI oficial; valem sua conta e os termos do provedor.", "Offizielle CLI; eigenes Konto und Anbieterbedingungen gelten.", "CLI officielle ; votre compte et les conditions du fournisseur s’appliquent.", "公式 CLI を使用します。自分のアカウントとプロバイダーの利用規約が適用されます。", "واجهة CLI رسمية؛ يسري حسابك وشروط المزوّد."],
-["{0} CLI not found. Log in with the official {1} binary first, or use API-key mode:", "{0} CLI bulunamadı. Önce resmî {1} uygulamasında oturum açın veya API anahtarı modunu kullanın:", "No se encontró la CLI {0}. Inicia sesión con el binario oficial {1} o usa una clave API:", "CLI {0} não encontrada. Entre no binário oficial {1} ou use uma chave API:", "{0}-CLI fehlt. Zuerst mit der offiziellen {1}-CLI anmelden oder API-Schlüssel verwenden:", "CLI {0} introuvable. Connectez-vous avec le binaire officiel {1} ou utilisez une clé API :", "{0} CLI が見つかりません。公式 {1} でログインするか API キーを使用してください:", "لم تُعثر على CLI لـ {0}. سجّل الدخول عبر الملف الرسمي لـ {1} أو استخدم مفتاح API:"],
+["{0} CLI not found. Log in with the official {1} binary first, or use API-key mode:", "{0} CLI bulunamadı. Önce resmî {1} uygulamasında oturum açın veya API anahtarı modunu kullanın:", "No se encontró la CLI {0}. Inicia sesión con el binario oficial {1} o usa una clave API:", "CLI {0} não encontrada. Entre no binário oficial {1} ou use uma chave API:", "{0}-CLI fehlt. Zuerst mit der offiziellen {1}-CLI anmelden oder API-Schlüssel verwenden:", "CLI {0} introuvable. Connectez-vous avec le binaire officiel {1} ou utilisez une clé API :", "{0} CLI が見つかりません。公式 {1} でログインするか API キーを使用してください:", "لم يُعثر على CLI لـ {0}. سجّل الدخول عبر الملف الرسمي لـ {1} أو استخدم مفتاح API:"],
 ["✓ tests already green", "✓ testler zaten başarılı", "✓ las pruebas ya pasan", "✓ os testes já passam", "✓ Tests bereits erfolgreich", "✓ les tests réussissent déjà", "✓ テストは成功しています", "✓ الاختبارات ناجحة بالفعل"],
 ["suggestion only — review before applying", "yalnızca öneri — uygulamadan önce inceleyin", "solo sugerencia — revisa antes de aplicar", "apenas sugestão — revise antes de aplicar", "nur ein Vorschlag — vor Anwendung prüfen", "suggestion uniquement — vérifiez avant application", "提案のみ。適用前に確認してください", "اقتراح فقط — راجعه قبل التطبيق"],
 ["(exit {0} — braavo never applies changes)", "(çıkış {0} — braavo değişiklik uygulamaz)", "(salida {0} — braavo no aplica cambios)", "(saída {0} — braavo não aplica alterações)", "(Exit {0} — braavo wendet keine Änderungen an)", "(sortie {0} — braavo n’applique aucun changement)", "(終了 {0} — braavo は変更を適用しません)", "(خروج {0} — لا يطبّق braavo أي تغييرات)"],
@@ -84,8 +95,8 @@ const rows = [
 ["No key provided.", "Anahtar girilmedi.", "No se proporcionó una clave.", "Nenhuma chave informada.", "Kein Schlüssel angegeben.", "Aucune clé fournie.", "キーが入力されていません。", "لم يُقدّم مفتاح."],
 ["Stored {0} key {1}", "{0} anahtarı kaydedildi {1}", "Clave de {0} guardada {1}", "Chave de {0} salva {1}", "{0}-Schlüssel gespeichert {1}", "Clé {0} enregistrée {1}", "{0} のキーを保存しました {1}", "تم حفظ مفتاح {0} {1}"],
 ["Removed {0} key.", "{0} anahtarı kaldırıldı.", "Clave de {0} eliminada.", "Chave de {0} removida.", "{0}-Schlüssel entfernt.", "Clé {0} supprimée.", "{0} のキーを削除しました。", "تم حذف مفتاح {0}."],
-["Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform.", "~/.braavo/keys.json içinde saklandı (chmod 600) — bu platformda OS anahtar kasası yok.", "Guardada en ~/.braavo/keys.json (chmod 600); esta plataforma no tiene llavero del sistema.", "Salva em ~/.braavo/keys.json (chmod 600); esta plataforma não tem cofre do sistema.", "In ~/.braavo/keys.json gespeichert (chmod600); kein OS-Schlüsselspeicher auf dieser Plattform.", "Enregistrée dans ~/.braavo/keys.json (chmod600) ; pas de trousseau système sur cette plateforme.", "~/.braavo/keys.json に保存 (chmod600)。この環境ではOSキーストアを使いません。", "حُفظ في ~/.braavo/keys.json ‏(chmod600)؛ لا تتوفر خزنة مفاتيح للنظام على هذه المنصة."],
-["Keys are in a plaintext file (chmod 600) — no OS keychain on this platform.", "Anahtarlar düz metin dosyada (chmod 600) — bu platformda OS anahtar kasası yok.", "Las claves están en texto plano (chmod600); no hay llavero del sistema.", "As chaves estão em texto simples (chmod600); não há cofre do sistema.", "Schlüssel liegen im Klartext (chmod600); kein OS-Schlüsselspeicher.", "Clés dans un fichier en clair (chmod600) ; pas de trousseau système.", "キーは平文ファイルです (chmod600)。OSキーストアはありません。", "المفاتيح في ملف نصّي غير مشفّر (chmod600)؛ لا تتوفر خزنة مفاتيح للنظام."],
+["Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform.", "~/.braavo/keys.json içinde saklandı (chmod 600) — bu platformda OS anahtar kasası yok.", "Guardada en ~/.braavo/keys.json (chmod 600); esta plataforma no tiene llavero del sistema.", "Salva em ~/.braavo/keys.json (chmod 600); esta plataforma não tem cofre do sistema.", "In ~/.braavo/keys.json gespeichert (chmod 600); kein OS-Schlüsselspeicher auf dieser Plattform.", "Enregistrée dans ~/.braavo/keys.json (chmod 600) ; pas de trousseau système sur cette plateforme.", "~/.braavo/keys.json に保存 (chmod 600)。この環境ではOSキーストアを使いません。", "حُفظ في ~/.braavo/keys.json ‏(chmod 600)؛ لا تتوفر خزنة مفاتيح للنظام على هذه المنصة."],
+["Keys are in a plaintext file (chmod 600) — no OS keychain on this platform.", "Anahtarlar düz metin dosyada (chmod 600) — bu platformda OS anahtar kasası yok.", "Las claves están en texto plano (chmod 600); no hay llavero del sistema.", "As chaves estão em texto simples (chmod 600); não há cofre do sistema.", "Schlüssel liegen im Klartext (chmod 600); kein OS-Schlüsselspeicher.", "Clés dans un fichier en clair (chmod 600) ; pas de trousseau système.", "キーは平文ファイルです (chmod 600)。OSキーストアはありません。", "المفاتيح في ملف نصّي غير مشفّر (chmod 600)؛ لا تتوفر خزنة مفاتيح للنظام."],
 ["period", "dönem", "período", "período", "Zeitraum", "période", "期間", "الفترة"],
 ["actual", "gerçekleşen", "real", "real", "tatsächlich", "réel", "実費", "الفعلي"],
 ["baseline", "referans", "referencia", "referência", "Referenz", "référence", "基準", "المرجع"],
@@ -94,14 +105,13 @@ const rows = [
 ["cheap routing", "ucuz yönlendirme", "ruta económica", "roteamento econômico", "günstiges Routing", "routage économique", "低コスト経路", "توجيه اقتصادي"],
 ["cache", "önbellek", "caché", "cache", "Cache", "cache", "キャッシュ", "التخزين المؤقت"],
 ["retrieval", "geri getirme", "recuperación", "recuperação", "Abruf", "récupération", "検索", "الاسترجاع"],
-["{0} days", "{0} gün", "{0} días", "{0} dias", "{0} Tage", "{0} jours", "{0}日", "{0} يوم"],
-["≈ saved {0} · {1} tokens", "≈ tasarruf {0} · {1} token", "≈ ahorro {0} · {1} tokens", "≈ economia {0} · {1} tokens", "≈ gespart {0} · {1} Tokens", "≈ économie {0} · {1} tokens", "≈ 削減 {0} · {1}トークン", "≈ توفير {0} · {1} رمز"],
+["≈ saved {0} · tokens: {1}", "≈ tasarruf {0} · token: {1}", "≈ ahorro {0} · tokens: {1}", "≈ economia {0} · tokens: {1}", "≈ gespart {0} · Tokens: {1}", "≈ économie {0} · tokens : {1}", "≈ 削減 {0} · トークン数: {1}", "≈ توفير {0} · الرموز: {1}"],
 ["tier", "katman", "nivel", "nível", "Stufe", "niveau", "段階", "المستوى"],
 ["confidence", "güven", "confianza", "confiança", "Konfidenz", "confiance", "信頼度", "الثقة"],
 ["escalated", "üst modele geçildi", "escalado", "escalado", "eskaliert", "escaladé", "上位へ移行", "تم التصعيد"],
 ["no escalation", "üst modele geçilmedi", "sin escalamiento", "sem escalonamento", "nicht eskaliert", "sans escalade", "上位移行なし", "دون تصعيد"],
 ["stopped: {0}", "durdu: {0}", "detenido: {0}", "interrompido: {0}", "angehalten: {0}", "arrêté : {0}", "停止: {0}", "متوقف: {0}"],
-["asking {0} faces…", "{0} modele soruluyor…", "consultando {0} modelos…", "consultando {0} modelos…", "{0} Modelle werden befragt…", "consultation de {0} modèles…", "{0}モデルに問い合わせ中…", "جارٍ سؤال {0} نماذج…"],
+["asking models ({0})…", "modellere soruluyor ({0})…", "consultando modelos ({0})…", "consultando modelos ({0})…", "Modelle werden befragt ({0})…", "consultation des modèles ({0})…", "モデルに問い合わせ中（{0}）…", "جارٍ سؤال النماذج ({0})…"],
 ["asking {0}…", "{0} modeline soruluyor…", "consultando {0}…", "consultando {0}…", "Anfrage an {0}…", "consultation de {0}…", "{0}に問い合わせ中…", "جارٍ سؤال {0}…"],
 ["cascading…", "modeller sırayla deneniyor…", "ejecutando cascada…", "executando cascata…", "Kaskade läuft…", "cascade en cours…", "カスケード実行中…", "جارٍ تشغيل التسلسل…"],
 ["asking local model…", "yerel modele soruluyor…", "consultando el modelo local…", "consultando o modelo local…", "Lokales Modell wird befragt…", "consultation du modèle local…", "ローカルモデルに問い合わせ中…", "جارٍ سؤال النموذج المحلي…"],
@@ -121,10 +131,9 @@ const rows = [
 ["synthesizing…", "ses oluşturuluyor…", "sintetizando audio…", "sintetizando áudio…", "Audio wird erstellt…", "synthèse audio…", "音声生成中…", "جارٍ إنشاء الصوت…"],
 ["no audio in response", "yanıtta ses yok", "no hay audio en la respuesta", "nenhum áudio na resposta", "kein Audio in der Antwort", "aucun audio dans la réponse", "応答に音声がありません", "لا يوجد صوت في الاستجابة"],
 ["no image URL in response", "yanıtta görsel URL'si yok", "no hay URL de imagen en la respuesta", "nenhuma URL de imagem na resposta", "keine Bild-URL in der Antwort", "aucune URL d’image dans la réponse", "応答に画像URLがありません", "لا يوجد رابط صورة في الاستجابة"],
-["{0} images", "{0} görsel", "{0} imágenes", "{0} imagens", "{0} Bilder", "{0} images", "{0}枚の画像", "{0} صور"],
 ["cost changed since preview — re-run to acknowledge the new estimate", "maliyet önizlemeden sonra değişti — yeni tahmini onaylamak için yeniden çalıştırın", "el costo cambió; vuelve a ejecutar para aceptar la nueva estimación", "o custo mudou; execute novamente para aceitar a nova estimativa", "Kosten geändert; erneut ausführen, um die neue Schätzung zu bestätigen", "coût modifié ; relancez pour accepter la nouvelle estimation", "見積額が変わりました。再実行して新しい見積もりを確認してください", "تغيّرت التكلفة؛ أعد التشغيل لتأكيد التقدير الجديد"],
 ["No provider key — generation will fail (402). Add one:", "Sağlayıcı anahtarı yok — üretim başarısız olur (402). Ekleyin:", "No hay clave del proveedor; la generación fallará (402). Agrega:", "Sem chave do provedor; a geração falhará (402). Adicione:", "Kein Anbieterschlüssel; Generierung schlägt fehl (402). Hinzufügen:", "Aucune clé fournisseur ; la génération échouera (402). Ajoutez :", "プロバイダーのキーがないため生成できません (402)。追加:", "لا يوجد مفتاح للمزوّد؛ سيفشل الإنشاء (402). أضف:"],
-["Add --yes to generate (this spends on your provider key)", "Üretmek için --yes ekleyin (sağlayıcı anahtarınızdan ücret harcanır)", "Agrega --yes para generar (se cobra a tu clave del proveedor)", "Adicione --yes para gerar (usa o saldo da sua chave do provedor)", "Zum Erstellen --yes ergänzen (Kosten über Ihren Anbieterschlüssel)", "Ajoutez --yes pour générer (facturé à votre clé fournisseur)", "生成するには --yes を追加（プロバイダーのキーに課金）", "أضف --yes للإنشاء (ستُحتسب التكلفة على مفتاح المزوّد)"],
+["Add --yes to generate (this spends on your provider key)", "Üretmek için --yes ekleyin (sağlayıcı anahtarınızdan ücret harcanır)", "Agrega --yes para generar (se cobra a tu clave del proveedor)", "Adicione --yes para gerar (gera custos na sua conta do provedor)", "Zum Erstellen --yes ergänzen (Kosten über Ihren Anbieterschlüssel)", "Ajoutez --yes pour générer (facturé à votre clé fournisseur)", "生成するには --yes を追加（プロバイダーのキーに課金）", "أضف --yes للإنشاء (ستُحتسب التكلفة على مفتاح المزوّد)"],
 ["Sign in", "Oturum aç", "Iniciar sesión", "Entrar", "Anmelden", "Se connecter", "ログイン", "تسجيل الدخول"],
 ["Sign out", "Oturumu kapat", "Cerrar sesión", "Sair", "Abmelden", "Se déconnecter", "ログアウト", "تسجيل الخروج"],
 ["Choose the default company", "Varsayılan şirketi seç", "Elegir empresa predeterminada", "Escolher empresa padrão", "Standardunternehmen wählen", "Choisir l’entreprise par défaut", "既定の会社を選択", "اختيار الشركة الافتراضية"],
@@ -161,7 +170,7 @@ const rows = [
 ["Verify an evidence chain against anchors", "Kanıt zincirini referanslarla doğrula", "Verificar la cadena de evidencia con anclajes", "Verificar cadeia de evidências com âncoras", "Beweiskette gegen Anker prüfen", "Vérifier la chaîne de preuves avec des ancrages", "証拠チェーンをアンカーと照合", "التحقق من سلسلة الأدلة باستخدام المراجع"],
 ["List company agents", "Şirket ajanlarını listele", "Listar agentes de la empresa", "Listar agentes da empresa", "Unternehmensagenten auflisten", "Lister les agents de l’entreprise", "会社のエージェントを一覧", "عرض وكلاء الشركة"],
 ["List active relay sessions", "Aktif relay oturumlarını listele", "Listar sesiones relay activas", "Listar sessões relay ativas", "Aktive Relay-Sitzungen auflisten", "Lister les sessions relay actives", "有効なリレーセッションを一覧", "عرض جلسات الترحيل النشطة"],
-["Mutating commands require a bare --yes; --approval is not supported. Exit 4 means refused.", "Değiştiren komutlar yalın --yes ister; --approval desteklenmez. Çıkış 4 reddedildi demektir.", "Los comandos que modifican requieren --yes sin valor; --approval no se admite. Salida 4 indica rechazo.", "Comandos de alteração exigem --yes sem valor; --approval não é aceito. Saída 4 indica recusa.", "Ändernde Befehle benötigen --yes ohne Wert; --approval wird nicht unterstützt. Exit 4 bedeutet abgelehnt.", "Les commandes de modification exigent --yes sans valeur ; --approval n’est pas pris en charge. Sortie 4 signifie refus.", "変更コマンドには値なしの --yes が必要です。--approval は未対応。終了4は拒否です。", "تتطلب أوامر التعديل --yes دون قيمة؛ --approval غير مدعوم. الخروج 4 يعني الرفض."],
+["Commands that require confirmation accept only a bare --yes; --approval is not supported. Exit 4 means refused.", "Onay isteyen komutlar yalnızca değersiz --yes kabul eder; --approval desteklenmez. Çıkış 4 reddedildi demektir.", "Los comandos que requieren confirmación solo aceptan --yes sin valor; --approval no es compatible. La salida 4 indica rechazo.", "Comandos que exigem confirmação aceitam apenas --yes sem valor; --approval não é compatível. Saída 4 indica recusa.", "Befehle mit Bestätigungspflicht akzeptieren nur --yes ohne Wert; --approval wird nicht unterstützt. Exit 4 bedeutet abgelehnt.", "Les commandes nécessitant une confirmation acceptent uniquement --yes sans valeur ; --approval n’est pas pris en charge. Le code de sortie 4 indique un refus.", "確認が必要なコマンドは値なしの --yes のみ受け付けます。--approval は未対応です。終了コード 4 は拒否を示します。", "الأوامر التي تتطلب تأكيدًا تقبل --yes بلا قيمة فقط؛ --approval غير مدعوم. رمز الخروج 4 يعني الرفض."],
 ["Local BYOK keys and server-side media keys are separate. Provider usage is billed separately.", "Yerel BYOK ve sunucudaki medya anahtarları ayrıdır. Sağlayıcı kullanımı ayrıca ücretlendirilir.", "Las claves BYOK locales y multimedia del servidor son distintas. El uso del proveedor se cobra aparte.", "Chaves BYOK locais e de mídia no servidor são separadas. O uso do provedor é cobrado à parte.", "Lokale BYOK- und Server-Medien-Schlüssel sind getrennt. Anbieternutzung wird separat berechnet.", "Clés BYOK locales et multimédias serveur sont distinctes. L’usage fournisseur est facturé séparément.", "ローカルBYOKとサーバーのメディアキーは別です。プロバイダー使用料は別途発生します。", "مفاتيح BYOK المحلية ومفاتيح وسائط الخادم منفصلة. تُحسب تكلفة استخدام المزوّد بشكل منفصل."],
 ["Only suggestion text is printed; fix never applies a patch.", "Yalnız öneri yazdırılır; fix yama uygulamaz.", "Solo se imprime una sugerencia; fix no aplica parches.", "Apenas a sugestão é impressa; fix não aplica patches.", "Nur Vorschläge werden ausgegeben; fix wendet keinen Patch an.", "Seule la suggestion est affichée ; fix n’applique aucun patch.", "提案のみ表示します。fix はパッチを適用しません。", "يُعرض الاقتراح فقط؛ لا يطبّق fix أي تصحيح."],
 
@@ -220,8 +229,8 @@ const rows = [
 
 ["Initialised. API {0}\nConfig {1}\nNext: braavo login", "Hazır. API {0}\nYapılandırma {1}\nSonraki adım: braavo login", "Inicializado. API {0}\nConfiguración {1}\nSiguiente: braavo login", "Inicializado. API {0}\nConfiguração {1}\nPróximo: braavo login", "Initialisiert. API {0}\nKonfiguration {1}\nWeiter: braavo login", "Initialisé. API {0}\nConfiguration {1}\nEnsuite : braavo login", "初期化完了。API {0}\n設定 {1}\n次に実行: braavo login", "تمت التهيئة. API {0}\nالإعداد {1}\nالتالي: braavo login"],
 ["Governance config:", "Yönetişim ayarları:", "Configuración de control:", "Configuração de governança:", "Governance-Konfiguration:", "Configuration de gouvernance :", "ガバナンス設定:", "إعداد الحوكمة:"],
-["Usage ({0}d)", "Kullanım ({0} gün)", "Uso ({0} días)", "Uso ({0} dias)", "Nutzung ({0} Tage)", "Usage ({0} jours)", "使用量 ({0}日)", "الاستخدام ({0} يوم)"],
-["Evidence chain OK ({0} record(s) verified)", "Kanıt zinciri sağlam ({0} kayıt doğrulandı)", "Cadena de evidencia válida ({0} registros verificados)", "Cadeia de evidências válida ({0} registros verificados)", "Beweiskette OK ({0} Datensätze geprüft)", "Chaîne de preuves valide ({0} enregistrements vérifiés)", "証拠チェーン正常（{0}件を検証）", "سلسلة الأدلة سليمة (تم التحقق من {0} سجل)"],
+["Usage ({0})", "Kullanım ({0})", "Uso ({0})", "Uso ({0})", "Nutzung ({0})", "Usage ({0})", "使用量（{0}）", "الاستخدام ({0})"],
+["Evidence chain OK (verified records: {0})", "Kanıt zinciri sağlam (doğrulanan kayıt: {0})", "Cadena de evidencia válida (registros verificados: {0})", "Cadeia de evidências válida (registros verificados: {0})", "Beweiskette OK (geprüfte Datensätze: {0})", "Chaîne de preuves valide (enregistrements vérifiés : {0})", "証拠チェーン正常（検証済みレコード数: {0}）", "سلسلة الأدلة سليمة (السجلات المتحقق منها: {0})"],
 ["Evidence chain FAILED", "Kanıt zinciri BAŞARISIZ", "Cadena de evidencia FALLIDA", "Cadeia de evidências FALHOU", "Beweiskette FEHLGESCHLAGEN", "Chaîne de preuves EN ÉCHEC", "証拠チェーン検証失敗", "فشل التحقق من سلسلة الأدلة"],
 ["approval recorded; handoff incomplete", "onay kaydedildi; devir tamamlanmadı", "aprobación registrada; traspaso incompleto", "aprovação registrada; transferência incompleta", "Genehmigung gespeichert; Übergabe unvollständig", "approbation enregistrée ; transfert incomplet", "承認済み・引き継ぎ未完了", "سُجلت الموافقة؛ التسليم غير مكتمل"],
 ["Check the run.", "Çalışmayı kontrol edin.", "Revisa la ejecución.", "Confira a execução.", "Ausführung prüfen.", "Vérifiez l’exécution.", "実行を確認してください。", "تحقّق من التشغيل."],
@@ -306,7 +315,7 @@ const rows = [
 ["{0} is unusable ({1})", "{0} kullanılamıyor ({1})", "{0} no se puede usar ({1})", "{0} não pode ser usado ({1})", "{0} ist unbrauchbar ({1})", "{0} est inutilisable ({1})", "{0} は使用できません ({1})", "{0} غير قابل للاستخدام ({1})"],
 ["{0} (official)", "{0} (resmî)", "{0} (oficial)", "{0} (oficial)", "{0} (offiziell)", "{0} (officiel)", "{0}（公式）", "{0} (رسمي)"],
 ["{0} (loopback/dev)", "{0} (yerel/geliştirme)", "{0} (local/desarrollo)", "{0} (local/desenvolvimento)", "{0} (lokal/Entwicklung)", "{0} (local/développement)", "{0}（ローカル・開発）", "{0} (محلي/تطوير)"],
-["{0} is plaintext HTTP — credentials would cross the network in the clear", "{0} şifresiz HTTP — kimlik bilgileri ağda açık iletilir", "{0} es HTTP sin cifrar; las credenciales viajarían en claro", "{0} é HTTP sem criptografia; credenciais trafegariam em texto aberto", "{0} nutzt unverschlüsseltes HTTP; Anmeldedaten wären offen im Netz", "{0} utilise HTTP non chiffré ; les identifiants circuleraient en clair", "{0} は暗号化されていない HTTP。認証情報が平文で送信されます", "{0} يستخدم HTTP غير مشفّر؛ ستُرسل بيانات الاعتماد مكشوفة"],
+["{0} is plaintext HTTP — credentials would cross the network in the clear", "{0} şifresiz HTTP — kimlik bilgileri ağda açık iletilir", "{0} es HTTP sin cifrar; las credenciales viajarían en claro", "{0} é HTTP sem criptografia; credenciais trafegariam em texto aberto", "{0} nutzt unverschlüsseltes HTTP; Anmeldedaten wären offen im Netz", "{0} utilise HTTP non chiffré ; les identifiants circuleraient en clair", "{0} は平文 HTTP です。この接続で認証情報を送信すると、ネットワーク上を平文で通過します。", "{0} يستخدم HTTP غير مشفّر؛ إذا أُرسلت بيانات الاعتماد عبره فستنتقل عبر الشبكة بنص واضح"],
 ["{0} (custom host, explicitly trusted via --allow-custom-host)", "{0} (özel sunucu, --allow-custom-host ile açıkça güvenildi)", "{0} (host personalizado autorizado con --allow-custom-host)", "{0} (host personalizado autorizado com --allow-custom-host)", "{0} (eigener Host, mit --allow-custom-host bestätigt)", "{0} (hôte personnalisé approuvé par --allow-custom-host)", "{0}（--allow-custom-host で信頼済みのカスタムホスト）", "{0} (مضيف مخصص موثوق عبر --allow-custom-host)"],
 ["{0} is not an official host and has NOT been trusted — credentials will be refused", "{0} resmî sunucu değil ve güven onayı yok — kimlik bilgileri gönderilmeyecek", "{0} no es oficial ni está autorizado; se rechazarán las credenciales", "{0} não é oficial nem autorizado; credenciais serão recusadas", "{0} ist nicht offiziell und nicht bestätigt; Anmeldedaten werden verweigert", "{0} n’est ni officiel ni approuvé ; identifiants refusés", "{0} は公式でも信頼済みでもないため認証情報を送信しません", "{0} ليس رسميًا أو موثوقًا؛ سيُرفض إرسال بيانات الاعتماد"],
 ["not logged in — run: braavo login", "oturum açık değil — çalıştırın: braavo login", "sin sesión; ejecuta: braavo login", "sem sessão; execute: braavo login", "nicht angemeldet; ausführen: braavo login", "non connecté ; exécutez : braavo login", "未ログイン。実行: braavo login", "لم تسجّل الدخول؛ شغّل: braavo login"],
@@ -320,25 +329,64 @@ const rows = [
 ["linux — bubblewrap (bwrap) NOT found; local execution is unsandboxed", "linux — bubblewrap (bwrap) bulunamadı; yerel yürütme korumasız", "linux; no se encontró bubblewrap (bwrap); ejecución local sin aislamiento", "linux; bubblewrap (bwrap) não encontrado; execução local sem isolamento", "linux; bubblewrap (bwrap) fehlt; lokale Ausführung ohne Sandbox", "linux ; bubblewrap (bwrap) absent ; exécution locale sans bac à sable", "linux — bubblewrap (bwrap) なし。ローカル実行は隔離されません", "linux — لم يُعثر على bubblewrap (bwrap)؛ التنفيذ المحلي غير معزول"],
 ["{0} — no supported sandbox; local execution is unsandboxed", "{0} — desteklenen koruma yok; yerel yürütme korumasız", "{0}; sin sandbox compatible; ejecución local sin aislamiento", "{0}; sem sandbox compatível; execução local sem isolamento", "{0}; keine unterstützte Sandbox; lokale Ausführung ungeschützt", "{0} ; aucun bac à sable pris en charge ; exécution locale non isolée", "{0} — 対応サンドボックスなし。ローカル実行は隔離されません", "{0} — لا توجد بيئة عزل مدعومة؛ التنفيذ المحلي غير معزول"],
 
+["Terminal background is unchanged. NO_COLOR disables color and animation; BRAAVO_REDUCED_MOTION disables animation.", "Terminal arka planı değiştirilmez. NO_COLOR renk ve animasyonu; BRAAVO_REDUCED_MOTION animasyonu kapatır.", "El fondo de la terminal no cambia. NO_COLOR desactiva color y animación; BRAAVO_REDUCED_MOTION desactiva la animación.", "O fundo do terminal não muda. NO_COLOR desativa cores e animação; BRAAVO_REDUCED_MOTION desativa a animação.", "Der Terminalhintergrund bleibt unverändert. NO_COLOR deaktiviert Farben und Animation; BRAAVO_REDUCED_MOTION deaktiviert die Animation.", "Le fond du terminal reste inchangé. NO_COLOR désactive les couleurs et les animations ; BRAAVO_REDUCED_MOTION désactive les animations.", "端末の背景は変更しません。NO_COLOR は色とアニメーションを、BRAAVO_REDUCED_MOTION はアニメーションを無効にします。", "لا تتغير خلفية الطرفية. يعطّل NO_COLOR الألوان والحركة، ويعطّل BRAAVO_REDUCED_MOTION الحركة."],
+["unknown", "bilinmiyor", "desconocido", "desconhecido", "unbekannt", "inconnu", "不明", "غير معروف"],
+["Companion command {0} ignored: braavo spawn has no local approval gate (actionId {1}).", "Companion komutu {0} uygulanmadı: braavo spawn içinde yerel onay kapısı yok (actionId {1}).", "Comando de Companion {0} ignorado: braavo spawn no tiene control de aprobación local (actionId {1}).", "Comando do Companion {0} ignorado: braavo spawn não tem controle de aprovação local (actionId {1}).", "Companion-Befehl {0} ignoriert: braavo spawn hat keine lokale Freigabeprüfung (actionId {1}).", "Commande Companion {0} ignorée : braavo spawn n’a pas de contrôle d’approbation local (actionId {1}).", "Companion コマンド {0} は適用されません。braavo spawn にはローカル承認機構がありません（actionId {1}）。", "تم تجاهل أمر Companion ‏{0}: لا توجد بوابة موافقة محلية في braavo spawn ‏(actionId {1})."],
+["Companion relay unreachable; spawn continues without it.", "Companion relay erişilemiyor; spawn bağlantı olmadan sürüyor.", "No se puede conectar con el relay de Companion; spawn continúa sin él.", "Relay do Companion inacessível; spawn continua sem ele.", "Companion-Relay nicht erreichbar; spawn läuft ohne Relay weiter.", "Relais Companion inaccessible ; spawn continue sans lui.", "Companion リレーに接続できません。spawn はリレーなしで続行します。", "يتعذر الوصول إلى مرحّل Companion؛ يستمر spawn من دونه."],
+["days", "gün", "días", "dias", "Tage", "jours", "日", "الأيام"],
+["Choose light, dark or system with BRAAVO_THEME. system uses known COLORFGBG metadata, otherwise the terminal foreground.", "BRAAVO_THEME ile light, dark veya system seçin. system, tanınan COLORFGBG bilgisini; bilgi yoksa terminalin ön plan rengini kullanır.", "Elige light, dark o system con BRAAVO_THEME. system usa COLORFGBG si se reconoce; si no, el color de texto de la terminal.", "Escolha light, dark ou system com BRAAVO_THEME. system usa COLORFGBG quando reconhecido; caso contrário, a cor de texto do terminal.", "Mit BRAAVO_THEME light, dark oder system wählen. system nutzt erkannte COLORFGBG-Daten, sonst die Textfarbe des Terminals.", "Choisissez light, dark ou system avec BRAAVO_THEME. system utilise COLORFGBG si reconnu, sinon la couleur du texte du terminal.", "BRAAVO_THEME で light、dark、system を選択します。system は認識できる COLORFGBG 情報を使い、それ以外は端末の文字色を使います。", "اختر light أو dark أو system عبر BRAAVO_THEME. يستخدم system بيانات COLORFGBG المعروفة، وإلا فلون نص الطرفية."],
 ] as const;
 
-export const catalogue: Record<Locale, Record<string, string>> = { en: {}, tr: {}, "es-419": {}, "pt-BR": {}, de: {}, fr: {}, ja: {}, ar: {} };
+export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;
 const columns: Locale[] = ["en", "tr", "es-419", "pt-BR", "de", "fr", "ja", "ar"];
 for (const row of rows) columns.forEach((locale, index) => { catalogue[locale][row[0]] = row[index]; });
+for (const row of extraRows) EXTRA_LOCALES.forEach((locale, index) => { catalogue[locale][row[0]] = row[index + 1]; });
 export function t(source: string, ...values: unknown[]): string {
   const template = catalogue[active][source] ?? catalogue.en[source] ?? source;
-  return template.replace(/\{(\d+)\}/g, (_match, index) => String(values[Number(index)] ?? ""));
+  return template.replace(/\{(\d+)\}/g, (_match, index) => {
+    const value = String(values[Number(index)] ?? "");
+    // Isolate interpolated IDs/URLs/commands from the surrounding Arabic text.
+    return active === "ar" && value ? `\u2068${value}\u2069` : value;
+  });
 }
 export function numberText(value: unknown, options: Intl.NumberFormatOptions = {}): string {
-  const n = Number(value); return new Intl.NumberFormat(intlLocales[active], options).format(Number.isFinite(n) ? n : 0);
+  const n = numericValue(value);
+  return n === undefined ? t("unknown") : new Intl.NumberFormat(intlLocales[active], options).format(n);
+}
+function numericValue(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return undefined;
+  const n = Number(value); return Number.isFinite(n) ? n : undefined;
 }
 export function moneyText(value: unknown): string {
-  const n = Number(value); const amount = Number.isFinite(n) ? n : 0;
-  return numberText(amount, { style: "currency", currency: "USD", minimumFractionDigits: amount >= 1 || amount === 0 ? 2 : 4, maximumFractionDigits: amount >= 1 || amount === 0 ? 2 : 4 });
+  const amount = numericValue(value); if (amount === undefined) return t("unknown");
+  const digits = Math.abs(amount) >= 1 || amount === 0 ? 2 : 4;
+  return numberText(amount, { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 export function dateText(value: string | number | Date): string {
-  const date = new Date(value); if (!Number.isFinite(date.getTime())) return "?";
-  return new Intl.DateTimeFormat(intlLocales[active], { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(date);
+  const date = new Date(value); if (!Number.isFinite(date.getTime())) return t("unknown");
+  return `${new Intl.DateTimeFormat(intlLocales[active], { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(date)} UTC`;
+}
+
+/** Localized units use the runtime's CLDR plural rules, including Polish and Arabic. */
+export function dayText(value: unknown): string {
+  const n = numericValue(value);
+  // ICU's Arabic singular/dual unit forms omit the number, including its minus sign.
+  if (active === "ar" && n !== undefined && n < 0) return `${t("days")}: ${numberText(n)}`;
+  return numberText(value, { style: "unit", unit: "day", unitDisplay: "long" });
+}
+const imageForms: Record<Locale, Partial<Record<Intl.LDMLPluralRule, string>> & { other: string }> = {
+  en: { one: "{0} image", other: "{0} images" }, tr: { other: "{0} görsel" },
+  "es-419": { one: "{0} imagen", other: "{0} imágenes" }, "pt-BR": { one: "{0} imagem", other: "{0} imagens" },
+  de: { one: "{0} Bild", other: "{0} Bilder" }, fr: { one: "{0} image", other: "{0} images" },
+  ja: { other: "{0}枚の画像" }, ar: { zero: "صور: {0}", one: "صورة واحدة ({0})", two: "صورتان ({0})", few: "{0} صور", many: "{0} صورة", other: "{0} صورة" },
+  it: { one: "{0} immagine", other: "{0} immagini" }, ko: { other: "이미지 {0}개" }, id: { other: "{0} gambar" },
+  pl: { one: "{0} obraz", few: "{0} obrazy", many: "{0} obrazów", other: "{0} obrazu" },
+  hi: { other: "{0} चित्र" }, "zh-Hans": { other: "{0} 张图片" },
+};
+export function imageCountText(value: number): string {
+  const forms = imageForms[active];
+  const category = new Intl.PluralRules(intlLocales[active]).select(value);
+  return (forms[category] ?? forms.other).replace("{0}", numberText(value));
 }
 
 /** Human-only labels; raw status values in machine output remain unchanged. */

@@ -100,13 +100,37 @@ before attempting to parse a result.
 ### Language and bounded waiting
 
 `braavo --lang tr help` selects Turkish. Supported codes are `tr`, `en`,
-`es-419`, `pt-BR`, `de`, `fr`, `ja`, and `ar`. `BRAAVO_LOCALE` sets the default;
+`es-419`, `pt-BR`, `de`, `fr`, `ja`, `ar`, `it`, `ko`, `id`, `pl`, `hi`, and
+`zh-Hans`. `BRAAVO_LOCALE` sets the default;
 an explicit `--lang` takes precedence. Unknown codes warn and fall back to English.
 Put the option before `spawn <vendor>`; arguments after the vendor or an MCP
 `--` separator belong to the child. `braavo <command> --help` shows command help
 without reading saved config or making requests. Provider output, command names,
 protocol values, JSON results, and exit codes keep their original form. Human
-numbers and USD amounts use the chosen locale; human dates use UTC.
+numbers and USD amounts use the chosen locale; human dates explicitly show UTC.
+Missing or invalid human numbers remain unknown rather than appearing as zero.
+Case, underscore and supported regional aliases are accepted (for example
+`ko_KR`, `hi-IN`, `id-ID`, `zh-CN`, and `zh-SG`). Unicode extensions do not
+override the catalogue's number formatting. `zh`, `zh-CN`, `zh-SG`, and
+`zh-Hans-CN` select Simplified Chinese; `zh-Hant`, `zh-TW`, `zh-HK`, `zh-MO`,
+`pt-PT`, and `es-ES` fall back to English with a warning.
+
+`BRAAVO_THEME=light|dark|system` selects a session-only foreground palette.
+The default is `system`: recognized `COLORFGBG` background indices `0` (dark)
+and `7`/`15` (light) select a palette; absent, malformed or unrecognized metadata
+keeps the terminal’s default foreground. Invalid theme values follow `system`.
+No terminal queries or persistent settings are used. Explicit light/dark
+palettes target at least 4.5:1 against standard white/black backgrounds; custom
+terminal colors still need visual verification. Secondary text uses a readable
+foreground instead of terminal-dependent faint styling.
+The terminal background stays unchanged. `NO_COLOR` or `BRAAVO_NO_COLOR`
+disables color and animation; `BRAAVO_REDUCED_MOTION` disables animation.
+Redirected streams stay plain. A non-animated wait prints its initial status once.
+Help prose wraps at the terminal width; command syntax stays intact. Animated
+labels are shortened without splitting grapheme clusters. Cell widths are
+estimates: actual light/dark contrast, Arabic bidi, fonts and assistive technology
+still need testing in real terminals. Arabic interpolated values use Unicode
+directional isolates; JSON and provider content keep their original bytes.
 
 Ordinary API requests have a 30-second total deadline, including response bodies,
 refresh waiting and replay. Shared refresh work has its own 30-second limit;

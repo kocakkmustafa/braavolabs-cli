@@ -1,4 +1,4 @@
-import { t, numberText, moneyText } from "./locale";
+import { t, numberText, moneyText, imageCountText } from "./locale";
 /**
  * `braavo image` / `braavo voice` — terminal front-end for the FAZ E media
  * orchestration backend (fal.ai FLUX image, Google/ElevenLabs TTS). BYOK-only:
@@ -61,10 +61,9 @@ export function renderMediaPreview(
   keyConfigured: boolean,
   optedIn: boolean,
 ): string[] {
-  const usd = estimateUsd(estimate);
   const out: string[] = [
     ui.primary(`── ${t("media preview")} ──`),
-    ui.ember(`≈ ${moneyText(usd)} (${t("estimate")})`),
+    ui.ember(`≈ ${moneyText(estimate?.usd)} (${t("estimate")})`),
   ];
   if (estimate?.note) out.push(ui.dim(`  ${estimate.note}`));
   if (!keyConfigured) {
@@ -80,7 +79,7 @@ export function renderMediaPreview(
 export function renderImageResult(ui: UiLike, result: { images?: Array<{ url?: string }>; urlNote?: string }): string[] {
   const urls = (result?.images ?? []).map((i) => i?.url).filter((u): u is string => !!u);
   if (urls.length === 0) return [ui.fail(t("no image URL in response"))];
-  const out = [ui.primary(`── ${t("{0} images", numberText(urls.length))} ──`)];
+  const out = [ui.primary(`── ${imageCountText(urls.length)} ──`)];
   for (const u of urls) out.push(ui.steel(`  ${u}`));
   if (result?.urlNote) out.push(ui.dim(`  ${result.urlNote}`));
   return out;

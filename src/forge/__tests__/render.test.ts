@@ -8,7 +8,7 @@ beforeEach(() => {
   vi.stubEnv("NO_COLOR", undefined);
   vi.stubEnv("BRAAVO_NO_COLOR", undefined);
   vi.stubEnv("TERM", "xterm-256color");
-  colorUi = makeUi({ tty: true });
+  colorUi = makeUi({ tty: true, stderrTty: true, theme: "dark" });
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -59,6 +59,10 @@ function assertNoGreen(text: string) {
 }
 
 describe("renderCompareLines", () => {
+  it("keeps an absent token-saving measurement unknown even when USD savings are known", () => {
+    const joined = renderCompareLines(makeUi({ tty: false }), { findings: { multiModel: { savedUsd: 1 } } }).join("\n");
+    expect(joined).toContain("tokens: unknown"); expect(joined).not.toContain("tokens: 0");
+  });
   it("emits an arc-blue block header per model plus a synthesis block", () => {
     const lines = renderCompareLines(colorUi, compareSession);
     const joined = lines.join("\n");
@@ -81,7 +85,7 @@ describe("renderCompareLines", () => {
     };
     expect(extractSaved(withSaved.findings)).toEqual({ usd: 3.5, tokens: 1200 });
     const joined = renderCompareLines(colorUi, withSaved).join("\n");
-    expect(joined).toContain("≈ saved $3.50 · 1,200 tokens");
+    expect(joined).toContain("≈ saved $3.50 · tokens: 1,200");
   });
 });
 
@@ -96,6 +100,10 @@ describe("renderCascadeLines", () => {
 });
 
 describe("renderSavingsTable", () => {
+  it("does not invent zero savings or a zero-day period when data is absent", () => {
+    const joined = renderSavingsTable(makeUi({ tty: false }), {}).join("\n");
+    expect(joined).toContain("unknown"); expect(joined).not.toContain("$0.00"); expect(joined).not.toContain("0 days");
+  });
   it("renders an aligned table with saved + breakdown rows", () => {
     const lines = renderSavingsTable(colorUi, savingsData);
     const joined = lines.join("\n");

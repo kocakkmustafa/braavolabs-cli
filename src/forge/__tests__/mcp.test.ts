@@ -26,7 +26,7 @@ beforeEach(() => {
   vi.stubEnv("NO_COLOR", undefined);
   vi.stubEnv("BRAAVO_NO_COLOR", undefined);
   vi.stubEnv("TERM", "xterm-256color");
-  colorUi = makeUi({ tty: true });
+  colorUi = makeUi({ tty: true, stderrTty: true, theme: "dark" });
 });
 afterEach(() => vi.unstubAllEnvs());
 

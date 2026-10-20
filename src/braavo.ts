@@ -18,7 +18,7 @@
  *
  * ai morghulis · ai dohaeris.
  */
-import { t, getLocale, setLocale, localeArgs, numberText, moneyText, dateText, statusText } from "./forge/locale";
+import { t, getLocale, setLocale, localeArgs, numberText, moneyText, dateText, statusText, dayText } from "./forge/locale";
 import { renderHelp } from "./forge/help";
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
@@ -157,12 +157,12 @@ function usd(n: unknown): string { return moneyText(n); }
 function tokens(n: unknown): string { return numberText(n); }
 
 /** Extract a genuine savings figure from compare findings, or null. Never fabricated. */
-export function extractSaved(findings: any): { usd: number; tokens: number } | null {
+export function extractSaved(findings: any): { usd: number; tokens?: number } | null {
   const mm = findings?.multiModel ?? findings;
   const su = mm?.savedUsd ?? findings?.savedUsd;
   const st = mm?.savedTokens ?? findings?.savedTokens;
   if (typeof su === "number" && Number.isFinite(su)) {
-    return { usd: su, tokens: typeof st === "number" ? st : 0 };
+    return { usd: su, tokens: typeof st === "number" && Number.isFinite(st) ? st : undefined };
   }
   return null;
 }
@@ -194,7 +194,7 @@ export function renderCompareLines(ui: Ui, session: any): string[] {
 
   const saved = extractSaved(findings);
   if (saved) {
-    out.push(ui.ember(t("≈ saved {0} · {1} tokens", usd(saved.usd), tokens(saved.tokens))));
+    out.push(ui.ember(t("≈ saved {0} · tokens: {1}", usd(saved.usd), tokens(saved.tokens))));
   }
   return out;
 }
@@ -213,7 +213,7 @@ export function renderCascadeLines(ui: Ui, res: any): string[] {
   const attempts: any[] = Array.isArray(res?.attempts) ? res.attempts : [];
   if (attempts.length > 1) {
     for (const a of attempts) {
-      out.push(ui.dim(`  ↳ ${a?.provider}/${a?.model} ${t("tier")}=${a?.tier} ${t("confidence")}=${numberText(a?.confidence ?? 0, { style: "percent", maximumFractionDigits: 0 })} ${usd(a?.costUsd)}`));
+      out.push(ui.dim(`  ↳ ${a?.provider}/${a?.model} ${t("tier")}=${a?.tier} ${t("confidence")}=${numberText(a?.confidence, { style: "percent", maximumFractionDigits: 0 })} ${usd(a?.costUsd)}`));
     }
   }
   if (res?.stoppedReason) out.push(ui.dim(`  ${t("stopped: {0}", res.stoppedReason)}`));
@@ -229,7 +229,7 @@ export function renderSavingsTable(ui: Ui, data: any): string[] {
     `${ui.steel(label.padEnd(16))}${accent ? ui.primary(value) : value}`;
 
   const out: string[] = [];
-  out.push(row(t("period"), t("{0} days", numberText(days))));
+  out.push(row(t("period"), dayText(days)));
   out.push(row(t("actual"), usd(r.actualUsd)));
   out.push(row(t("baseline"), usd(r.baselineUsd)));
   out.push(row(t("saved"), `${usd(r.savedUsd)}${pct}`, true));
@@ -354,7 +354,7 @@ function resolveRepoBlock(enabled: boolean, die: (msg: string) => never, ui: Ui)
   if (!enabled) return undefined;
   const res = collectRepoContext({ cwd: process.cwd() });
   if (!res.ok) die(res.error);
-  if (res.truncated) console.error(ui.dim(`· ${t("repo context exceeded 4KB — truncated")}`));
+  if (res.truncated) ui.warn(t("repo context exceeded 4KB — truncated"));
   return res.text;
 }
 
@@ -410,6 +410,7 @@ async function main(): Promise<void> {
   const language = localeArgs(process.argv.slice(2));
   setLocale(language.locale);
   const ui = makeUi();
+  const errorUi = makeUi({ tty: Boolean(process.stderr.isTTY) });
   // Function declarations (not const arrows) so control-flow analysis narrows
   // through the `never` guard sites below (e.g. `if (!x) die(...)`).
   function die(msg: string, code: ExitCode = EXIT.GENERAL): never {
@@ -544,7 +545,7 @@ async function main(): Promise<void> {
         }
       }
       const n = selections?.length ?? 3;
-      const spin = ui.spinner(t("asking {0} faces…", numberText(n)));
+      const spin = ui.spinner(t("asking models ({0})…", numberText(n)));
       try {
         let sessionId: string | undefined;
         const session = await interruptible(() => sessionId
@@ -552,10 +553,10 @@ async function main(): Promise<void> {
           : t("Stopped waiting. The compare request may have started; inspect research sessions before retrying."), async signal => {
           const stub = await startCompare(cfg, { companyId, query, selections }, { signal });
           sessionId = stub.id;
-          spin.update(`${t("asking {0} faces…", numberText(n))} (${stub.id})`);
+          spin.update(`${t("asking models ({0})…", numberText(n))} (${stub.id})`);
           return pollCompare(cfg, stub.id, {
             signal,
-            onTick: (status) => spin.update(`${t("asking {0} faces…", numberText(n))} (${statusText(status)})`),
+            onTick: (status) => spin.update(`${t("asking models ({0})…", numberText(n))} (${statusText(status)})`),
           });
         });
         spin.stop();
@@ -706,7 +707,7 @@ async function main(): Promise<void> {
       const out = flag(flags, "out") ?? "voice.mp3";
       writeFileSync(out, decodeAudio(audioB64));
       console.log(ui.primary(`── ${t("saved")} ──`));
-      console.log(ui.steel(`  ${out} ${ui.dim(`(${numberText(res.body?.result?.chars ?? text.length)} ${t("chars")} · ${res.body?.result?.mime ?? "audio/mpeg"})`)}`));
+      console.log(ui.steel(`  ${out} ${ui.dim(`(${t("chars")}: ${numberText(res.body?.result?.chars ?? text.length)} · ${res.body?.result?.mime ?? "audio/mpeg"})`)}`));
       return;
     }
 
@@ -811,10 +812,10 @@ async function main(): Promise<void> {
       }
       const binPath = findBinary(vendor);
       if (!binPath) {
-        for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+        for (const line of spawnFallbackLines(errorUi, vendor)) console.error(line);
         process.exit(1);
       }
-      if (!quiet) console.error(spawnRiskLine(ui, vendor));
+      if (!quiet) console.error(spawnRiskLine(errorUi, vendor));
 
       if (bridged) {
         // OPT-IN companion-relay mode (Companion channel Dilim 2b — see
@@ -831,7 +832,7 @@ async function main(): Promise<void> {
           const code = await spawnVendorBridged(binPath, passthrough, { cwd, bridge, childRef, label: vendor });
           process.exit(code); // own the child's exit code verbatim
         } catch {
-          for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+          for (const line of spawnFallbackLines(errorUi, vendor)) console.error(line);
           process.exit(1);
         }
         return;
@@ -842,7 +843,7 @@ async function main(): Promise<void> {
         process.exit(code); // own the child's exit code verbatim
       } catch {
         // Spawn itself failed (binary vanished / not executable) → graceful fallback.
-        for (const line of spawnFallbackLines(ui, vendor)) console.error(line);
+        for (const line of spawnFallbackLines(errorUi, vendor)) console.error(line);
         process.exit(1);
       }
       return;
@@ -938,7 +939,7 @@ async function main(): Promise<void> {
           try {
             const tools = await listServerTools(def, defaultMcpSpawn, {
               timeoutMs,
-              onStderr: (c) => process.stderr.write(ui.steel(c)),
+              onStderr: (c) => process.stderr.write(errorUi.steel(c)),
             });
             spin.stop();
             for (const line of renderMcpTools(ui, name, tools)) console.log(line);
@@ -968,7 +969,7 @@ async function main(): Promise<void> {
           try {
             const result = await callServerTool(def, tool, toolArgs, defaultMcpSpawn, {
               timeoutMs,
-              onStderr: (c) => process.stderr.write(ui.steel(c)),
+              onStderr: (c) => process.stderr.write(errorUi.steel(c)),
             });
             spin.stop();
             for (const line of renderMcpCallResult(ui, result)) console.log(line);
@@ -1263,7 +1264,7 @@ async function main(): Promise<void> {
       ]);
       const data = { usage, savings: savings?.body ?? null, days: Number(days) };
       emit(flags, data, () => {
-        const lines = [t("Usage ({0}d)", numberText(days))];
+        const lines = [t("Usage ({0})", dayText(days))];
         for (const [k, v] of Object.entries(usage ?? {})) {
           if (typeof v === "object") continue;
           lines.push(`  ${k.padEnd(24)} ${typeof v === "number" ? numberText(v) : String(v)}`);
@@ -1316,7 +1317,7 @@ async function main(): Promise<void> {
       const result = verifyEvidenceChain(d, anchor);
       emit(flags, result, () =>
         result.ok
-          ? t("Evidence chain OK ({0} record(s) verified)", numberText(result.checked))
+          ? t("Evidence chain OK (verified records: {0})", numberText(result.checked))
           : `${t("Evidence chain FAILED")}${result.brokenAt ? ` ${result.brokenAt}` : ""}: ${humanChainReason(result)}`,
       );
       if (!result.ok) process.exitCode = EXIT.VERIFICATION_FAILED;

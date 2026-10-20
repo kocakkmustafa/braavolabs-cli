@@ -51,6 +51,10 @@ describe("renderMediaPreview", () => {
     expect(renderMediaPreview(ui, { usd: 0.5 }, true, false).join("\n")).toContain("Add --yes to generate");
     expect(renderMediaPreview(ui, { usd: 0.5 }, true, true).join("\n")).not.toContain("add --yes");
   });
+  it("keeps a missing estimate distinct from a measured zero", () => {
+    expect(renderMediaPreview(ui, null, true, false).join("\n")).toContain("unknown");
+    expect(renderMediaPreview(ui, { usd: 0 }, true, false).join("\n")).toContain("$0.00");
+  });
 });
 
 describe("renderImageResult", () => {
@@ -62,6 +66,9 @@ describe("renderImageResult", () => {
   });
   it("fails cleanly when the response carries no URL", () => {
     expect(renderImageResult(ui, { images: [] }).join("\n")).toContain("FAIL:");
+  });
+  it("uses the singular label for one image", () => {
+    expect(renderImageResult(ui, { images: [{ url: "https://cdn/a.png" }] })[0]).toBe("── 1 image ──");
   });
 });
 

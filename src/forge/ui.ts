@@ -1,20 +1,35 @@
 /**
  * braavo quiet workbench UI — restrained ANSI palette + face/edge coin.
  *
- * Palette (256-color): arc-blue is primary AND success (there is deliberately
- * NO GREEN anywhere — a success ✓ is arc-blue, not green). ember drives
- * running/highlight state and the spinner; molten is error; steel is secondary.
+ * Explicit light/dark palettes use blue for primary/success, bronze for
+ * highlight, red for errors and gray for secondary text. Unknown system
+ * backgrounds preserve the user's default foreground.
  *
- * Colors auto-disable off stdout TTY, in dumb terminals, or when either
+ * Generated colors disable on redirected streams, in dumb terminals, or when
  * NO_COLOR / BRAAVO_NO_COLOR exists. Motion additionally needs stderr TTY and
- * respects BRAAVO_REDUCED_MOTION. No frames or control codes enter pipes.
+ * respects BRAAVO_REDUCED_MOTION. Raw provider passthrough stays untouched.
  */
 
-// 256-color foreground codes. None of these are in the green band (2/10/22-48).
-const ARC = 146; // muted blue — primary + success
-const EMBER = 180; // warm bronze — running / highlight / coin
-const MOLTEN = 210; // muted red — error
-const STEEL = 246; // neutral gray — secondary / muted labels
+import { fitTerminalLine } from "./terminal-text";
+export type TerminalTheme = "light" | "dark" | "system";
+// Foregrounds only. The terminal background and user configuration are never changed.
+const PALETTES = {
+  dark: { primary: 146, highlight: 180, error: 210, secondary: 246 },
+  light: { primary: 24, highlight: 94, error: 124, secondary: 239 },
+};
+function paletteFor(theme: string | undefined, background: string | undefined) {
+  const explicit = theme?.trim().toLowerCase();
+  if (explicit === "light" || explicit === "dark") return PALETTES[explicit];
+  // COLORFGBG is an optional hint, not a probe or a claim about customized ANSI colors.
+  if (background && background.trim() === background && /^(?:\d{1,2};){1,2}\d{1,2}$/.test(background)
+      && background.split(";").every(value => Number(value) <= 15)) {
+    const last = Number(background.split(";").at(-1));
+    if (last === 0) return PALETTES.dark;
+    if (last === 7 || last === 15) return PALETTES.light;
+  }
+  // Unknown system background: use the user's default foreground, not a guessed palette.
+  return undefined;
+}
 
 const COIN = ["◉", "◐", "│", "◑", "◉"];
 
@@ -46,24 +61,35 @@ export interface UiOpts {
   stderrTty?: boolean;
   /** Disable visual motion without removing semantic colors. */
   reducedMotion?: boolean;
+  /** Width of the spinner stream; defaults to stderr.columns, then 80. */
+  columns?: number;
+  /** Session-only palette choice; defaults to BRAAVO_THEME, then system. */
+  theme?: TerminalTheme;
 }
 
 export function makeUi(opts: UiOpts = {}): Ui {
+  const palette = paletteFor(opts.theme ?? process.env.BRAAVO_THEME, process.env.COLORFGBG);
   const tty = opts.tty ?? Boolean(process.stdout.isTTY);
   const enabled = tty && process.env.NO_COLOR === undefined
     && process.env.BRAAVO_NO_COLOR === undefined && process.env.TERM !== "dumb";
-  const animate = enabled && (opts.stderrTty ?? Boolean(process.stderr.isTTY))
+  const stderrTty = opts.stderrTty ?? Boolean(process.stderr.isTTY);
+  const stderrEnabled = stderrTty && process.env.NO_COLOR === undefined
+    && process.env.BRAAVO_NO_COLOR === undefined && process.env.TERM !== "dumb";
+  const animate = enabled && stderrEnabled
     && !opts.reducedMotion && !process.env.BRAAVO_REDUCED_MOTION;
+  const colorCode = (code: number | undefined) => code === undefined ? "39" : `38;5;${code}`;
+  const stderrPaint = (code: number | undefined, s: string): string => stderrEnabled ? `\x1b[${colorCode(code)}m${s}\x1b[0m` : s;
 
-  const paint = (code: number, s: string): string => (enabled ? `\x1b[38;5;${code}m${s}\x1b[0m` : s);
+  const paint = (code: number | undefined, s: string): string => (enabled ? `\x1b[${colorCode(code)}m${s}\x1b[0m` : s);
   const attr = (code: number, s: string): string => (enabled ? `\x1b[${code}m${s}\x1b[0m` : s);
 
-  const primary = (s: string) => paint(ARC, s);
-  const ember = (s: string) => paint(EMBER, s);
-  const molten = (s: string) => paint(MOLTEN, s);
-  const steel = (s: string) => paint(STEEL, s);
+  const primary = (s: string) => paint(palette?.primary, s);
+  const ember = (s: string) => paint(palette?.highlight, s);
+  const molten = (s: string) => paint(palette?.error, s);
+  const steel = (s: string) => paint(palette?.secondary, s);
   const bold = (s: string) => attr(1, s);
-  const dim = (s: string) => attr(2, s);
+  // Faint SGR has terminal-dependent contrast; use the readable secondary foreground instead.
+  const dim = steel;
 
   return {
     enabled,
@@ -75,12 +101,14 @@ export function makeUi(opts: UiOpts = {}): Ui {
     dim,
     ok: (msg) => console.log(`${primary("✓")} ${msg}`),
     info: (msg) => console.log(`${steel("·")} ${msg}`),
-    warn: (msg) => console.error(`${ember("!")} ${msg}`),
-    fail: (msg) => `${molten("✗")} ${msg}`,
+    warn: (msg) => console.error(`${stderrPaint(palette?.highlight, "!")} ${msg}`),
+    // Failure strings are also used in stdout renderers: keep them plain if either stream is redirected.
+    fail: (msg) => `${enabled && stderrEnabled ? stderrPaint(palette?.error, "✗") : "✗"} ${msg}`,
     spinner: (label) => {
       let stopped = false;
       if (!animate) {
-        // No timer/control codes. Only the caller's explicit final line, once.
+        // A single plain status preserves loading information without animation.
+        console.error(label);
         return { update() {}, stop(final) {
           if (stopped) return;
           stopped = true;
@@ -90,7 +118,8 @@ export function makeUi(opts: UiOpts = {}): Ui {
       let text = label;
       let i = 0;
       const timer = setInterval(() => {
-        process.stderr.write(`\r\x1b[K${ember(COIN[i++ % COIN.length])} ${text}`);
+        const width = Math.max(1, (opts.columns ?? process.stderr.columns ?? 80) - 3);
+        process.stderr.write(`\r\x1b[K${stderrPaint(palette?.highlight, COIN[i++ % COIN.length])} ${fitTerminalLine(text, width)}`);
       }, 180);
       // Don't wedge the event loop open if a caller forgets to stop().
       timer.unref?.();

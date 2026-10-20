@@ -33,6 +33,7 @@ import { spawn as nodeSpawn, execFileSync } from "node:child_process";
 import { existsSync as fsExistsSync } from "node:fs";
 import { homedir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { t } from "./locale";
 import type { RelayBridge, BridgeHandlers } from "./relay-bridge";
 
 export const SPAWN_VENDORS = ["claude", "codex"] as const;
@@ -243,7 +244,7 @@ export function makeSpawnBridgeHandlers(
   ref: ChildRef,
   onIgnored: (kind: "approve" | "reject", actionId: string) => void = (kind, actionId) => {
     process.stderr.write(
-      `· companion ${kind} ignored — braavo spawn has no local approval gate (actionId ${actionId})\n`,
+      `· ${t("Companion command {0} ignored: braavo spawn has no local approval gate (actionId {1}).", kind, actionId)}\n`,
     );
   },
 ): BridgeHandlers {
@@ -340,7 +341,7 @@ export function spawnVendorBridged(
       } catch {
         // Best-effort mirror — see the doc comment above. The vendor CLI
         // keeps running whether or not the companion relay is reachable.
-        process.stderr.write("· companion relay unreachable — spawn continues without it\n");
+        process.stderr.write(`· ${t("Companion relay unreachable; spawn continues without it.")}\n`);
       }
     })();
 
