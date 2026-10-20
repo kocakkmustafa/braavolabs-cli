@@ -10,7 +10,7 @@
   "keywords": ["ai", "agents", "cli", "llm", "byok", "multi-model", "governance", "claude", "braavolabs"],
   "main": "./dist/braavo.js",
   "bin": { "braavo": "./dist/braavo.js" },
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=24.22.0" },
   "publishConfig": { "access": "public" },
   "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {

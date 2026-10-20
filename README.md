@@ -6,7 +6,7 @@ Support: [support@yulalab.com](mailto:support@yulalab.com).
 
 ## Overview
 
-`braavo` is a single, near-dependency-free (Node 20+) CLI with two families of commands. The one
+`braavo` is a single, near-dependency-free (Node 24.22.0+) CLI with two families of commands. The one
 runtime dependency is `zod`, used only by the opt-in companion relay bridge (`spawn --bridge`,
 see below) to validate the relay contract — every other command remains built on Node built-ins
 alone.
@@ -44,7 +44,7 @@ pnpm build
 pnpm build && npm link
 ```
 
-`braavo` runs on Node 20+ and is near-dependency-free — `zod` is its one runtime dependency,
+`braavo` requires Node 24.22.0 or later and is near-dependency-free — `zod` is its one runtime dependency,
 used only by the opt-in `spawn --bridge` companion relay (see [spawn](#spawn)).
 
 ## Quick Start
@@ -713,7 +713,7 @@ npm run lint
 
 - `braavo` is a single CLI covering two families of work: the multi-model **council** (ask/cascade/savings, BYOK keys, serverless local/direct, spawn, fix, MCP) and **pipeline** ops (runs, steering, handoffs, connections).
 - Config lives under `~/.braavo/`. The internal source directory is `src/forge/` — an implementation detail, not a product name.
-- No runtime dependencies — pure Node with built-in fetch + fs + readline.
+- One runtime dependency: `zod` validates the opt-in companion relay contract; other CLI paths use Node built-ins.
 - Transparent token refresh on 401 (single retry) mirrors web/mobile behavior.
 - Self-host support: pass `--api <url>` at login time.
 

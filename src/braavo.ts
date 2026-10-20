@@ -10,7 +10,7 @@
  *                 suggest-a-fix, and a dep-free MCP stdio client.
  *   • pipelines — list/trigger runs, steer a live run, hand a run across provider
  *                 boundaries, and inspect external connections.
- * Near-dep-free: Node 20+ global fetch + built-ins only, except `zod` —
+ * Near-dep-free: Node 24.22.0+ global fetch + built-ins only, except `zod` —
  * pulled in solely by the opt-in `spawn --bridge` companion relay (see
  * forge/relay-protocol.ts) to validate the sealed relay contract; every
  * other command stays on built-ins alone. Token/defaults live in
