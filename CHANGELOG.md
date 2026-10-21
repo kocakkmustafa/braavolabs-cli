@@ -5,17 +5,32 @@ here. The format loosely follows [Keep a Changelog](https://keepachangelog.com/)
 Versioned entries describe release candidates and published packages; older
 development history remains grouped by date.
 
-## 0.1.2 — release candidate
+## 0.2.0 — release candidate
 
-Not published. The npm registry already contains 0.1.1; this candidate keeps the
-merged reconnect/replay and authentication-refresh fixes, plus research cancellation
-and polling lifecycle handling, in a new patch version.
+The latest published version is 0.1.1. Version 0.1.2 was prepared as a release
+candidate but never published; its changes ship in 0.2.0. The minor version
+reflects the raised Node.js requirement.
+
+### Breaking
+- Require Node.js 24.22.0 or later (`engines.node >=24.22.0`, previously `>=18`).
+  CI runs on Node 24 LTS.
 
 ### Added
+- Localize human CLI output in 14 languages: `tr`, `en`, `es-419`, `pt-BR`, `de`,
+  `fr`, `ja`, `ar`, `it`, `ko`, `id`, `pl`, `hi`, `zh-Hans`. Select one with
+  `--lang <code>` or set a default with `BRAAVO_LOCALE`; `--lang` wins. Unknown
+  codes warn and fall back to English. Command names, JSON results, protocol
+  values, and exit codes stay unchanged.
+- Add accessible terminal themes: `BRAAVO_THEME=light|dark|system` selects a
+  session-only foreground palette (explicit palettes target at least 4.5:1
+  contrast). `NO_COLOR`/`BRAAVO_NO_COLOR` disable color and animation;
+  `BRAAVO_REDUCED_MOTION` disables animation. Help prose wraps at the terminal
+  width without splitting grapheme clusters.
 - Add `cancel <researchId> --yes [--json]` for explicit research soft-cancellation,
   preserving the server's completed/failed status when work already finished.
 
 ### Fixed
+- Bound request lifecycles with per-command deadlines.
 - Stop local `ask`/`watch` waits on Ctrl-C with exit 130 and an explicit remote
   cancel/stop hint; do not implicitly cancel remote work.
 - Keep polling with its original account, API, and persisted config owner;
