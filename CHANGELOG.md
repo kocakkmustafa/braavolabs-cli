@@ -54,6 +54,13 @@ reflects the raised Node.js requirement.
 - Cover disconnect/replay, sequence dedup, terminal markers, cancellation,
   transient/permanent failures, and authentication refresh with injected streams.
 
+### Security
+- Upgrade the only runtime dependency, `zod`, from 3.x to 4.6 (GHSA-mrhx-c7xc-m3w5 /
+  CVE-2023-54404: unbounded issue collection for oversized arrays). The relay
+  protocol schemas have no array schemas, so the path was not reachable; the
+  upgrade keeps the published package free of known advisories.
+- Development toolchain: `vitest` 4.1.12 and `vite` 7.3.7 (dev-only advisories).
+
 ## 0.1.1 — release candidate
 
 ### Changed
