@@ -8,6 +8,13 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Add `company`: create your local company from the seven starter agents
+  (`init`, `hire`), see the org panel (`show`), tune agents (`set --model
+  --effort --pause/--resume`), add competitor watch routines (`watch --urls
+  @file`), run one now (`run`) and read findings (`findings`). The daemon
+  gains `POST /companies/:id/hire`, `GET /companies/:id/panel` and
+  `PATCH /agents/:id`, calendar routines in the routine's time zone, and web
+  preflight that calls the model only when a watched page really changed.
 - Add `chat`: multi-turn, streamed chat through the local daemon (`list`,
   `show`, `search`, `--continue`, piped input), models suggested from your own
   keys and pulled local models. The daemon gains the chat API shared with the

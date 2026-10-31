@@ -326,5 +326,20 @@ export const extraRows = [
 ["Chat on your computer · /new, /exit","Chat sul tuo computer · /new, /exit","Chat di komputer Anda · /new, /exit","내 컴퓨터에서 채팅 · /new, /exit","Czat na Twoim komputerze · /new, /exit","आपके कंप्यूटर पर चैट · /new, /exit","在你的电脑上聊天 · /new, /exit"],
 ["Relay chat on · {0}","Chat via relay attiva · {0}","Chat relay aktif · {0}","릴레이 채팅 켜짐 · {0}","Czat przez przekaźnik włączony · {0}","रिले चैट चालू · {0}","中继聊天已开启 · {0}"],
 ["Relay unavailable; retrying in {0}s","Relay non disponibile; nuovo tentativo tra {0} s","Relay tidak tersedia; mencoba lagi dalam {0} dtk","릴레이를 사용할 수 없습니다. {0}초 후 다시 시도합니다","Przekaźnik niedostępny; ponowna próba za {0} s","रिले उपलब्ध नहीं; {0} सेकंड में फिर कोशिश","中继不可用；{0} 秒后重试"],
-["Chat through the local daemon","Chatta tramite il daemon locale","Chat lewat daemon lokal","로컬 데몬으로 채팅","Czat przez lokalnego demona","लोकल डेमन के ज़रिए चैट","通过本地守护进程聊天"]
+["Chat through the local daemon","Chatta tramite il daemon locale","Chat lewat daemon lokal","로컬 데몬으로 채팅","Czat przez lokalnego demona","लोकल डेमन के ज़रिए चैट","通过本地守护进程聊天"],
+["No company yet. Create one: braavo company init <name>","Nessuna azienda ancora. Creane una: braavo company init <name>","Belum ada perusahaan. Buat: braavo company init <name>","아직 회사가 없습니다. 만들기: braavo company init <name>","Brak firmy. Utwórz: braavo company init <name>","अभी कोई कंपनी नहीं है। बनाएँ: braavo company init <name>","还没有公司。创建：braavo company init <name>"],
+["Several companies; pass --company <id>.","Più aziende; usa --company <id>.","Ada beberapa perusahaan; berikan --company <id>.","회사가 여러 개입니다. --company <id>를 지정하세요.","Kilka firm; podaj --company <id>.","कई कंपनियाँ हैं; --company <id> दें।","有多个公司；请指定 --company <id>。"],
+["Hired {0} agents","{0} agenti assunti","{0} agen direkrut","에이전트 {0}명을 채용했습니다","Zatrudniono agentów: {0}","{0} एजेंट नियुक्त किए गए","已雇用 {0} 个智能体"],
+["Needs setup: {0}","Configurazione necessaria: {0}","Perlu disiapkan: {0}","설정 필요: {0}","Wymaga konfiguracji: {0}","सेटअप चाहिए: {0}","需要设置：{0}"],
+["Needs URLs for: {0} (pass --watch or --release-watch)","Servono URL per: {0} (usa --watch o --release-watch)","Perlu URL untuk: {0} (berikan --watch atau --release-watch)","URL 필요: {0} (--watch 또는 --release-watch 지정)","Potrzebne adresy URL dla: {0} (podaj --watch lub --release-watch)","इनके लिए URL चाहिए: {0} (--watch या --release-watch दें)","需要 URL：{0}（请指定 --watch 或 --release-watch）"],
+["Company created: {0}","Azienda creata: {0}","Perusahaan dibuat: {0}","회사를 만들었습니다: {0}","Utworzono firmę: {0}","कंपनी बनाई गई: {0}","已创建公司：{0}"],
+["{0} agents","{0} agenti","{0} agen","에이전트 {0}명","Agenci: {0}","{0} एजेंट","{0} 个智能体"],
+["Routines","Routine","Rutinitas","루틴","Rutyny","रूटीन","例行任务"],
+["next","prossima","berikutnya","다음","następna","अगला","下次"],
+["last","ultima","terakhir","최근","ostatnia","पिछला","上次"],
+["Recent activity","Attività recente","Aktivitas terbaru","최근 활동","Ostatnia aktywność","हाल की गतिविधि","最近活动"],
+["Agent or routine not found: {0}","Agente o routine non trovati: {0}","Agen atau rutinitas tidak ditemukan: {0}","에이전트나 루틴을 찾을 수 없습니다: {0}","Nie znaleziono agenta ani rutyny: {0}","एजेंट या रूटीन नहीं मिला: {0}","未找到智能体或例行任务：{0}"],
+["Agent updated: {0}","Agente aggiornato: {0}","Agen diperbarui: {0}","에이전트를 업데이트했습니다: {0}","Zaktualizowano agenta: {0}","एजेंट अपडेट हुआ: {0}","已更新智能体：{0}"],
+["No findings yet.","Nessun risultato ancora.","Belum ada temuan.","아직 발견된 내용이 없습니다.","Brak ustaleń.","अभी कोई निष्कर्ष नहीं।","还没有发现。"],
+["Run your local company: agents, panel and watch routines","Gestisci la tua azienda locale: agenti, pannello e routine di monitoraggio","Jalankan perusahaan lokal: agen, panel, dan rutinitas pemantauan","로컬 회사 운영: 에이전트, 패널, 모니터링 루틴","Prowadź lokalną firmę: agenci, panel i rutyny obserwacji","अपनी लोकल कंपनी चलाएँ: एजेंट, पैनल और निगरानी रूटीन","运营你的本地公司：智能体、面板和监控例行任务"]
 ] as const;

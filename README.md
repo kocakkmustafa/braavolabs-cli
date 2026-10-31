@@ -403,6 +403,25 @@ braavo daemon uninstall
 - Chat: multi-turn, streamed conversations on your own keys or local models (see `chat` below and [docs/DAEMON-CHAT.md](docs/DAEMON-CHAT.md) for the API the desktop and mobile apps use).
 - `--relay` (opt-in, needs `braavo login`) registers one relay session so the mobile app can chat with this computer. Outbound connections only; each message from the phone is a turn in the current conversation (`/new`, `/model PROVIDER/model`), stop aborts the turn.
 
+### company
+
+Your company on this computer ("Şirket / Company"): the seven starter agents (General Manager; Market Analyst; Content and Social Media Lead with the Customer Voice Analyst; Finance Tracker; Technical Lead with the Release and Dependency Tracker), their routines and an org panel. Needs the daemon.
+
+```bash
+braavo company init "YULA Lab" --watch https://rival.example/pricing,https://rival.example/changelog --timezone Europe/Istanbul
+braavo company init "YULA Lab" --watch @KAYNAKLAR.md     # every http(s) URL in the file (max 20)
+braavo company show [--json]                              # org tree with model · effort · status, routines, activity
+braavo company set market-analyst --model OLLAMA/qwen3:8b --effort low
+braavo company set "Finance Tracker" --pause | --resume
+braavo company watch "Rivals of app X" --urls @app-x/KAYNAKLAR.md --every 6h
+braavo company run "Watch competitors"                    # run a routine now
+braavo company findings [--role market-analyst]
+```
+
+- Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.
+- Watch routines check pages model-free; the model is called only when a price, plan, promotion or release changed. Findings are appended to `~/.braavo/memory/<company>/findings/<role>.md` and shown as a macOS notification (and on the phone with `daemon run --relay`).
+- Calendar routines (e.g. Monday 09:00) run in the time zone you give; after sleep the latest missed run happens once.
+
 ### chat
 
 Multi-turn chat through the local daemon. History lives in `~/.braavo/braavo.db` and is shared with the desktop and mobile apps.

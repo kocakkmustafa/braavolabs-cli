@@ -22,7 +22,7 @@ import { t, getLocale, setLocale, localeArgs, numberText, moneyText, dateText, s
 import { renderHelp } from "./forge/help";
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
-import { Config, loadConfig, saveConfig, clearConfig, captureConfigOwner, commitLoginIfCurrent, classifyApiHost, CONFIG_PATH, UntrustedHostError } from "./forge/config";
+import { Config, loadConfig, saveConfig, clearConfig, captureConfigOwner, commitLoginIfCurrent, classifyApiHost, CONFIG_DIR, CONFIG_PATH, UntrustedHostError } from "./forge/config";
 import { parseApprovalDecision } from "./forge/approvalDecision";
 import { EXIT, type ExitCode } from "./forge/exit-codes";
 import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/output";
@@ -1340,6 +1340,143 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "company": {
+      // Local company on the daemon (Şirket / Company, founder decisions K1–K3): hire the starter
+      // agents, show the org panel, tune agents, add watch routines. Cloud companies stay under `agent`/`use`.
+      const paths = daemonPaths();
+      const live = runningDaemon(paths);
+      if (!live) die(t("The daemon is not running. Start it: braavo daemon start"));
+      const { DaemonClient, DaemonRequestError, parseModelFlag } = await import("./forge/daemon-client");
+      const client = new DaemonClient({ port: live!.port, token: ensureToken(paths) });
+      const call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
+        try { return await client.json<T>(method, path, body); }
+        catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
+      };
+      const sub = positionals[0] ?? "show";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] [--company <id>] [--json]";
+      /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
+      const urlList = async (value: string | undefined): Promise<string[]> => {
+        if (!value) return [];
+        let text = value;
+        if (value.startsWith("@")) { const { readFileSync } = await import("node:fs"); text = readFileSync(value.slice(1), "utf8"); }
+        const found = text.match(/https?:\/\/[^\s<>()"'`\]|,]+/g) ?? [];
+        return [...new Set(found.map(u => u.replace(/[.;:]+$/, "")))].slice(0, 20);
+      };
+      const tz = flag(flags, "timezone");
+      const lang = getLocale() === "tr" ? "tr" : "en";
+      const pickCompany = async (): Promise<string> => {
+        const explicit = flag(flags, "company");
+        if (explicit) return explicit;
+        const { companies } = await call<{ companies: Array<{ id: string }> }>("GET", "/companies");
+        if (!companies.length) die(t("No company yet. Create one: braavo company init <name>"));
+        if (companies.length > 1) die(t("Several companies; pass --company <id>."));
+        return companies[0].id;
+      };
+      const hireBody = async () => {
+        const templates = flag(flags, "templates");
+        const urls: Record<string, string[]> = {};
+        const watch = await urlList(flag(flags, "watch")); if (watch.length) urls["market-analyst/watch-competitors"] = watch;
+        const release = await urlList(flag(flags, "release-watch")); if (release.length) urls["release-tracker/watch-releases"] = release;
+        return { templates: !templates || templates === "all" ? "all" : templates.split(",").map(x => x.trim()), urls, ...(tz ? { timezone: tz } : {}), locale: lang };
+      };
+      const reportHire = (r: { agents: unknown[]; skipped: string[]; needsSetup: Array<{ agentId: string; reason: string; provider?: string }>; needsUrls: string[] }) => {
+        const lines = [t("Hired {0} agents", r.agents.length)];
+        if (r.needsSetup.length) lines.push(t("Needs setup: {0}", r.needsSetup.map(n => `${n.agentId} (${n.reason}${n.provider ? ` ${n.provider}` : ""})`).join(", ")));
+        if (r.needsUrls.length) lines.push(t("Needs URLs for: {0} (pass --watch or --release-watch)", r.needsUrls.join(", ")));
+        return lines.join("\n");
+      };
+      const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString(getLocale(), { dateStyle: "short", timeStyle: "short" }) : "—");
+
+      if (sub === "init") {
+        const name = positionals.slice(1).join(" ").trim();
+        if (!name) usage(companyUsage);
+        const { company } = await call<{ company: { id: string; name: string } }>("POST", "/companies", { name, mission: flag(flags, "mission") });
+        const result = await call<any>("POST", `/companies/${company.id}/hire`, await hireBody());
+        emit(flags, { company, ...result }, () => `${t("Company created: {0}", `${company.name} (${company.id})`)}\n${reportHire(result)}`);
+        return;
+      }
+      const companyId = await pickCompany();
+      if (sub === "hire") {
+        const result = await call<any>("POST", `/companies/${companyId}/hire`, await hireBody());
+        emit(flags, result, () => reportHire(result));
+        return;
+      }
+      const p = await call<any>("GET", `/companies/${companyId}/panel`);
+      const findAgent = (key: string) => p.agents.find((a: any) => a.id === key || a.role === key || a.name.toLowerCase() === key.toLowerCase());
+      const findRoutine = (key: string) => p.routines.find((r: any) => r.id === key || r.name.toLowerCase() === key.toLowerCase());
+      if (sub === "show") {
+        emit(flags, p, () => {
+          const byId = new Map(p.agents.map((a: any) => [a.id, a]));
+          const out = [`${p.company.name} · ${t("{0} agents", p.agents.length)} · ${tokens(p.month.inputTokens)}/${tokens(p.month.outputTokens)} tokens`];
+          const walk = (nodes: any[], prefix: string) => nodes.forEach((n, i) => {
+            const a: any = byId.get(n.id); const lastNode = i === nodes.length - 1;
+            out.push(`${prefix}${lastNode ? "└─" : "├─"} ${a.name}  ${a.provider}/${a.model} · ${a.effort ?? "default"} · ${a.status}${a.month.runs ? ` · ${a.month.runs}×` : ""}`);
+            walk(n.children, `${prefix}${lastNode ? "   " : "│  "}`);
+          });
+          walk(p.tree, "");
+          if (p.routines.length) {
+            out.push("", t("Routines"));
+            for (const r of p.routines) out.push(`  ${r.name} · ${(byId.get(r.agentId) as any)?.name ?? "?"} · ${t("next")} ${when(r.nextFireAt)}${r.last ? ` · ${t("last")} ${r.last.outcome}${r.last.note ? ` (${String(r.last.note).slice(0, 80)})` : ""}` : ""}`);
+          }
+          if (p.activity.length) {
+            out.push("", t("Recent activity"));
+            for (const a of p.activity.slice(0, 8)) out.push(`  ${when(a.at)}  ${a.verb}  ${a.summary}`);
+          }
+          return out.join("\n");
+        });
+        return;
+      }
+      if (sub === "set") {
+        const agent = positionals[1] ? findAgent(positionals[1]) : undefined;
+        if (!agent) die(t("Agent or routine not found: {0}", positionals[1] ?? ""));
+        const body: Record<string, unknown> = {};
+        const m = flag(flags, "model");
+        if (m) { const parsed = parseModelFlag(m); if (!parsed) usage(companyUsage); Object.assign(body, parsed); }
+        const effort = flag(flags, "effort");
+        if (effort) body.effort = effort === "default" ? null : effort;
+        if (has(flags, "pause")) body.status = "paused";
+        if (has(flags, "resume")) body.status = "idle";
+        const { agent: updated } = await call<{ agent: any }>("PATCH", `/agents/${agent.id}`, body);
+        emit(flags, updated, () => t("Agent updated: {0}", `${updated.name} · ${updated.provider}/${updated.model} · ${updated.effort ?? "default"} · ${updated.status}`));
+        return;
+      }
+      if (sub === "watch") {
+        const name = positionals.slice(1).join(" ").trim();
+        const urls = await urlList(flag(flags, "urls"));
+        const analyst = p.agents.find((a: any) => a.role === "market-analyst");
+        if (!name || !urls.length) usage(companyUsage);
+        if (!analyst) die(t("Agent or routine not found: {0}", "market-analyst"));
+        const every = flag(flags, "every") ?? "6h";
+        const hours = /^(\d{1,3})h$/.exec(every)?.[1];
+        if (!hours) usage(companyUsage);
+        const { routine } = await call<{ routine: any }>("POST", `/companies/${companyId}/routines`, {
+          agentId: analyst.id, name, prompt: "Summarise what changed on the watched pages and record new prices and plans.",
+          rrule: `FREQ=HOURLY;INTERVAL=${hours}`, timezone: tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+          preflight: { type: "web", urls, notify: ["price", "plans", "promo", "release"] }, delivery: "silent-unless-change",
+        });
+        emit(flags, routine, () => `${routine.name} · ${urls.length} URL · ${t("next")} ${when(routine.next_fire_at)}`);
+        return;
+      }
+      if (sub === "run") {
+        const routine = positionals[1] ? findRoutine(positionals.slice(1).join(" ")) : undefined;
+        if (!routine) die(t("Agent or routine not found: {0}", positionals.slice(1).join(" ")));
+        const result = await call<{ outcome: string; note?: string }>("POST", `/routines/${routine.id}/run`);
+        emit(flags, result, () => `${routine.name}: ${result.outcome}${result.note ? ` · ${result.note}` : ""}`);
+        return;
+      }
+      if (sub === "findings") {
+        const { existsSync, readFileSync } = await import("node:fs");
+        const { join } = await import("node:path");
+        const role = flag(flags, "role") ?? "market-analyst";
+        const file = join(CONFIG_DIR, "memory", companyId, "findings", `${role}.md`);
+        const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+        emit(flags, { file, text }, () => (text.trim() ? text.trim().split("\n").slice(-60).join("\n") : t("No findings yet.")));
+        return;
+      }
+      usage(companyUsage);
+      return;
+    }
+
     case "chat": {
       // Multi-turn, streamed chat on the local daemon (plan 1.2; docs/DAEMON-CHAT.md). The daemon
       // holds the history and the user's own keys; this process only reads its loopback token.
@@ -1455,7 +1592,16 @@ async function main(): Promise<void> {
         let daemon: InstanceType<typeof Daemon> | undefined;
         const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider) },
           conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
-        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys }) });
+        // Findings reach the user as a macOS notification (osascript, argv only — no shell) and over the relay.
+        let relayAudit: ((text: string) => void) | undefined;
+        const notify = (title: string, body: string) => {
+          if (process.platform === "darwin") {
+            const q = (v: string) => `"${v.slice(0, 240).replace(/[\\"]/g, m => `\\${m}`)}"`;
+            void import("node:child_process").then(cp => cp.execFile("osascript", ["-e", `display notification ${q(body)} with title ${q(title)}`], () => {}));
+          }
+          relayAudit?.(`${title}: ${body}`);
+        };
+        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys, notify }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();
@@ -1472,6 +1618,7 @@ async function main(): Promise<void> {
           } });
           const bridge = new RelayBridge(createRelayTransport({ cfg }), relayChat.handlers());
           relayChat.attach(bridge);
+          relayAudit = text => { void bridge.emitAudit(text.slice(0, 4000)); };
           const label = `Braavo chat · ${hostname().replace(/\.local$/, "").slice(0, 60)}`;
           let stopped = false; let retry: NodeJS.Timeout | undefined;
           const connect = async (delayS: number): Promise<void> => {
