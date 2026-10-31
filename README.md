@@ -426,6 +426,7 @@ braavo code undo                                          # restore every file t
 - `AGENTS.md` / `CLAUDE.md` in the directory and its parents are given to the model as project instructions.
 - Paths never leave the directory (no `..`, absolute paths, links out, or `.git`). Before each write the previous content is saved under `~/.braavo/checkpoints/`.
 - `--allow-web docs.example.com,developer.mozilla.org` gives the agent a `web_fetch` tool for those domains only (redirects re-checked, private addresses refused, text marked untrusted).
+- `--review-model PROVIDER/model` has a second model review every diff first; a "risky" verdict is shown with its reason and always needs your confirmation, even with `--yes` (refused without a terminal).
 - No shell tool yet; running commands waits for the daemon sandbox.
 
 ### company

@@ -1409,7 +1409,7 @@ async function main(): Promise<void> {
         emit(flags, { restored }, () => (restored.length ? t("Reverted {0} file(s): {1}", restored.length, restored.join(", ")) : t("Nothing to undo.")));
         return;
       }
-      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--max-turns <n>] | undo";
+      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--review-model PROVIDER/model] [--max-turns <n>] | undo";
       const task = positionals.join(" ").trim();
       if (!task) usage(codeUsage);
       const { parseModelFlag } = await import("./forge/daemon-client");
@@ -1427,19 +1427,28 @@ async function main(): Promise<void> {
       }
       const call = prepareCall({ ...target!, effort: flag(flags, "effort") }, { keys, maxTokens: 16_000 });
       if (!call.ok) die(call.message);
+      // FK-9: optional second model that reviews every diff before it is applied.
+      const reviewFlag = flag(flags, "review-model");
+      const reviewTarget = reviewFlag ? parseModelFlag(reviewFlag) : undefined;
+      if (reviewFlag && !reviewTarget) usage(codeUsage);
+      const reviewer = reviewTarget ? prepareCall(reviewTarget, { keys, maxTokens: 400 }) : undefined;
+      if (reviewer && !reviewer.ok) die(reviewer.message);
       const root = resolve(flag(flags, "dir") ?? process.cwd());
       const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
       const color = (code: number, text: string) => (process.stdout.isTTY ? `\x1b[${code}m${text}\x1b[0m` : text);
       const paint = (diff: string) => diff.split("\n").map(l => (l.startsWith("+") && !l.startsWith("+++") ? color(32, l) : l.startsWith("-") && !l.startsWith("---") ? color(31, l) : l.startsWith("@@") ? color(36, l) : l)).join("\n");
       let applyAll = has(flags, "yes"); let warned = false;
-      const approve = async (change: { diff: string }): Promise<boolean> => {
+      const approve = async (change: { diff: string; review?: { verdict: string; reason: string } }): Promise<boolean> => {
         console.log(`\n${paint(change.diff)}`);
-        if (applyAll) return true;
+        if (change.review) console.log(color(change.review.verdict === "ok" ? 32 : 33, `review: ${change.review.verdict} · ${change.review.reason}`));
+        // A risky review always asks a human, even with --yes; without a terminal it is refused.
+        const risky = change.review?.verdict === "risky";
+        if (applyAll && !risky) return true;
         if (!interactive) { if (!warned) { warned = true; console.error(t("Writes need confirmation: run in a terminal or pass --yes.")); } return false; }
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         const answer = await new Promise<string>(r => rl.question(`${t("Apply this change? [y]es / [n]o / [a]ll")} `, r));
         rl.close();
-        if (/^a/i.test(answer.trim())) { applyAll = true; return true; }
+        if (/^a/i.test(answer.trim())) { applyAll = !risky || applyAll; return true; }
         return /^y/i.test(answer.trim());
       };
       const controller = new AbortController();
@@ -1448,6 +1457,7 @@ async function main(): Promise<void> {
       console.error(`${target!.provider}/${target!.model} · ${root}${has(flags, "plan") ? " · plan" : ""}`);
       const result = await runCoder({
         web: { allow: (flag(flags, "allow-web") ?? "").split(",").map(d => d.trim().toLowerCase().replace(/^\*\./, "")).filter(d => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) },
+        reviewer: reviewer?.ok ? reviewer : undefined,
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
           if (ev.type === "text") process.stdout.write(ev.text);

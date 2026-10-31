@@ -17,10 +17,14 @@ import { htmlToText, stripNoise } from "../forge/monitor";
  * - FK-8: with an explicit domain allowlist, `web_fetch` reads public pages (redirects
  *   re-checked, private addresses refused, text wrapped as untrusted, size capped).
  *
+ * - FK-9: an optional second model reviews each diff before it is applied; a "risky"
+ *   verdict is shown to the user and blocks unattended (--yes) application.
+ *
  * No shell tool yet: running commands waits for the daemon sandbox (plan 3.4).
  */
 
-export interface FileChange { path: string; before: string | null; after: string; diff: string }
+export interface Review { verdict: "ok" | "risky"; reason: string }
+export interface FileChange { path: string; before: string | null; after: string; diff: string; review?: Review }
 
 export type CoderEvent =
   | { type: "text"; text: string }
@@ -40,6 +44,8 @@ export interface CoderOptions {
   checkpointDir: string;
   sessionId: string;
   signal?: AbortSignal;
+  /** FK-9: a second model that reviews each diff; `approve` sees its verdict on the change. */
+  reviewer?: Extract<PreparedCall, { ok: true }>;
   /** FK-8: domains web_fetch may read (host or any subdomain). Empty/omitted = no web tool. */
   web?: { allow: string[]; fetchImpl?: typeof fetch; resolve?: (host: string) => Promise<string[]> };
 }
@@ -142,6 +148,29 @@ export function undoSession(dir: string, sessionId?: string): string[] {
   rmSync(file, { force: true });
   if (existsSync(join(dir, "last")) && readFileSync(join(dir, "last"), "utf8").trim() === id) rmSync(join(dir, "last"), { force: true });
   return [...restored];
+}
+
+// ─── FK-9: second-model review ──────────────────────────────────────────
+
+/** Ask the reviewer model for a verdict on one change; unreadable answers count as risky. */
+export async function reviewChange(reviewer: Extract<PreparedCall, { ok: true }>, task: string, change: { path: string; diff: string }, signal?: AbortSignal): Promise<Review> {
+  const prompt = [
+    "You review one file change proposed by a coding agent before it is written to the user's disk.",
+    'Answer with JSON only: {"verdict":"ok"|"risky","reason":"<one short sentence>"}.',
+    "risky = deletes or weakens security checks, adds secrets or credentials, touches CI/deploy/auth, sends data to the network, removes large unrelated code, or does not match the task.",
+    `Task: ${task.slice(0, 2000)}`,
+    `<untrusted part="diff" path="${change.path}">`, change.diff.slice(0, 30_000), "</untrusted>",
+  ].join("\n");
+  let text = "";
+  try {
+    for await (const ev of reviewer.stream({ messages: [{ role: "user", content: prompt }] }, signal ?? AbortSignal.timeout(60_000))) if (ev.type === "text") text += ev.text;
+    const m = /\{[\s\S]*\}/.exec(text);
+    const parsed = m ? JSON.parse(m[0]) as { verdict?: unknown; reason?: unknown } : {};
+    if (parsed.verdict === "ok" || parsed.verdict === "risky") return { verdict: parsed.verdict, reason: String(parsed.reason ?? "").slice(0, 300) };
+    return { verdict: "risky", reason: "the reviewer did not give a clear verdict" };
+  } catch (error) {
+    return { verdict: "risky", reason: `review failed: ${(error as Error).message.slice(0, 120)}` };
+  }
 }
 
 // ─── FK-8: allowlisted web fetch ────────────────────────────────────────
@@ -304,9 +333,11 @@ export async function runCoder(o: CoderOptions): Promise<{ changes: FileChange[]
           if (Buffer.byteLength(after) > MAX_WRITE_BYTES) return "error: file would be larger than 1 MB";
           if (after === before) return "no change";
           const change: FileChange = { path: rel, before, after, diff: unifiedDiff(rel, before, after) };
-          const ok = o.approve ? await o.approve(change) : true;
+          if (o.reviewer) change.review = await reviewChange(o.reviewer, o.task, change, o.signal);
+          // Without a human approver a risky verdict is a refusal.
+          const ok = o.approve ? await o.approve(change) : change.review?.verdict !== "risky";
           emit({ type: "change", change, applied: ok });
-          if (!ok) return "error: the user declined this change";
+          if (!ok) return `error: the user declined this change${change.review?.verdict === "risky" ? ` (reviewer: ${change.review.reason})` : ""}`;
           checkpoint(o.checkpointDir, o.sessionId, root, rel, before);
           mkdirSync(dirname(abs), { recursive: true });
           writeFileSync(abs, after);

@@ -33,7 +33,7 @@ export const COMMAND_HELP = [
 ["init", "braavo init [--api <url>] [--json]", "Write the API configuration"],
 ["watch", "braavo watch <runId> [--json]", "Watch a run until completion or local timeout"],
 ["monitor", "braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize] | log <id>", "Watch web pages for changes; a model runs only when something changed"],
-["code", "braavo code <task> [--dir <path>] [--model PROVIDER/model] [--plan] [--yes] [--allow-web <domains>] | undo", "Edit code with your own model: plan, diff, undo"],
+["code", "braavo code <task> [--dir <path>] [--model PROVIDER/model] [--plan] [--yes] [--allow-web <domains>] [--review-model P/m] | undo", "Edit code with your own model: plan, diff, undo"],
 ["company", "braavo company init <name> [--templates all|id,...] [--watch <urls>|@file] | show | hire | set <agent> [--model PROVIDER/model] [--effort <e>] [--pause|--resume] | watch <name> --urls <urls>|@file | run <routine> | findings", "Run your local company: agents, panel and watch routines"],
 ["chat", "braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <id>|last] | list | show <id> | search <text> | export <id> [--format md|json] [--out <file>]", "Chat through the local daemon"],
 ["daemon", "braavo daemon run [--relay] | start [--relay] | stop | status | install [--relay] [--dry-run] | uninstall [--json]", "Run the local daemon: agents, schedules and the local API"],

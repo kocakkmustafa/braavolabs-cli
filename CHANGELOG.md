@@ -8,6 +8,9 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- `code --allow-web <domains>` (allowlisted web_fetch) and
+  `code --review-model PROVIDER/model` (second model reviews each diff; a
+  risky verdict always needs a human).
 - Add `setup` (daemon, key names, local models, suggested model per tier,
   next step) and `models pull <name>` (pull into the local Ollama), and
   `chat export <id> [--format md|json]`.
