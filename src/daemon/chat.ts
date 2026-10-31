@@ -49,6 +49,24 @@ export interface ImportConversation {
 
 const TIERS: ModelTier[] = ["strong", "mid", "light", "analysis"];
 
+async function localModels(fetchImpl: typeof fetch, url: string, pick: (body: any) => unknown[]): Promise<string[]> {
+  try {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(2000) }); // a loaded machine answers slowly
+    if (!res.ok) return [];
+    return pick(await res.json()).filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 200).slice(0, 100);
+  } catch { return []; }
+}
+
+/** The user's own keys (names only) and the models pulled into Ollama / LM Studio (K3). */
+export async function detectUserModels(keyProviders: string[], o: { fetchImpl?: typeof fetch; ollamaHost?: string; lmStudioHost?: string } = {}): Promise<{ keys: Set<AIProviderType>; local: { OLLAMA: string[]; LMSTUDIO: string[] } }> {
+  const f = o.fetchImpl ?? fetch;
+  const [ollama, lmstudio] = await Promise.all([
+    localModels(f, `${o.ollamaHost ?? "http://localhost:11434"}/api/tags`, body => (body?.models ?? []).map((m: { name?: unknown }) => m.name)),
+    localModels(f, `${o.lmStudioHost ?? "http://localhost:1234"}/v1/models`, body => (body?.data ?? []).map((m: { id?: unknown }) => m.id)),
+  ]);
+  return { keys: new Set(keyProviders.map(p => p.toUpperCase()).filter(isAIProvider)), local: { OLLAMA: ollama, LMSTUDIO: lmstudio } };
+}
+
 function toDto(c: ConversationRow | ConversationSummary): ConversationDto {
   const dto: ConversationDto = {
     id: c.id, title: c.title, provider: c.provider, model: c.model, effort: c.effort, companyId: c.company_id, agentId: c.agent_id,
@@ -73,13 +91,8 @@ export class ChatService {
 
   /** Providers with a stored key, pulled local models, and a suggestion per tier — never key values. */
   async models(): Promise<{ providers: Array<{ id: AIProviderType; hasKey: boolean; local: boolean }>; local: { OLLAMA: string[]; LMSTUDIO: string[] }; suggestions: Record<ModelTier, ModelSuggestion> }> {
-    const keyed = new Set(this.deps.keyProviders().map(p => p.toUpperCase()).filter(isAIProvider));
-    const [ollama, lmstudio] = await Promise.all([
-      this.localModels(`${this.deps.ollamaHost ?? "http://localhost:11434"}/api/tags`, body => (body?.models ?? []).map((m: { name?: unknown }) => m.name)),
-      this.localModels(`${this.deps.lmStudioHost ?? "http://localhost:1234"}/v1/models`, body => (body?.data ?? []).map((m: { id?: unknown }) => m.id)),
-    ]);
-    const local = { OLLAMA: ollama, LMSTUDIO: lmstudio };
-    const user = { keys: keyed, local };
+    const user = await detectUserModels(this.deps.keyProviders(), this.deps);
+    const keyed = user.keys; const local = user.local;
     const suggestions = Object.fromEntries(TIERS.map(t => [t, suggestModel(t, user)])) as Record<ModelTier, ModelSuggestion>;
     return { providers: AI_PROVIDERS.map(id => ({ id, hasKey: keyed.has(id), local: LOCAL_PROVIDERS.has(id) })), local, suggestions };
   }
@@ -94,14 +107,6 @@ export class ChatService {
   canUse(provider: string): boolean {
     if (!isAIProvider(provider)) return false;
     return LOCAL_PROVIDERS.has(provider) || this.deps.keyProviders().some(p => p.toUpperCase() === provider);
-  }
-
-  private async localModels(url: string, pick: (body: any) => unknown[]): Promise<string[]> {
-    try {
-      const res = await (this.deps.fetchImpl ?? fetch)(url, { signal: AbortSignal.timeout(800) });
-      if (!res.ok) return [];
-      return pick(await res.json()).filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 200).slice(0, 100);
-    } catch { return []; }
   }
 
   list(limit = 50, before?: string): ConversationDto[] {

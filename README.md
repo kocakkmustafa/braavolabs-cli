@@ -403,6 +403,21 @@ braavo daemon uninstall
 - Chat: multi-turn, streamed conversations on your own keys or local models (see `chat` below and [docs/DAEMON-CHAT.md](docs/DAEMON-CHAT.md) for the API the desktop and mobile apps use).
 - `--relay` (opt-in, needs `braavo login`) registers one relay session so the mobile app can chat with this computer. Outbound connections only; each message from the phone is a turn in the current conversation (`/new`, `/model PROVIDER/model`), stop aborts the turn.
 
+### code
+
+Our own coding agent on your own key or local model. It reads, searches and edits files under one directory, shows every change as a diff and asks before writing.
+
+```bash
+braavo code "use a template string in greet()" [--dir .] [--model OLLAMA/qwen3-coder:30b]
+braavo code "how would you split this module?" --plan    # read-only tools, ends with a plan
+braavo code "…" --yes                                     # apply without asking (non-interactive)
+braavo code undo                                          # restore every file the last run changed
+```
+
+- `AGENTS.md` / `CLAUDE.md` in the directory and its parents are given to the model as project instructions.
+- Paths never leave the directory (no `..`, absolute paths, links out, or `.git`). Before each write the previous content is saved under `~/.braavo/checkpoints/`.
+- No shell tool yet; running commands waits for the daemon sandbox.
+
 ### company
 
 Your company on this computer ("Şirket / Company"): the seven starter agents (General Manager; Market Analyst; Content and Social Media Lead with the Customer Voice Analyst; Finance Tracker; Technical Lead with the Release and Dependency Tracker), their routines and an org panel. Needs the daemon.

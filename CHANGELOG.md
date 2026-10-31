@@ -8,6 +8,10 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Add `code`: our own coding agent (read, search, edit, write inside one
+  directory) on your own key or local model, with project instructions from
+  `AGENTS.md`/`CLAUDE.md`, a diff and a confirmation for every write,
+  `--plan` (read-only), and `code undo` from per-write checkpoints.
 - Add `company`: create your local company from the seven starter agents
   (`init`, `hire`), see the org panel (`show`), tune agents (`set --model
   --effort --pause/--resume`), add competitor watch routines (`watch --urls

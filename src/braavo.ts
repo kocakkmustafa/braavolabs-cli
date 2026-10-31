@@ -1340,6 +1340,66 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "code": {
+      // Our own coding agent (plan 3.2; FK-1–FK-3) on the user's own key or local model: reads and
+      // edits files under --dir, shows every change as a diff, asks before writing, `undo` restores.
+      const { join, resolve } = await import("node:path");
+      const { runCoder, undoSession } = await import("./daemon/coder");
+      const checkpointDir = join(CONFIG_DIR, "checkpoints");
+      if (positionals[0] === "undo") {
+        const restored = undoSession(checkpointDir, flag(flags, "session"));
+        emit(flags, { restored }, () => (restored.length ? t("Reverted {0} file(s): {1}", restored.length, restored.join(", ")) : t("Nothing to undo.")));
+        return;
+      }
+      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--max-turns <n>] | undo";
+      const task = positionals.join(" ").trim();
+      if (!task) usage(codeUsage);
+      const { parseModelFlag } = await import("./forge/daemon-client");
+      const { detectUserModels } = await import("./daemon/chat");
+      const { suggestModel } = await import("./core/templates");
+      const { prepareCall } = await import("./daemon/provider");
+      const keys = makeKeyStore();
+      const modelFlag = flag(flags, "model");
+      let target = modelFlag ? parseModelFlag(modelFlag) : undefined;
+      if (modelFlag && !target) usage(codeUsage);
+      if (!target) {
+        const s = suggestModel("strong", await detectUserModels(keys.list().map(e => e.provider)));
+        if (s.status !== "ok") die(t("No usable model. Add a key (braavo keys add <provider>) or pull a local model."));
+        target = { provider: s.provider, model: s.model };
+      }
+      const call = prepareCall({ ...target!, effort: flag(flags, "effort") }, { keys, maxTokens: 16_000 });
+      if (!call.ok) die(call.message);
+      const root = resolve(flag(flags, "dir") ?? process.cwd());
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const color = (code: number, text: string) => (process.stdout.isTTY ? `\x1b[${code}m${text}\x1b[0m` : text);
+      const paint = (diff: string) => diff.split("\n").map(l => (l.startsWith("+") && !l.startsWith("+++") ? color(32, l) : l.startsWith("-") && !l.startsWith("---") ? color(31, l) : l.startsWith("@@") ? color(36, l) : l)).join("\n");
+      let applyAll = has(flags, "yes"); let warned = false;
+      const approve = async (change: { diff: string }): Promise<boolean> => {
+        console.log(`\n${paint(change.diff)}`);
+        if (applyAll) return true;
+        if (!interactive) { if (!warned) { warned = true; console.error(t("Writes need confirmation: run in a terminal or pass --yes.")); } return false; }
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>(r => rl.question(`${t("Apply this change? [y]es / [n]o / [a]ll")} `, r));
+        rl.close();
+        if (/^a/i.test(answer.trim())) { applyAll = true; return true; }
+        return /^y/i.test(answer.trim());
+      };
+      const controller = new AbortController();
+      process.once("SIGINT", () => controller.abort());
+      const sessionId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      console.error(`${target!.provider}/${target!.model} · ${root}${has(flags, "plan") ? " · plan" : ""}`);
+      const result = await runCoder({
+        root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
+        onEvent: ev => {
+          if (ev.type === "text") process.stdout.write(ev.text);
+          else if (ev.type === "tool") console.error(color(2, `· ${ev.name} ${ev.summary}`));
+        },
+      });
+      process.stdout.write("\n");
+      if (!has(flags, "plan")) console.error(t("Changes: {0} file(s) · undo: braavo code undo", result.changes.length));
+      return;
+    }
+
     case "company": {
       // Local company on the daemon (Şirket / Company, founder decisions K1–K3): hire the starter
       // agents, show the org panel, tune agents, add watch routines. Cloud companies stay under `agent`/`use`.
