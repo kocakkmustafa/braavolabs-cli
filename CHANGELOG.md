@@ -8,6 +8,13 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Add `chat`: multi-turn, streamed chat through the local daemon (`list`,
+  `show`, `search`, `--continue`, piped input), models suggested from your own
+  keys and pulled local models. The daemon gains the chat API shared with the
+  desktop and mobile apps (docs/DAEMON-CHAT.md): conversations, SSE turns,
+  abort, idempotent history import and search.
+- Add `daemon run|start|install --relay`: opt-in phone chat over the existing
+  relay protocol, one relay session per computer.
 - Add `daemon run|start|stop|status`: the first slice of the local AI-company
   runtime — loopback-only token-authenticated API, owner-only SQLite store
   (companies, agents with reporting lines, routines and execution ledger,

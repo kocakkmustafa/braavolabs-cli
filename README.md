@@ -390,8 +390,8 @@ Early slice of the local AI-company runtime. Everything runs on your machine; Br
 braavo daemon start     # detached; prints pid and port
 braavo daemon status [--json]
 braavo daemon stop
-braavo daemon run       # foreground (desktop sidecar, launchd/systemd)
-braavo daemon install [--dry-run]   # macOS: per-user LaunchAgent, starts at login
+braavo daemon run [--relay]       # foreground (desktop sidecar, launchd/systemd)
+braavo daemon install [--relay] [--dry-run]   # macOS: per-user LaunchAgent, starts at login
 braavo daemon uninstall
 ```
 
@@ -400,6 +400,23 @@ braavo daemon uninstall
 - Routines tick every 60 s. After a sleep only the latest missed firing runs, once, and is reported; the others are recorded as skipped. Routines cannot create routines. `POST /v1/routines/:id/run` runs one now without moving its schedule.
 - A due routine makes one model call for its agent (provider, model and effort from the agent) and stores the reply as a searchable conversation with a token cost event. Keys come from `braavo keys add <provider>` (macOS keychain) and are only sent to that provider; local providers (Ollama, LM Studio) need none. Supported: Anthropic (official SDK), OpenAI, Groq, Cerebras, Mistral, OpenRouter, DeepSeek, Kimi, Qwen, Zhipu, Ollama, LM Studio. Routine preflight checks and an agent tool loop are not implemented yet; USD cost is not computed yet (tokens only).
 - `install` writes `~/Library/LaunchAgents/com.braavolabs.daemon.plist` (no secrets, no environment) and loads it into your login session; the daemon restarts only after a crash. `--dry-run` prints the plist without installing.
+- Chat: multi-turn, streamed conversations on your own keys or local models (see `chat` below and [docs/DAEMON-CHAT.md](docs/DAEMON-CHAT.md) for the API the desktop and mobile apps use).
+- `--relay` (opt-in, needs `braavo login`) registers one relay session so the mobile app can chat with this computer. Outbound connections only; each message from the phone is a turn in the current conversation (`/new`, `/model PROVIDER/model`), stop aborts the turn.
+
+### chat
+
+Multi-turn chat through the local daemon. History lives in `~/.braavo/braavo.db` and is shared with the desktop and mobile apps.
+
+```bash
+braavo chat                                  # interactive; /new, /exit; Ctrl-C stops a reply
+braavo chat "question" [--model PROVIDER/model] [--effort low|medium|high]
+braavo chat --continue last "follow-up"      # or --continue <conversationId>
+echo "text" | braavo chat --continue last
+braavo chat list | show <id> | search <text> [--json]
+```
+
+- Without `--model`, the model is suggested from the keys you stored (`braavo keys add`) and the models you pulled into Ollama or LM Studio; with neither, the command tells you what to set up.
+- The conversation id is printed to stderr after a one-shot message (`--quiet` hides it).
 
 ### direct
 

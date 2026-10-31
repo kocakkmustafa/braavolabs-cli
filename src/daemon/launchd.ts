@@ -45,8 +45,8 @@ export function plistPath(home: string): string {
 }
 
 /** The LaunchAgent: run in the foreground, restart only after a crash, log to the daemon log. */
-export function renderPlist(o: { node: string; script: string; log: string }): string {
-  const args = [o.node, o.script, "daemon", "run"].map(a => `    <string>${xml(a)}</string>`).join("\n");
+export function renderPlist(o: { node: string; script: string; log: string; relay?: boolean }): string {
+  const args = [o.node, o.script, "daemon", "run", ...(o.relay ? ["--relay"] : [])].map(a => `    <string>${xml(a)}</string>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,12 +90,12 @@ export function stableNodePath(execPath: string, exists: (path: string) => boole
 
 export interface InstallPlan { path: string; plist: string; label: string; domain: string }
 
-export function planInstall(o: { node: string; script: string; log: string }, deps: Pick<LaunchdDeps, "home" | "uid"> = defaultDeps()): InstallPlan {
+export function planInstall(o: { node: string; script: string; log: string; relay?: boolean }, deps: Pick<LaunchdDeps, "home" | "uid"> = defaultDeps()): InstallPlan {
   return { path: plistPath(deps.home), plist: renderPlist(o), label: LAUNCHD_LABEL, domain: `gui/${deps.uid}` };
 }
 
 /** Write the plist and (re)load it. Re-running replaces an older install in place. */
-export function install(o: { node: string; script: string; log: string }, partial: Partial<LaunchdDeps> = {}): InstallPlan {
+export function install(o: { node: string; script: string; log: string; relay?: boolean }, partial: Partial<LaunchdDeps> = {}): InstallPlan {
   const deps = { ...defaultDeps(), ...partial };
   const plan = planInstall(o, deps);
   deps.mkdir(join(deps.home, "Library", "LaunchAgents"));

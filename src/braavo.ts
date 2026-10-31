@@ -1340,6 +1340,101 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "chat": {
+      // Multi-turn, streamed chat on the local daemon (plan 1.2; docs/DAEMON-CHAT.md). The daemon
+      // holds the history and the user's own keys; this process only reads its loopback token.
+      const paths = daemonPaths();
+      const live = runningDaemon(paths);
+      if (!live) die(t("The daemon is not running. Start it: braavo daemon start"));
+      const { DaemonClient, DaemonRequestError, parseModelFlag } = await import("./forge/daemon-client");
+      const client = new DaemonClient({ port: live!.port, token: ensureToken(paths) });
+      const sub = positionals[0];
+      const when = (iso: string) => iso.slice(0, 16).replace("T", " ");
+      if (sub === "list") {
+        const { conversations } = await client.json<{ conversations: any[] }>("GET", "/conversations?limit=50");
+        emit(flags, { conversations }, () => conversations.length
+          ? conversations.map(c => `${c.id}  ${when(c.updatedAt)}  ${c.provider ?? "-"}/${c.model ?? "-"}  ${c.title || "—"}`).join("\n")
+          : t("No conversations yet."));
+        return;
+      }
+      if (sub === "show") {
+        const id = positionals[1];
+        if (!id) usage("usage: braavo chat show <conversationId> [--json]");
+        const data = await client.json<{ conversation: any; messages: any[] }>("GET", `/conversations/${encodeURIComponent(id)}`);
+        emit(flags, data, () => [`${data.conversation.title || data.conversation.id} · ${data.conversation.provider}/${data.conversation.model}`,
+          ...data.messages.map(m => `\n${m.role === "user" ? "›" : "‹"} ${m.content}`)].join("\n"));
+        return;
+      }
+      if (sub === "search") {
+        const q = positionals.slice(1).join(" ");
+        if (!q) usage("usage: braavo chat search <text> [--json]");
+        const { results } = await client.json<{ results: any[] }>("GET", `/search?q=${encodeURIComponent(q)}`);
+        emit(flags, { results }, () => results.length ? results.map(r => `${r.conversationId}  ${when(r.at)}  ${r.role}: ${r.snippet}`).join("\n") : t("No matches."));
+        return;
+      }
+
+      const modelFlag = flag(flags, "model");
+      const chosen = modelFlag ? parseModelFlag(modelFlag) : undefined;
+      if (modelFlag && !chosen) usage("usage: braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <conversationId>|last]");
+      const effort = flag(flags, "effort");
+      let conversationId = flag(flags, "continue");
+      if (conversationId === "last") conversationId = (await client.json<{ conversations: any[] }>("GET", "/conversations?limit=1")).conversations[0]?.id;
+      const newConversation = async (): Promise<string> => {
+        let model = chosen;
+        if (!model) {
+          const { suggestions } = await client.json<{ suggestions: Record<string, { status: string; provider?: string; model?: string }> }>("GET", "/models");
+          const mid = suggestions.mid;
+          if (mid?.status !== "ok") die(t("No usable model. Add a key (braavo keys add <provider>) or pull a local model."));
+          model = { provider: mid.provider!, model: mid.model! };
+        }
+        return (await client.json<{ conversation: { id: string } }>("POST", "/conversations", { ...model, ...(effort ? { effort } : {}) })).conversation.id;
+      };
+      if (conversationId && (chosen || effort)) await client.json("PATCH", `/conversations/${encodeURIComponent(conversationId)}`, { ...(chosen ?? {}), ...(effort ? { effort } : {}) });
+
+      const send = async (content: string): Promise<void> => {
+        conversationId ??= await newConversation();
+        const controller = new AbortController();
+        const onInt = () => controller.abort();
+        process.once("SIGINT", onInt);
+        let ended = false;
+        try {
+          await client.turn(conversationId, content, ev => {
+            if (ev.type === "delta") process.stdout.write(ev.text);
+            else if (ev.type === "error") process.stderr.write(`\n${ev.error}\n`);
+            else if (ev.type === "done") { ended = true; process.stdout.write(ev.stopReason === "aborted" ? ` ${t("(stopped)")}\n` : "\n"); }
+          }, controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) { if (!ended) process.stdout.write(` ${t("(stopped)")}\n`); return; }
+          if (error instanceof DaemonRequestError) die(error.message);
+          throw error;
+        } finally {
+          process.removeListener("SIGINT", onInt);
+        }
+      };
+
+      const message = positionals.join(" ");
+      if (message) { await send(message); if (!has(flags, "quiet")) console.error(`[${conversationId}]`); return; }
+      if (!process.stdin.isTTY) {
+        let piped = "";
+        for await (const chunk of process.stdin) piped += chunk;
+        if (!piped.trim()) usage("usage: braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <conversationId>|last]");
+        await send(piped);
+        return;
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "› " });
+      console.log(t("Chat on your computer · /new, /exit"));
+      rl.prompt();
+      for await (const line of rl) {
+        const text = line.trim();
+        if (text === "/exit") break;
+        if (text === "/new") { conversationId = undefined; rl.prompt(); continue; }
+        if (text) { rl.pause(); await send(text); rl.resume(); }
+        rl.prompt();
+      }
+      rl.close();
+      return;
+    }
+
     case "daemon": {
       // Local daemon (AI company runtime): loopback API + scheduler. `run` stays in the
       // foreground (desktop sidecar, launchd/systemd); `start` detaches it.
@@ -1356,15 +1451,45 @@ async function main(): Promise<void> {
         const store = new DaemonStore(paths.db);
         // Due routines call their agent's model with the local BYOK key (never logged or stored).
         const keys = makeKeyStore();
-        const daemon = new Daemon({ store, token, version, runRoutine: routineId => runRoutine(store, routineId, { keys }) });
+        const { ChatService } = await import("./daemon/chat");
+        let daemon: InstanceType<typeof Daemon> | undefined;
+        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider) },
+          conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
+        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();
         console.log(t("Daemon running · pid {0} · port {1}", process.pid, port));
+        // Opt-in phone chat over the cloud relay (docs/DAEMON-CHAT.md §4); outbound connections only.
+        let relayStop: (() => Promise<void>) | undefined;
+        if (has(flags, "relay")) {
+          requireAuth(cfg);
+          const { RelayChat } = await import("./daemon/relay-chat");
+          const { hostname } = await import("node:os");
+          const relayChat = new RelayChat(chat, store, { defaultModel: async () => {
+            const mid = (await chat.models()).suggestions.mid;
+            return mid.status === "ok" ? { provider: mid.provider, model: mid.model } : undefined;
+          } });
+          const bridge = new RelayBridge(createRelayTransport({ cfg }), relayChat.handlers());
+          relayChat.attach(bridge);
+          const label = `Braavo chat · ${hostname().replace(/\.local$/, "").slice(0, 60)}`;
+          let stopped = false; let retry: NodeJS.Timeout | undefined;
+          const connect = async (delayS: number): Promise<void> => {
+            try { await bridge.start({ surface: "cli", label }); console.log(t("Relay chat on · {0}", label)); }
+            catch {
+              if (stopped) return;
+              console.error(t("Relay unavailable; retrying in {0}s", delayS));
+              retry = setTimeout(() => { void connect(Math.min(delayS * 2, 300)); }, delayS * 1000);
+            }
+          };
+          void connect(30);
+          relayStop = async () => { stopped = true; if (retry) clearTimeout(retry); await bridge.stop(); };
+        }
         await new Promise<void>(resolve => {
           const stop = () => resolve();
           process.once("SIGTERM", stop); process.once("SIGINT", stop);
         });
+        await relayStop?.();
         await daemon.close(); store.close(); clearState(paths);
         return;
       }
@@ -1375,7 +1500,7 @@ async function main(): Promise<void> {
         const { spawn } = await import("node:child_process");
         mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
         const log = openSync(paths.log, "a", 0o600);
-        const child = spawn(process.execPath, [process.argv[1], "daemon", "run"], { detached: true, stdio: ["ignore", log, log] });
+        const child = spawn(process.execPath, [process.argv[1], "daemon", "run", ...(has(flags, "relay") ? ["--relay"] : [])], { detached: true, stdio: ["ignore", log, log] });
         child.unref();
         for (let i = 0; i < 50; i++) {
           const state = runningDaemon(paths);
@@ -1413,7 +1538,7 @@ async function main(): Promise<void> {
           return;
         }
         const { realpathSync } = await import("node:fs");
-        const target = { node: launchd.stableNodePath(process.execPath), script: realpathSync(process.argv[1]), log: paths.log };
+        const target = { node: launchd.stableNodePath(process.execPath), script: realpathSync(process.argv[1]), log: paths.log, relay: has(flags, "relay") };
         if (has(flags, "dry-run")) {
           const plan = launchd.planInstall(target);
           emit(flags, plan, () => `${plan.path}\n\n${plan.plist}`);
@@ -1425,7 +1550,7 @@ async function main(): Promise<void> {
         emit(flags, plan, () => t("Daemon LaunchAgent installed: {0}", plan.path));
         return;
       }
-      usage("usage: braavo daemon run | start | stop | status | install [--dry-run] | uninstall [--json]");
+      usage("usage: braavo daemon run [--relay] | start [--relay] | stop | status | install [--relay] [--dry-run] | uninstall [--json]");
       return;
     }
 
