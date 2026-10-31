@@ -69,6 +69,7 @@ const str = (v: unknown, field: string, max = 200): string => {
 export class Daemon {
   readonly server: Server;
   private readonly subscribers = new Set<ServerResponse>();
+  private readonly listeners = new Set<(event: DaemonEvent) => void>();
   private readonly running = new Set<string>();
   private timer?: NodeJS.Timeout;
   private readonly now: () => Date;
@@ -100,7 +101,11 @@ export class Daemon {
   emit(event: DaemonEvent): void {
     const frame = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const res of this.subscribers) res.write(frame);
+    for (const fn of this.listeners) { try { fn(event); } catch { /* a listener never breaks the API */ } }
   }
+
+  /** In-process listener for daemon events (e.g. the relay's panel snapshot). */
+  onEvent(fn: (event: DaemonEvent) => void): void { this.listeners.add(fn); }
 
   /** One scheduler pass; returns the actions taken (exposed for tests and `routine run-now`). */
   async tick(): Promise<TickAction[]> {

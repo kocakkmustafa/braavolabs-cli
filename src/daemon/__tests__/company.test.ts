@@ -73,3 +73,27 @@ describe("panel and agent changes", () => {
     expect(updateAgent(store, ceo.id, { provider: "ANTHROPIC", model: "claude-opus-5-5" }, canUse).status).toBe("error");
   });
 });
+
+describe("panel snapshot for the phone", () => {
+  it("fits the relay's panel-snapshot schema and hides placeholder models", async () => {
+    const { panelSnapshot } = await import("../company");
+    const { SessionEventInputSchema, redactSessionEventInput } = await import("../../forge/relay-protocol");
+    const { store, co } = setup();
+    hire(store, co.id, { urls: { "market-analyst/watch-competitors": ["https://rival.example"] } }, { keys: new Set(["GROQ"]) }, NOW);
+    const ceo = store.listAgents(co.id)[0];
+    store.updateAgent(ceo.id, { status: "error" });
+    const snap = { type: "panel-snapshot" as const, ...panelSnapshot(panel(store, co.id, NOW)) };
+    const parsed = SessionEventInputSchema.parse(snap);
+    expect(parsed.type).toBe("panel-snapshot");
+    if (parsed.type !== "panel-snapshot") throw new Error("type");
+    expect(parsed.agents).toHaveLength(7);
+    expect(parsed.agents[0]).toMatchObject({ name: "General Manager", model: null, status: "error", managerId: null });
+    expect(parsed.agents[1]).toMatchObject({ model: "GROQ/openai/gpt-oss-20b", effort: "low", managerId: ceo.id });
+    expect(parsed.routines.find(r => r.name === "Watch competitors")?.nextFireAt).toBe("2026-11-01T10:00:00.000Z");
+    // Agent ids survive the client-side redaction pass so the phone can rebuild the tree.
+    const redacted = redactSessionEventInput(parsed);
+    if (redacted.type !== "panel-snapshot") throw new Error("type");
+    expect(redacted.agents[1].managerId).toBe(ceo.id);
+    expect(JSON.stringify(redacted)).not.toMatch(/systemPrompt|You lead the company/);
+  });
+});

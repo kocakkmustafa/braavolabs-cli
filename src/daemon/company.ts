@@ -192,3 +192,26 @@ export async function companyCommand(store: DaemonStore, command: string, arg: s
     default: return "error: unknown command";
   }
 }
+
+const SNAPSHOT_STATUSES = new Set(["idle", "running", "waiting", "error", "paused"]);
+const SNAPSHOT_EFFORTS = new Set(["none", "low", "medium", "high", "max"]);
+
+/** The relay's bounded panel-snapshot (platform relay protocol): org, models, states, routines — never prompts or transcripts. */
+export function panelSnapshot(p: ReturnType<typeof panel>) {
+  return {
+    company: { name: p.company.name.slice(0, 120) || "Company" },
+    agents: p.agents.slice(0, 50).map(a => ({
+      id: a.id, name: a.name.slice(0, 80), role: a.role.slice(0, 80), managerId: a.reportsToAgentId,
+      model: a.status === "error" ? null : `${a.provider}/${a.model}`.slice(0, 200),
+      effort: (a.effort && SNAPSHOT_EFFORTS.has(a.effort) ? a.effort : null) as "none" | "low" | "medium" | "high" | "max" | null,
+      status: (SNAPSHOT_STATUSES.has(a.status) ? a.status : "idle") as "idle" | "running" | "waiting" | "error" | "paused",
+      runsThisMonth: a.month.runs,
+    })),
+    routines: p.routines.slice(0, 50).map(r => ({
+      name: r.name.slice(0, 120), agentId: r.agentId,
+      nextFireAt: r.nextFireAt && !Number.isNaN(Date.parse(r.nextFireAt)) ? new Date(r.nextFireAt).toISOString() : null,
+      lastOutcome: r.last ? r.last.outcome.slice(0, 40) : null,
+    })),
+    month: { inputTokens: p.month.inputTokens, outputTokens: p.month.outputTokens },
+  };
+}

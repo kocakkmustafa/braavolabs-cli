@@ -1792,6 +1792,20 @@ async function main(): Promise<void> {
           const bridge = new RelayBridge(createRelayTransport({ cfg }), relayChat.handlers());
           relayChat.attach(bridge);
           relayAudit = text => { void bridge.emitAudit(text.slice(0, 4000)); };
+          // Opt-in panel snapshot for the phone: on start and after company changes, at most every 10 s.
+          const { panel, panelSnapshot } = await import("./daemon/company");
+          let snapshotTimer: NodeJS.Timeout | undefined;
+          const pushSnapshot = () => {
+            if (snapshotTimer) return;
+            snapshotTimer = setTimeout(() => {
+              snapshotTimer = undefined;
+              const company = store.listCompanies()[0];
+              if (company) void bridge.emitPanelSnapshot(panelSnapshot(panel(store, company.id)));
+            }, 10_000);
+            snapshotTimer.unref?.();
+          };
+          daemon.onEvent(ev => { if (ev.type === "company.changed" || ev.type === "agent.status" || ev.type === "routine.executed") pushSnapshot(); });
+          pushSnapshot();
           const label = `Braavo chat · ${hostname().replace(/\.local$/, "").slice(0, 60)}`;
           let stopped = false; let retry: NodeJS.Timeout | undefined;
           const connect = async (delayS: number): Promise<void> => {

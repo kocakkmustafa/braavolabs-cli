@@ -109,6 +109,13 @@ existing cloud relay. The relay protocol is unchanged, so no platform deploy is 
   4. `status { state: "idle" }`.
 - Both the daemon and the relay server redact secrets in event text. What the phone shows
   can therefore differ from the stored answer where a secret-looking string was masked.
+- **Panel snapshot (opt-in):** after company changes (at most every 10 s) and at start, the daemon
+  posts a `panel-snapshot` event: company name; agents with id, name, role, managerId, model
+  (`PROVIDER/model`, or null while setup is needed), effort, status, runs this month; routines
+  with name, agentId, nextFireAt, lastOutcome; month token totals. It never carries prompts or
+  transcripts. A companion receives it only when it polls/streams with `include=panel-snapshot`
+  (relay server from platform `feat/relay-snapshot`); a relay without the type refuses the post,
+  which the daemon ignores.
 - The default model for a new relay conversation is the `mid` suggestion from
   `GET /v1/models`; with no usable model the turn answers `error: setup required …`.
 
