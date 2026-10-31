@@ -1529,7 +1529,9 @@ async function main(): Promise<void> {
           const out = [`${p.company.name} · ${t("{0} agents", p.agents.length)} · ${tokens(p.month.inputTokens)}/${tokens(p.month.outputTokens)} tokens`];
           const walk = (nodes: any[], prefix: string) => nodes.forEach((n, i) => {
             const a: any = byId.get(n.id); const lastNode = i === nodes.length - 1;
-            out.push(`${prefix}${lastNode ? "└─" : "├─"} ${a.name}  ${a.provider}/${a.model} · ${a.effort ?? "default"} · ${a.status}${a.month.runs ? ` · ${a.month.runs}×` : ""}`);
+            // An agent in error has no usable model yet (K3: nothing is defaulted); its stored model is only a placeholder.
+            const model = a.status === "error" ? "— (braavo setup)" : `${a.provider}/${a.model}`;
+            out.push(`${prefix}${lastNode ? "└─" : "├─"} ${a.name}  ${model} · ${a.effort ?? "default"} · ${a.status}${a.month.runs ? ` · ${a.month.runs}×` : ""}`);
             walk(n.children, `${prefix}${lastNode ? "   " : "│  "}`);
           });
           walk(p.tree, "");

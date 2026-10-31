@@ -149,7 +149,8 @@ export function panelText(p: ReturnType<typeof panel>): string {
   const out = [`${p.company.name} · ${p.agents.length} agents · ${p.month.inputTokens}/${p.month.outputTokens} tokens this month`];
   const walk = (nodes: OrgNode[], depth: number) => nodes.forEach(n => {
     const a = byId.get(n.id)!;
-    out.push(`${"  ".repeat(depth)}• ${a.name} — ${a.provider}/${a.model} · ${a.effort ?? "default"} · ${a.status}`);
+    const model = a.status === "error" ? "setup needed on the computer (braavo setup)" : `${a.provider}/${a.model}`;
+    out.push(`${"  ".repeat(depth)}• ${a.name} — ${model} · ${a.effort ?? "default"} · ${a.status}`);
     walk(n.children, depth + 1);
   });
   walk(p.tree, 0);
