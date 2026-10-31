@@ -400,9 +400,9 @@ describe("compiled CLI handoff outcome contract", () => {
 // Actual compiled command entry, temporary homes, injected fetch only.
 describe("compiled fourteen-language CLI", () => {
   const locales = ["tr", "en", "es-419", "pt-BR", "de", "fr", "ja", "ar", "it", "ko", "id", "pl", "hi", "zh-Hans"];
-  const commands = ["login","logout","use","ask","cancel","cascade","savings","keys","media-key","image","voice","local","direct","models","spawn","fix","mcp","whoami","runs","run","steer","handoffs","handoff","continue","connections","doctor","init","watch","approve","pause","stop","cost","policy","audit","connect","agent","session"];
+  const commands = ["login","logout","use","ask","cancel","cascade","savings","keys","media-key","image","voice","local","direct","models","spawn","fix","mcp","whoami","runs","run","steer","handoffs","handoff","continue","connections","doctor","init","watch","approve","pause","stop","cost","policy","audit","connect","agent","session","monitor"];
   for (const locale of locales) {
-    it(`${locale}: help and all37 command-help routes require no config, credential or network`, () => {
+    it(`${locale}: help and all38 command-help routes require no config, credential or network`, () => {
       const f = fixture(); const full = f.run(["--lang", locale, "help"]);
       expect(full.status).toBe(EXIT.OK); expect(full.stdout).not.toContain("�");
       for (const command of commands) {

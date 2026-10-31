@@ -85,6 +85,18 @@ import {
   type SpawnVendor,
   type VendorStatus,
 } from "./forge/spawn";
+import {
+  assertMonitorUrl,
+  checkMonitor,
+  everyText,
+  isDue,
+  makeMonitorStore,
+  newMonitorId,
+  parseEvery,
+  summaryPrompt,
+  type CheckOutcome,
+  type MonitorDef,
+} from "./forge/monitor";
 import { createRelayTransport } from "./forge/relay-transport";
 import { RelayBridge } from "./forge/relay-bridge";
 import { collectRepoContext, prependRepoContext } from "./forge/repo";
@@ -1208,6 +1220,112 @@ async function main(): Promise<void> {
       );
       emit(flags, { id, status: result.status, terminal: true }, () => `${statusText(result.status)}  ${id}`);
       if (result.status !== "COMPLETED") process.exitCode = EXIT.GENERAL;
+      return;
+    }
+
+    case "monitor": {
+      // Model-free page monitor (AI-company preflight prototype). Local only:
+      // no account, no server round-trip; --summarize asks a local Ollama model.
+      const store = makeMonitorStore();
+      const sub = positionals[0];
+      const outcomeText = (kind: string) => kind === "first" ? t("first snapshot saved") : kind === "changed" ? t("changed") : kind === "no-change" ? t("no change") : kind === "failed" ? t("check failed") : kind;
+      switch (sub) {
+        case "add": {
+          const raw = positionals[1];
+          if (!raw) usage("usage: braavo monitor add <url> [--every 6h] [--price] [--label <text>]");
+          let url: string;
+          try { url = assertMonitorUrl(raw); } catch (e) { usage((e as Error).message); }
+          const everyMinutes = parseEvery(flag(flags, "every"));
+          if (everyMinutes === undefined) usage(t("--every must look like 30m, 6h or 1d (minimum 15m)."));
+          const defs = store.list();
+          const def: MonitorDef = { id: newMonitorId(url, defs), url, label: flag(flags, "label"), mode: flags.price === true ? "price" : "text", everyMinutes, createdAt: new Date().toISOString() };
+          store.save([...defs, def]);
+          if (flags.json) emit(flags, def, () => "");
+          else ui.ok(t("Added monitor {0} · every {1}", def.id, everyText(def.everyMinutes)));
+          return;
+        }
+        case "list": {
+          const defs = store.list();
+          emit(flags, defs.map(def => ({ ...def, lastCheck: store.readState(def.id).state ?? null })), () => {
+            if (!defs.length) return t("No monitors. Add one: braavo monitor add <url>");
+            return defs.map(def => {
+              const state = store.readState(def.id).state;
+              return `${ui.bold(def.id)}  ${def.mode}  ${everyText(def.everyMinutes)}  ${def.url}${state ? ui.dim(`  ${dateText(state.checkedAt)}`) : ""}`;
+            }).join("\n");
+          });
+          return;
+        }
+        case "rm": {
+          const id = positionals[1];
+          if (!id) usage("usage: braavo monitor rm <id>");
+          const defs = store.list();
+          if (!defs.some(def => def.id === id)) die(t("No such monitor: {0}", id));
+          store.save(defs.filter(def => def.id !== id));
+          store.remove(id);
+          ui.ok(t("Removed monitor {0}.", id));
+          return;
+        }
+        case "log": {
+          const id = positionals[1];
+          if (!id) usage("usage: braavo monitor log <id>");
+          if (!store.list().some(def => def.id === id)) die(t("No such monitor: {0}", id));
+          const entries = store.readLedger(id).slice(-50);
+          emit(flags, entries, () => entries.map(entry => `${dateText(entry.at)}  ${outcomeText(entry.outcome)}${entry.note ? `  ${entry.note}` : ""}`).join("\n"));
+          return;
+        }
+        case "check": {
+          const id = positionals[1];
+          const all = store.list();
+          const selected = id ? all.filter(def => def.id === id) : all;
+          if (id && !selected.length) die(t("No such monitor: {0}", id));
+          if (!selected.length) { emit(flags, [], () => t("No monitors. Add one: braavo monitor add <url>")); return; }
+          const now = new Date();
+          const results: Array<CheckOutcome | { id: string; kind: "not-due" | "failed"; error?: string }> = [];
+          for (const def of selected) {
+            if (flags.due === true && !isDue(def, store.readState(def.id).state, now)) { results.push({ id: def.id, kind: "not-due" }); continue; }
+            try {
+              results.push(await interruptible(() => t("Local waiting has a deadline. Remote work may continue after cancellation or timeout."), signal => checkMonitor(def, { store, signal, now })));
+            } catch (e) {
+              results.push({ id: def.id, kind: "failed", error: (e as Error).message });
+              process.exitCode = EXIT.GENERAL;
+            }
+          }
+          const summaries: Record<string, string> = {};
+          if (flags.summarize === true) {
+            const changed = results.filter((r): r is CheckOutcome => r.kind === "changed");
+            if (changed.length) {
+              const host = resolveOllamaHost(flag(flags, "host"));
+              try {
+                const model = await resolveOllamaModel(host, flag(flags, "model"));
+                for (const outcome of changed) {
+                  const def = selected.find(d => d.id === outcome.id)!;
+                  const spin = flags.json ? undefined : ui.spinner(t("summarizing with {0}…", model));
+                  const res = await interruptible(() => t("Local waiting has a deadline. Remote work may continue after cancellation or timeout."), signal => ollamaChat(host, model, summaryPrompt(def, outcome), { signal }));
+                  spin?.stop();
+                  summaries[outcome.id] = res.content;
+                }
+              } catch (e) {
+                if (e instanceof OllamaUnreachableError) die(e.message);
+                throw e;
+              }
+            }
+          }
+          emit(flags, results.map(r => ({ ...r, summary: summaries[r.id] })), () => results.map(r => {
+            const head = `${ui.bold(r.id)}  ${r.kind === "not-due" ? t("not due") : outcomeText(r.kind)}`;
+            if (r.kind === "failed") return `${head}  ${"error" in r ? r.error : ""}`;
+            if (r.kind !== "changed" || !("added" in r)) return head;
+            const lines = [head];
+            if (r.previousPrices.join("|") !== r.prices.join("|")) lines.push(`  ${t("prices: {0} → {1}", r.previousPrices.join(", ") || "—", r.prices.join(", ") || "—")}`);
+            for (const line of r.added.slice(0, 5)) lines.push(ui.dim(`  + ${line.slice(0, 160)}`));
+            for (const line of r.removed.slice(0, 5)) lines.push(ui.dim(`  - ${line.slice(0, 160)}`));
+            if (summaries[r.id]) lines.push("", summaries[r.id]);
+            return lines.join("\n");
+          }).join("\n"));
+          return;
+        }
+        default:
+          usage("usage: braavo monitor add <url> [--every 6h] [--price] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize [--model <name>] [--host <url>]] | log <id>");
+      }
       return;
     }
 

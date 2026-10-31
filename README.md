@@ -354,6 +354,25 @@ braavo local "..." --host http://192.168.1.50:11434
 - Base URL resolution: `--host` flag > `OLLAMA_HOST` env var > `http://localhost:11434`.
 - If Ollama isn't running (or unreachable at the resolved host), braavo fails honestly: `Ollama not reachable — is it running?` — it does not retry silently or fabricate a response.
 
+### monitor
+
+Prototype: watch web pages (a competitor's pricing page, a changelog, a campaign page) and only involve a model when something actually changed. Local only — no login, no server round-trip.
+
+```bash
+braavo monitor add https://rival.example/pricing --every 6h --price --label Rival
+braavo monitor list
+braavo monitor check            # check every monitor now
+braavo monitor check --due      # only those whose interval has passed (for cron/launchd)
+braavo monitor check --summarize [--model <name>] [--host <url>]   # local Ollama summary of real changes
+braavo monitor log <id>
+braavo monitor rm <id>
+```
+
+- The check is model-free: fetch, reduce HTML to visible text (scripts, styles, comments and invisible characters removed), drop clock/timestamp noise, compare with the last snapshot. `--price` reports only when the extracted price list changes, so copy edits stay quiet.
+- `--every` accepts `30m`, `6h`, `1d` (minimum `15m`, default `6h`). There is no background scheduler yet; run `braavo monitor check --due` from cron or launchd.
+- `--summarize` asks a local Ollama model only for monitors that changed. Page lines are passed as untrusted data and the model is told not to follow instructions inside them.
+- Only plain `http(s)` URLs without embedded credentials; pages over 2 MB are refused. State lives in `~/.braavo/monitor/` (files `0600`, directories `0700`): `monitors.json`, `<id>/last.txt`, `<id>/state.json`, `ledger.jsonl` (last 500 checks).
+
 ### direct
 
 Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `braavo keys`. The Braavolabs server is never contacted.

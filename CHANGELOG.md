@@ -5,6 +5,15 @@ here. The format loosely follows [Keep a Changelog](https://keepachangelog.com/)
 Versioned entries describe release candidates and published packages; older
 development history remains grouped by date.
 
+## Unreleased
+
+### Added
+- Add `monitor add|list|rm|check|log` (prototype): model-free web page change
+  detection with an optional local Ollama summary of real changes only. Text or
+  price mode, `--every` interval with `check --due` for cron/launchd, untrusted
+  page content wrapping, 2 MB page cap, `0600` state under `~/.braavo/monitor/`.
+  Human output is localized in all 14 languages.
+
 ## 0.2.0 — release candidate
 
 The latest published version is 0.1.1. Version 0.1.2 was prepared as a release
