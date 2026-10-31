@@ -93,6 +93,11 @@ existing cloud relay. The relay protocol is unchanged, so no platform deploy is 
   current conversation (`source: "relay"`). Commands typed as the whole message:
   - `/new` starts a new conversation;
   - `/model PROVIDER/model` switches the current conversation's model.
+- Company commands, also typed as the whole message, answer with text and never call a model:
+  - `/company` shows the panel as text (org tree with provider/model · effort · status, routines);
+  - `/findings [role]` shows the latest findings memory;
+  - `/run <routine name>` runs a routine now;
+  - `/pause <agent>` and `/resume <agent>` change an agent's state (name, role or id).
 - `kill` aborts the in-flight turn (the daemon keeps running). `approve`/`reject` are no-ops.
 - Daemon → phone, per turn:
   1. `status { state: "running" }`.

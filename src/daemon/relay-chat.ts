@@ -22,6 +22,8 @@ export interface RelayChatOptions {
   /** Model for a new relay conversation: the `mid` suggestion from the user's own keys, if any. */
   defaultModel: () => Promise<{ provider: string; model: string } | undefined>;
   flushMs?: number;
+  /** Company commands from the phone (/company, /findings, /run, /pause, /resume); text answer or undefined if not one. */
+  company?: (command: string, arg: string) => Promise<string | undefined>;
 }
 
 const SOURCE = "relay";
@@ -70,6 +72,11 @@ export class RelayChat {
   async onSteer(raw: string): Promise<void> {
     const message = raw.trim();
     if (message === "/new") { this.current = undefined; return this.reply("New conversation started."); }
+    const companyCmd = /^\/(company|findings|run|pause|resume)(?:\s+(.+))?$/.exec(message);
+    if (companyCmd && this.options.company) {
+      try { return this.reply((await this.options.company(companyCmd[1], (companyCmd[2] ?? "").trim())) ?? "error: unknown command"); }
+      catch (error) { return this.reply(`error: ${(error as Error).message.slice(0, 300)}`); }
+    }
     const model = /^\/model\s+([A-Z_]+)\/(\S{1,200})$/.exec(message);
     if (model) {
       if (!isAIProvider(model[1])) return this.reply(`error: unknown provider ${model[1]}`);

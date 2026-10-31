@@ -1673,10 +1673,16 @@ async function main(): Promise<void> {
           requireAuth(cfg);
           const { RelayChat } = await import("./daemon/relay-chat");
           const { hostname } = await import("node:os");
-          const relayChat = new RelayChat(chat, store, { defaultModel: async () => {
-            const mid = (await chat.models()).suggestions.mid;
-            return mid.status === "ok" ? { provider: mid.provider, model: mid.model } : undefined;
-          } });
+          const { companyCommand } = await import("./daemon/company");
+          const relayChat = new RelayChat(chat, store, {
+            defaultModel: async () => {
+              const mid = (await chat.models()).suggestions.mid;
+              return mid.status === "ok" ? { provider: mid.provider, model: mid.model } : undefined;
+            },
+            company: (command, arg) => companyCommand(store, command, arg, {
+              run: routineId => daemon!.runNow(routineId), canUse: p => chat.canUse(p), memoryRoot: `${CONFIG_DIR}/memory`,
+            }),
+          });
           const bridge = new RelayBridge(createRelayTransport({ cfg }), relayChat.handlers());
           relayChat.attach(bridge);
           relayAudit = text => { void bridge.emitAudit(text.slice(0, 4000)); };

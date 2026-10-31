@@ -85,3 +85,27 @@ describe("relay chat (phone ↔ daemon)", () => {
     expect(posted.at(-2)).toEqual({ type: "agent-turn", summary: "abcd" });
   });
 });
+
+describe("company commands from the phone", () => {
+  it("shows the panel, pauses an agent and runs a routine through the relay chat", async () => {
+    const { hire, companyCommand } = await import("../company");
+    const { store, relay, frames, chat } = setup(async () => sse("x"));
+    const co = store.createCompany({ name: "YULA Lab" });
+    hire(store, co.id, { templates: ["ceo", "market-analyst"], urls: { "market-analyst/watch-competitors": ["https://rival.example"] } }, { keys: new Set(), local: { OLLAMA: ["qwen3:8b"] } });
+    const run = vi.fn(async () => ({ outcome: "no-change", note: "1 pages · /tmp/x.md" }));
+    (relay as any).options.company = (c: string, a: string) => companyCommand(store, c, a, { run, canUse: p => chat.canUse(p), memoryRoot: "/nonexistent" });
+
+    await relay.onSteer("/company");
+    const panelText = frames.filter(f => f[0] === "agent-turn").at(-1)![1]!;
+    expect(panelText).toContain("YULA Lab · 2 agents");
+    expect(panelText).toContain("• General Manager — OLLAMA/qwen3:8b · medium · idle");
+    expect(panelText).toContain("  • Market Analyst — OLLAMA/qwen3:8b · low · idle");
+    await relay.onSteer("/pause market-analyst");
+    expect(frames.filter(f => f[0] === "agent-turn").at(-1)![1]).toBe("Market Analyst: paused");
+    await relay.onSteer("/run Watch competitors");
+    expect(frames.filter(f => f[0] === "agent-turn").at(-1)![1]).toBe("Watch competitors: no-change · 1 pages");
+    await relay.onSteer("/findings");
+    expect(frames.filter(f => f[0] === "agent-turn").at(-1)![1]).toBe("No findings yet.");
+    expect(chat.list()).toEqual([]); // commands never open a model conversation
+  });
+});

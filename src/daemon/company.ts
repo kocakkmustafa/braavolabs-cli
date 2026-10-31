@@ -142,3 +142,52 @@ export function updateAgent(store: DaemonStore, agentId: string, body: Record<st
   store.activity({ companyId: agent.company_id, actor: "user", verb: "updated-agent", objectType: "agent", objectId: agentId, summary: agent.name });
   return store.getAgent(agentId)!;
 }
+
+/** Plain-text panel for surfaces that only show text (phone over the relay, logs). */
+export function panelText(p: ReturnType<typeof panel>): string {
+  const byId = new Map(p.agents.map(a => [a.id, a]));
+  const out = [`${p.company.name} · ${p.agents.length} agents · ${p.month.inputTokens}/${p.month.outputTokens} tokens this month`];
+  const walk = (nodes: OrgNode[], depth: number) => nodes.forEach(n => {
+    const a = byId.get(n.id)!;
+    out.push(`${"  ".repeat(depth)}• ${a.name} — ${a.provider}/${a.model} · ${a.effort ?? "default"} · ${a.status}`);
+    walk(n.children, depth + 1);
+  });
+  walk(p.tree, 0);
+  if (p.routines.length) {
+    out.push("", "Routines:");
+    for (const r of p.routines) out.push(`• ${r.name} — next ${r.nextFireAt?.slice(0, 16).replace("T", " ") ?? "—"} UTC${r.last ? ` · last ${r.last.outcome}` : ""}`);
+  }
+  return out.join("\n");
+}
+
+/** Answer a phone command against the one local company (or the first one). */
+export async function companyCommand(store: DaemonStore, command: string, arg: string, deps: { run: (routineId: string) => Promise<{ outcome: string; note?: string }>; canUse: (p: string) => boolean; memoryRoot: string }): Promise<string> {
+  const company = store.listCompanies()[0];
+  if (!company) return "No company yet. On your computer: braavo company init <name>";
+  const p = panel(store, company.id);
+  const find = <T extends { name: string; id: string }>(list: T[], key: string) => list.find(x => x.id === key || x.name.toLowerCase() === key.toLowerCase() || ("role" in x && (x as unknown as { role: string }).role === key));
+  switch (command) {
+    case "company": return panelText(p);
+    case "findings": {
+      const { existsSync, readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const file = join(deps.memoryRoot, company.id, "findings", `${(arg || "market-analyst").replace(/[^a-z0-9-]/gi, "")}.md`);
+      const text = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+      return text ? text.slice(-3500) : "No findings yet.";
+    }
+    case "run": {
+      const r = find(p.routines, arg);
+      if (!r) return `error: no routine ${arg || "(name required)"}`;
+      const result = await deps.run(r.id);
+      return `${r.name}: ${result.outcome}${result.note ? ` · ${result.note.split(" · /")[0]}` : ""}`;
+    }
+    case "pause":
+    case "resume": {
+      const a = find(p.agents, arg);
+      if (!a) return `error: no agent ${arg || "(name required)"}`;
+      const updated = updateAgent(store, a.id, { status: command === "pause" ? "paused" : "idle" }, deps.canUse);
+      return `${updated.name}: ${updated.status}`;
+    }
+    default: return "error: unknown command";
+  }
+}
