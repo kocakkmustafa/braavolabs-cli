@@ -454,7 +454,7 @@ braavo company findings [--role market-analyst]
 Multi-turn chat through the local daemon. History lives in `~/.braavo/braavo.db` and is shared with the desktop and mobile apps.
 
 ```bash
-braavo chat                                  # interactive; /new, /exit; Ctrl-C stops a reply
+braavo chat                                  # interactive; /new, /model P/m, /export [json], /exit; Ctrl-C stops a reply
 braavo chat "question" [--model PROVIDER/model] [--effort low|medium|high]
 braavo chat --continue last "follow-up"      # or --continue <conversationId>
 echo "text" | braavo chat --continue last

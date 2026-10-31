@@ -1654,7 +1654,7 @@ async function main(): Promise<void> {
       }
 
       const modelFlag = flag(flags, "model");
-      const chosen = modelFlag ? parseModelFlag(modelFlag) : undefined;
+      let chosen = modelFlag ? parseModelFlag(modelFlag) : undefined;
       if (modelFlag && !chosen) usage("usage: braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <conversationId>|last]");
       const effort = flag(flags, "effort");
       let conversationId = flag(flags, "continue");
@@ -1708,6 +1708,19 @@ async function main(): Promise<void> {
         const text = line.trim();
         if (text === "/exit") break;
         if (text === "/new") { conversationId = undefined; rl.prompt(); continue; }
+        // FK-4: the same slash commands the phone and desktop chat understand.
+        const slashModel = /^\/model\s+(\S+)$/.exec(text);
+        if (slashModel) {
+          const m = parseModelFlag(slashModel[1]);
+          if (!m) console.error("/model PROVIDER/model");
+          else if (conversationId) { try { await client.json("PATCH", `/conversations/${encodeURIComponent(conversationId)}`, m); console.error(`${m.provider}/${m.model}`); } catch (e) { console.error((e as Error).message); } }
+          else { chosen = m; console.error(`${m.provider}/${m.model}`); }
+          rl.prompt(); continue;
+        }
+        if (text === "/export" || text.startsWith("/export ")) {
+          if (conversationId) process.stdout.write(await client.text(`/conversations/${encodeURIComponent(conversationId)}/export?format=${text.endsWith("json") ? "json" : "md"}`));
+          rl.prompt(); continue;
+        }
         if (text) { rl.pause(); await send(text); rl.resume(); }
         rl.prompt();
       }
