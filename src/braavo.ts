@@ -775,7 +775,65 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "setup": {
+      // FK-10: everything runs on the user's own keys or local models (K3), so the first run must
+      // say plainly what is there and what to do next. Reads key names only, never values.
+      const { detectUserModels } = await import("./daemon/chat");
+      const { suggestModel } = await import("./core/templates");
+      const host = resolveOllamaHost(flag(flags, "host"));
+      const live = runningDaemon(daemonPaths());
+      const keyNames = makeKeyStore().list().map(k => k.provider);
+      const user = await detectUserModels(keyNames, { ollamaHost: host });
+      const suggestions = Object.fromEntries((["strong", "mid", "light", "analysis"] as const).map(tier => [tier, suggestModel(tier, user)]));
+      const usable = Object.values(suggestions).some(x => x.status === "ok");
+      const data = { daemon: live ?? null, keys: keyNames, local: user.local, suggestions, usable };
+      emit(flags, data, () => {
+        const ok = (b: boolean) => (b ? "✓" : "–");
+        const out = [
+          `${ok(Boolean(live))} ${live ? t("Daemon running · pid {0} · port {1}", live.pid, live.port) : `${t("Daemon is not running.")} braavo daemon start`}`,
+          `${ok(keyNames.length > 0)} ${keyNames.length ? t("Keys: {0}", keyNames.join(", ")) : t("No keys yet: braavo keys add <provider>")}`,
+          ...(["OLLAMA", "LMSTUDIO"] as const).map(p => `${ok(user.local[p].length > 0)} ${user.local[p].length ? t("Local models ({0}): {1}", p === "OLLAMA" ? "Ollama" : "LM Studio", user.local[p].slice(0, 6).join(", ")) : t("{0} is not reachable or has no models", p === "OLLAMA" ? "Ollama" : "LM Studio")}`),
+          "", t("Suggested models"),
+          ...Object.entries(suggestions).map(([tier, x]) => `  ${tier.padEnd(9)} ${x.status === "ok" ? `${x.provider}/${x.model}` : x.status === "model-required" ? `${x.provider}/? (--model)` : "—"}`),
+          "",
+          usable ? t("Next: {0}", live ? 'braavo company init "<name>" --watch <urls>' : "braavo daemon start") : t("No usable model yet. Add a key or pull a local model: {0}", "braavo models pull qwen3:8b"),
+        ];
+        return out.join("\n");
+      });
+      return;
+    }
+
     case "models": {
+      if (positionals[0] === "pull") {
+        // Pull a model into the local Ollama (POST /api/pull, streamed progress). Local only; no account.
+        const name = positionals[1];
+        if (!name || !/^[A-Za-z0-9._:/-]{1,200}$/.test(name)) usage("usage: braavo models pull <name> [--host <url>]");
+        const pullHost = resolveOllamaHost(flag(flags, "host"));
+        console.error(t("Pulling {0}…", name));
+        let res: Response;
+        try { res = await fetch(`${pullHost}/api/pull`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, stream: true }) }); }
+        catch { die(t("{0} is not reachable or has no models", `Ollama (${pullHost})`)); }
+        if (!res!.ok || !res!.body) die(`Ollama: ${res!.status}`);
+        let buffer = ""; let last = ""; let failed: string | undefined;
+        for await (const chunk of res!.body as unknown as AsyncIterable<Uint8Array>) {
+          buffer += Buffer.from(chunk).toString("utf8");
+          let nl: number;
+          while ((nl = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1);
+            let ev: { status?: string; completed?: number; total?: number; error?: string };
+            try { ev = JSON.parse(line); } catch { continue; }
+            if (ev.error) failed = ev.error;
+            const pct = ev.total ? ` ${Math.floor(((ev.completed ?? 0) / ev.total) * 100)}%` : "";
+            const text = `${ev.status ?? ""}${pct}`;
+            if (text && text !== last && process.stderr.isTTY) process.stderr.write(`\r\x1b[2K${text}`);
+            last = text;
+          }
+        }
+        if (process.stderr.isTTY) process.stderr.write("\n");
+        if (failed) die(`Ollama: ${failed.slice(0, 200)}`);
+        console.log(t("Pulled {0}", name));
+        return;
+      }
       const host = resolveOllamaHost(flag(flags, "host"));
       let ollamaReachable = true;
       let ollamaModels: string[] = [];

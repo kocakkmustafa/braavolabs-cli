@@ -403,6 +403,15 @@ braavo daemon uninstall
 - Chat: multi-turn, streamed conversations on your own keys or local models (see `chat` below and [docs/DAEMON-CHAT.md](docs/DAEMON-CHAT.md) for the API the desktop and mobile apps use).
 - `--relay` (opt-in, needs `braavo login`) registers one relay session so the mobile app can chat with this computer. Outbound connections only; each message from the phone is a turn in the current conversation (`/new`, `/model PROVIDER/model`), stop aborts the turn.
 
+### setup
+
+```bash
+braavo setup [--json]          # daemon, stored key names, Ollama / LM Studio models, suggested model per tier, next step
+braavo models pull qwen3:8b    # pull a model into your local Ollama (progress shown)
+```
+
+Everything runs on your own keys or local models; `setup` tells you which of the two you have and what to do when you have neither.
+
 ### code
 
 Our own coding agent on your own key or local model. It reads, searches and edits files under one directory, shows every change as a diff and asks before writing.

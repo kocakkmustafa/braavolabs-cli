@@ -8,6 +8,9 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Add `setup` (daemon, key names, local models, suggested model per tier,
+  next step) and `models pull <name>` (pull into the local Ollama), and
+  `chat export <id> [--format md|json]`.
 - Add `code`: our own coding agent (read, search, edit, write inside one
   directory) on your own key or local model, with project instructions from
   `AGENTS.md`/`CLAUDE.md`, a diff and a confirmation for every write,
