@@ -13,6 +13,10 @@ development history remains grouped by date.
   price mode, `--every` interval with `check --due` for cron/launchd, untrusted
   page content wrapping, 2 MB page cap, `0600` state under `~/.braavo/monitor/`.
   Human output is localized in all 14 languages.
+- `monitor add --notify price,plans,promo,release,text` chooses what counts as a
+  change per monitor (default: the four structural kinds). Signals come from page
+  structure, not keywords; cookie/consent banners, `<time>` text and countdowns
+  are ignored. Monitors and state saved by the first prototype keep working.
 
 ## 0.2.0 — release candidate
 

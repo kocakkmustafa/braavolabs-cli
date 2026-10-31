@@ -31,7 +31,7 @@ export const COMMAND_HELP = [
 ["doctor", "braavo doctor [--json]", "Check configuration and API health"],
 ["init", "braavo init [--api <url>] [--json]", "Write the API configuration"],
 ["watch", "braavo watch <runId> [--json]", "Watch a run until completion or local timeout"],
-["monitor", "braavo monitor add <url> [--every 6h] [--price] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize] | log <id>", "Watch web pages for changes; a model runs only when something changed"],
+["monitor", "braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize] | log <id>", "Watch web pages for changes; a model runs only when something changed"],
 ["approve", "braavo approve <approvalId> [--deny] [--reason <text>] --yes [--json]", "Approve or reject a pending action"],
 ["pause", "braavo pause <runId> --yes [--json]", "Pause a run"],
 ["stop", "braavo stop <runId> --yes [--json]", "Stop a run"],

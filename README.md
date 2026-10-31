@@ -359,7 +359,8 @@ braavo local "..." --host http://192.168.1.50:11434
 Prototype: watch web pages (a competitor's pricing page, a changelog, a campaign page) and only involve a model when something actually changed. Local only — no login, no server round-trip.
 
 ```bash
-braavo monitor add https://rival.example/pricing --every 6h --price --label Rival
+braavo monitor add https://rival.example/pricing --every 6h --label Rival
+braavo monitor add https://rival.example/changelog --notify release
 braavo monitor list
 braavo monitor check            # check every monitor now
 braavo monitor check --due      # only those whose interval has passed (for cron/launchd)
@@ -368,7 +369,15 @@ braavo monitor log <id>
 braavo monitor rm <id>
 ```
 
-- The check is model-free: fetch, reduce HTML to visible text (scripts, styles, comments and invisible characters removed), drop clock/timestamp noise, compare with the last snapshot. `--price` reports only when the extracted price list changes, so copy edits stay quiet.
+- The check is model-free: fetch, extract signals, compare with the last snapshot.
+- `--notify` picks what counts as news (comma list, default `price,plans,promo,release`):
+  - `price` — currency+amount tokens appear or disappear;
+  - `plans` — headings whose section carries a price are added or removed;
+  - `promo` — struck-through prices, whole-number discount percentages (5–90%), promo/sale/offer/countdown containers;
+  - `release` — new version numbers in headings or new dated `<time datetime>` entries (old entries scrolling off are ignored);
+  - `text` — any visible-text change (noisiest).
+  Signals are structural, so they work in any page language. `--price` is shorthand for `--notify price`.
+- Noise is ignored: cookie/consent banners, `<time>` text, countdown digits, clock times and numeric dates.
 - `--every` accepts `30m`, `6h`, `1d` (minimum `15m`, default `6h`). There is no background scheduler yet; run `braavo monitor check --due` from cron or launchd.
 - `--summarize` asks a local Ollama model only for monitors that changed. Page lines are passed as untrusted data and the model is told not to follow instructions inside them.
 - Only plain `http(s)` URLs without embedded credentials; pages over 2 MB are refused. State lives in `~/.braavo/monitor/` (files `0600`, directories `0700`): `monitors.json`, `<id>/last.txt`, `<id>/state.json`, `ledger.jsonl` (last 500 checks).

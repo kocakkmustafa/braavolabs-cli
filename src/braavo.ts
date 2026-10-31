@@ -92,7 +92,9 @@ import {
   isDue,
   makeMonitorStore,
   newMonitorId,
+  notifyOf,
   parseEvery,
+  parseNotify,
   summaryPrompt,
   type CheckOutcome,
   type MonitorDef,
@@ -1232,16 +1234,19 @@ async function main(): Promise<void> {
       switch (sub) {
         case "add": {
           const raw = positionals[1];
-          if (!raw) usage("usage: braavo monitor add <url> [--every 6h] [--price] [--label <text>]");
+          if (!raw) usage("usage: braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>]");
           let url: string;
           try { url = assertMonitorUrl(raw); } catch (e) { usage((e as Error).message); }
           const everyMinutes = parseEvery(flag(flags, "every"));
           if (everyMinutes === undefined) usage(t("--every must look like 30m, 6h or 1d (minimum 15m)."));
+          // --price is kept as a shorthand for --notify price.
+          const notify = parseNotify(flags.price === true && flag(flags, "notify") === undefined ? "price" : flag(flags, "notify"));
+          if (!notify) usage(t("--notify takes a comma list of: price, plans, promo, release, text."));
           const defs = store.list();
-          const def: MonitorDef = { id: newMonitorId(url, defs), url, label: flag(flags, "label"), mode: flags.price === true ? "price" : "text", everyMinutes, createdAt: new Date().toISOString() };
+          const def: MonitorDef = { id: newMonitorId(url, defs), url, label: flag(flags, "label"), notify, everyMinutes, createdAt: new Date().toISOString() };
           store.save([...defs, def]);
           if (flags.json) emit(flags, def, () => "");
-          else ui.ok(t("Added monitor {0} · every {1}", def.id, everyText(def.everyMinutes)));
+          else ui.ok(`${t("Added monitor {0} · every {1}", def.id, everyText(def.everyMinutes))} · ${notify.join(",")}`);
           return;
         }
         case "list": {
@@ -1250,7 +1255,7 @@ async function main(): Promise<void> {
             if (!defs.length) return t("No monitors. Add one: braavo monitor add <url>");
             return defs.map(def => {
               const state = store.readState(def.id).state;
-              return `${ui.bold(def.id)}  ${def.mode}  ${everyText(def.everyMinutes)}  ${def.url}${state ? ui.dim(`  ${dateText(state.checkedAt)}`) : ""}`;
+              return `${ui.bold(def.id)}  ${notifyOf(def).join(",")}  ${everyText(def.everyMinutes)}  ${def.url}${state ? ui.dim(`  ${dateText(state.checkedAt)}`) : ""}`;
             }).join("\n");
           });
           return;
@@ -1315,7 +1320,12 @@ async function main(): Promise<void> {
             if (r.kind === "failed") return `${head}  ${"error" in r ? r.error : ""}`;
             if (r.kind !== "changed" || !("added" in r)) return head;
             const lines = [head];
-            if (r.previousPrices.join("|") !== r.prices.join("|")) lines.push(`  ${t("prices: {0} → {1}", r.previousPrices.join(", ") || "—", r.prices.join(", ") || "—")}`);
+            for (const change of r.changes) {
+              if (change.kind === "price") lines.push(`  ${t("prices: {0} → {1}", r.previousPrices.join(", ") || "—", r.prices.join(", ") || "—")}`);
+              else if (change.kind === "plans") lines.push(`  ${t("plans: +{0} −{1}", change.added.join(", ") || "—", change.removed.join(", ") || "—")}`);
+              else if (change.kind === "promo") lines.push(`  ${t("promotion: {0}", [...change.added.map(v => `+${v}`), ...change.removed.map(v => `−${v}`)].join(" · "))}`);
+              else if (change.kind === "release") lines.push(`  ${t("new release: {0}", change.added.join(", "))}`);
+            }
             for (const line of r.added.slice(0, 5)) lines.push(ui.dim(`  + ${line.slice(0, 160)}`));
             for (const line of r.removed.slice(0, 5)) lines.push(ui.dim(`  - ${line.slice(0, 160)}`));
             if (summaries[r.id]) lines.push("", summaries[r.id]);
@@ -1324,7 +1334,7 @@ async function main(): Promise<void> {
           return;
         }
         default:
-          usage("usage: braavo monitor add <url> [--every 6h] [--price] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize [--model <name>] [--host <url>]] | log <id>");
+          usage("usage: braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize [--model <name>] [--host <url>]] | log <id>");
       }
       return;
     }

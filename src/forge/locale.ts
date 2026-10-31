@@ -351,6 +351,10 @@ const rows = [
 ["Only http and https URLs are supported.","Yalnız http ve https adresleri desteklenir.","Solo se admiten URL http y https.","Apenas URLs http e https são aceitas.","Nur http- und https-URLs werden unterstützt.","Seules les URL http et https sont prises en charge.","http と https の URL のみ対応しています。","لا تُدعَم إلا عناوين http وhttps."],
 ["Fetch failed ({0})","Sayfa alınamadı ({0})","No se pudo obtener la página ({0})","Falha ao obter a página ({0})","Abruf fehlgeschlagen ({0})","Échec de la récupération ({0})","取得に失敗しました ({0})","تعذّر جلب الصفحة ({0})"],
 ["Page is larger than {0} bytes.","Sayfa {0} bayttan büyük.","La página supera los {0} bytes.","A página tem mais de {0} bytes.","Die Seite ist größer als {0} Byte.","La page dépasse {0} octets.","ページが {0} バイトを超えています。","حجم الصفحة أكبر من {0} بايت."],
+["--notify takes a comma list of: price, plans, promo, release, text.","--notify şunların virgüllü listesini alır: price, plans, promo, release, text.","--notify acepta una lista separada por comas de: price, plans, promo, release, text.","--notify aceita uma lista separada por vírgulas de: price, plans, promo, release, text.","--notify erwartet eine kommagetrennte Liste aus: price, plans, promo, release, text.","--notify accepte une liste séparée par des virgules parmi : price, plans, promo, release, text.","--notify には次のカンマ区切りリストを指定します: price, plans, promo, release, text。","يقبل --notify قائمة مفصولة بفواصل من: price وplans وpromo وrelease وtext."],
+["plans: +{0} −{1}","planlar: +{0} −{1}","planes: +{0} −{1}","planos: +{0} −{1}","Tarife: +{0} −{1}","offres : +{0} −{1}","プラン: +{0} −{1}","الخطط: +{0} −{1}"],
+["promotion: {0}","kampanya: {0}","promoción: {0}","promoção: {0}","Aktion: {0}","promotion : {0}","キャンペーン: {0}","عرض ترويجي: {0}"],
+["new release: {0}","yeni sürüm: {0}","nueva versión: {0}","nova versão: {0}","neue Version: {0}","nouvelle version : {0}","新しいリリース: {0}","إصدار جديد: {0}"],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

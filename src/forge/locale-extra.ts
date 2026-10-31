@@ -304,4 +304,8 @@ export const extraRows = [
 ["Only http and https URLs are supported.","Sono supportati solo URL http e https.","Hanya URL http dan https yang didukung.","http 및 https URL만 지원합니다.","Obsługiwane są tylko adresy http i https.","केवल http और https URL समर्थित हैं।","仅支持 http 和 https 网址。"],
 ["Fetch failed ({0})","Recupero non riuscito ({0})","Gagal mengambil halaman ({0})","가져오기 실패 ({0})","Nie udało się pobrać strony ({0})","पेज प्राप्त नहीं हो सका ({0})","获取失败（{0}）"],
 ["Page is larger than {0} bytes.","La pagina supera i {0} byte.","Halaman lebih besar dari {0} byte.","페이지가 {0}바이트보다 큽니다.","Strona ma więcej niż {0} bajtów.","पेज {0} बाइट से बड़ा है।","页面大于 {0} 字节。"],
+["--notify takes a comma list of: price, plans, promo, release, text.","--notify accetta un elenco separato da virgole tra: price, plans, promo, release, text.","--notify menerima daftar dipisahkan koma dari: price, plans, promo, release, text.","--notify에는 다음 값을 쉼표로 구분해 지정합니다: price, plans, promo, release, text.","--notify przyjmuje listę rozdzieloną przecinkami: price, plans, promo, release, text.","--notify इनकी अल्पविराम-सूची लेता है: price, plans, promo, release, text।","--notify 接受以逗号分隔的列表：price、plans、promo、release、text。"],
+["plans: +{0} −{1}","piani: +{0} −{1}","paket: +{0} −{1}","플랜: +{0} −{1}","plany: +{0} −{1}","प्लान: +{0} −{1}","套餐：+{0} −{1}"],
+["promotion: {0}","promozione: {0}","promosi: {0}","프로모션: {0}","promocja: {0}","प्रमोशन: {0}","促销：{0}"],
+["new release: {0}","nuova versione: {0}","rilis baru: {0}","새 릴리스: {0}","nowe wydanie: {0}","नई रिलीज़: {0}","新版本：{0}"],
 ] as const;
