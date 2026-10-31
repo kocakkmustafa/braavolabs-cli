@@ -115,6 +115,8 @@ describe("launchd agent", () => {
     expect(plist).toMatch(/<key>SuccessfulExit<\/key>\s*<false\/>/);
     expect(plist).toMatch(/<key>Umask<\/key>\s*<integer>63<\/integer>/);
     expect(plist).not.toMatch(/EnvironmentVariables|KEY|TOKEN/);
+    expect(plist).not.toContain("--relay");
+    expect(renderPlist({ ...o, relay: true })).toContain("<string>run</string>\n    <string>--relay</string>");
   });
 
   it("points at Homebrew's version-free node link so upgrades do not break the agent", () => {
