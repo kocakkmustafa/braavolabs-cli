@@ -1379,9 +1379,10 @@ async function main(): Promise<void> {
         const release = await urlList(flag(flags, "release-watch")); if (release.length) urls["release-tracker/watch-releases"] = release;
         return { templates: !templates || templates === "all" ? "all" : templates.split(",").map(x => x.trim()), urls, ...(tz ? { timezone: tz } : {}), locale: lang };
       };
-      const reportHire = (r: { agents: unknown[]; skipped: string[]; needsSetup: Array<{ agentId: string; reason: string; provider?: string }>; needsUrls: string[] }) => {
+      const reportHire = (r: { agents: Array<{ id: string; name: string }>; skipped: string[]; needsSetup: Array<{ agentId: string; reason: string; provider?: string }>; needsUrls: string[] }) => {
         const lines = [t("Hired {0} agents", r.agents.length)];
-        if (r.needsSetup.length) lines.push(t("Needs setup: {0}", r.needsSetup.map(n => `${n.agentId} (${n.reason}${n.provider ? ` ${n.provider}` : ""})`).join(", ")));
+        const nameOf = (id: string) => r.agents.find(a => a.id === id)?.name ?? id;
+        if (r.needsSetup.length) lines.push(t("Needs setup: {0}", r.needsSetup.map(n => `${nameOf(n.agentId)} (${n.reason}${n.provider ? ` ${n.provider}` : ""})`).join(", ")));
         if (r.needsUrls.length) lines.push(t("Needs URLs for: {0} (pass --watch or --release-watch)", r.needsUrls.join(", ")));
         return lines.join("\n");
       };
@@ -1649,7 +1650,8 @@ async function main(): Promise<void> {
         const log = openSync(paths.log, "a", 0o600);
         const child = spawn(process.execPath, [process.argv[1], "daemon", "run", ...(has(flags, "relay") ? ["--relay"] : [])], { detached: true, stdio: ["ignore", log, log] });
         child.unref();
-        for (let i = 0; i < 50; i++) {
+        // Up to 15 s: a loaded machine can take several seconds to boot node and open SQLite.
+        for (let i = 0; i < 150; i++) {
           const state = runningDaemon(paths);
           if (state) { emit(flags, state, () => t("Daemon running · pid {0} · port {1}", state.pid, state.port)); return; }
           await new Promise(r => setTimeout(r, 100));
