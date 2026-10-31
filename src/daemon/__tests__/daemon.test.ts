@@ -54,7 +54,7 @@ describe("scheduler", () => {
     expect(planTick([{ id: "r", rrule: "FREQ=WEEKLY;INTERVAL=2", catchUp: "once", nextFireAt: iso(T0), enabled: true }], new Date(T0 + 13 * 24 * H)).at(-1)).toMatchObject({ kind: "skip", outcome: "skipped-sleep" });
     expect(planTick([{ id: "r", rrule: "FREQ=HOURLY", catchUp: "once", nextFireAt: iso(T0), enabled: true, running: true }], new Date(T0 + 1000))).toMatchObject([{ kind: "skip", outcome: "skipped-running" }]);
     expect(planTick([{ id: "r", rrule: "FREQ=HOURLY", catchUp: "once", nextFireAt: iso(T0), enabled: false }], new Date(T0 + H))).toEqual([]);
-    expect(planTick([{ id: "r", rrule: "FREQ=DAILY;BYHOUR=9", catchUp: "once", nextFireAt: iso(T0), enabled: true }], new Date(T0 + 1000))).toMatchObject([{ kind: "skip", outcome: "invalid-rule" }]);
+    expect(planTick([{ id: "r", rrule: "FREQ=DAILY;BYSETPOS=1", catchUp: "once", nextFireAt: iso(T0), enabled: true }], new Date(T0 + 1000))).toMatchObject([{ kind: "skip", outcome: "invalid-rule" }]);
     expect(planTick([{ id: "r", rrule: "FREQ=HOURLY", catchUp: "once", nextFireAt: iso(T0 + H), enabled: true }], new Date(T0))).toEqual([]);
   });
 

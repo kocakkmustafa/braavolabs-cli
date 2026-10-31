@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { DaemonStore } from "./store";
-import { firstFireAt, intervalMs, planTick, TICK_MS, type TickAction } from "./scheduler";
+import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
 /**
  * Local daemon API (platform docs/ai-company/TASARIM.tr.md §9). Loopback only,
@@ -102,7 +102,7 @@ export class Daemon {
   /** One scheduler pass; returns the actions taken (exposed for tests and `routine run-now`). */
   async tick(): Promise<TickAction[]> {
     const routines = this.o.store.listRoutines().map(r => ({
-      id: r.id, rrule: r.rrule, catchUp: (r.catch_up === "skip" ? "skip" : "once") as "once" | "skip",
+      id: r.id, rrule: r.rrule, timezone: r.timezone, catchUp: (r.catch_up === "skip" ? "skip" : "once") as "once" | "skip",
       nextFireAt: r.next_fire_at ?? r.created_at, enabled: r.enabled === 1, running: this.running.has(r.id),
     }));
     const actions = planTick(routines, this.now());
@@ -210,13 +210,13 @@ export class Daemon {
           const agent = store.getAgent(str(body.agentId, "agentId", 80));
           if (!agent || agent.company_id !== id) throw new HttpError(400, "agentId must be an agent of this company");
           const rrule = str(body.rrule, "rrule", 200);
-          if (intervalMs(rrule) === undefined) throw new HttpError(400, "rrule must be FREQ=MINUTELY|HOURLY|DAILY|WEEKLY with optional INTERVAL (minimum 15 minutes)");
+          if (!isSupportedRrule(rrule)) throw new HttpError(400, "rrule must be FREQ=MINUTELY|HOURLY|DAILY|WEEKLY with optional INTERVAL (minimum 15 minutes), or DAILY|WEEKLY|MONTHLY with BYHOUR/BYMINUTE/BYDAY/BYMONTHDAY");
           const timezone = str(body.timezone ?? "UTC", "timezone", 64);
           try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); } catch { throw new HttpError(400, "unknown time zone"); }
           const routine = store.createRoutine({
             companyId: id, agentId: agent.id, name: str(body.name, "name", 120), prompt: str(body.prompt, "prompt", 20_000), rrule, timezone,
             createdBy: "user", preflight: body.preflight, delivery: body.delivery, catchUp: body.catchUp === "skip" ? "skip" : "once",
-            nextFireAt: firstFireAt(rrule, this.now())!,
+            nextFireAt: firstFireAt(rrule, this.now(), timezone)!,
           });
           return this.json(res, 201, { routine });
         }
