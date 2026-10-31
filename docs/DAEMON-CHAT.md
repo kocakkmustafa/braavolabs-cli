@@ -33,6 +33,7 @@ Design reference: platform `docs/ai-company/TASARIM.tr.md` §4.3, §9 (branch
 | `POST /v1/conversations/:id/messages` | `{ content }` (≤ 100 000 chars) | `text/event-stream`, see §3 |
 | `POST /v1/conversations/:id/abort` | — | `{ aborted: boolean }` |
 | `POST /v1/conversations/import` | `{ source, conversations: ImportConversation[] }` | `{ imported, skipped, ids }` |
+| `GET /v1/conversations/:id/export?format=md\|json` | — | Markdown (default) or JSON file body with `Content-Disposition` |
 | `GET /v1/search?q=&limit=20` | — | `{ results: [{ messageId, conversationId, role, snippet, at }] }` |
 
 ```ts

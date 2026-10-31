@@ -41,6 +41,10 @@ export class DaemonClient {
     return (res.status === 204 ? undefined : await res.json()) as T;
   }
 
+  async text(path: string): Promise<string> {
+    return (await this.raw("GET", path)).text();
+  }
+
   /** One streamed turn; resolves after `done` (or the stream ends). Abort via `signal`. */
   async turn(conversationId: string, content: string, onEvent: (ev: ChatStreamEvent) => void, signal?: AbortSignal): Promise<void> {
     const res = await this.raw("POST", `/conversations/${encodeURIComponent(conversationId)}/messages`, { content }, signal);

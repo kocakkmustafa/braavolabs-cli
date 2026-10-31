@@ -1563,6 +1563,16 @@ async function main(): Promise<void> {
           ...data.messages.map(m => `\n${m.role === "user" ? "›" : "‹"} ${m.content}`)].join("\n"));
         return;
       }
+      if (sub === "export") {
+        const id = positionals[1];
+        const format = flag(flags, "format") ?? "md";
+        if (!id || (format !== "md" && format !== "json")) usage("usage: braavo chat export <conversationId> [--format md|json] [--out <file>]");
+        const body = await client.text(`/conversations/${encodeURIComponent(id)}/export?format=${format}`);
+        const out = flag(flags, "out");
+        if (out) { const { writeFileSync } = await import("node:fs"); writeFileSync(out, body, { mode: 0o600 }); console.error(out); }
+        else process.stdout.write(body);
+        return;
+      }
       if (sub === "search") {
         const q = positionals.slice(1).join(" ");
         if (!q) usage("usage: braavo chat search <text> [--json]");

@@ -150,6 +150,17 @@ export class ChatService {
     this.onChange(id);
   }
 
+  /** FK-7: a conversation as Markdown (readable, shareable) or JSON (lossless). */
+  export(id: string, format: unknown): { contentType: string; filename: string; body: string } {
+    const { conversation, messages } = this.get(id);
+    const slug = (conversation.title || conversation.id).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "conversation";
+    if (format === "json") return { contentType: "application/json", filename: `${slug}.json`, body: JSON.stringify({ conversation, messages }, null, 2) + "\n" };
+    if (format !== undefined && format !== null && format !== "md") throw new ChatError(400, "invalid", "format must be md or json");
+    const lines = [`# ${conversation.title || "Conversation"}`, "", `- Model: ${conversation.provider ?? "-"}/${conversation.model ?? "-"}${conversation.effort ? ` · effort ${conversation.effort}` : ""}`, `- Started: ${conversation.createdAt}`, ""];
+    for (const m of messages) lines.push(`## ${m.role === "user" ? "You" : "Assistant"} · ${m.at.slice(0, 16).replace("T", " ")} UTC${m.stopReason && m.stopReason !== "end_turn" ? ` · ${m.stopReason}` : ""}`, "", m.content, "");
+    return { contentType: "text/markdown; charset=utf-8", filename: `${slug}.md`, body: lines.join("\n") };
+  }
+
   isBusy(id: string): boolean { return this.inflight.has(id); }
 
   abort(id: string): boolean {

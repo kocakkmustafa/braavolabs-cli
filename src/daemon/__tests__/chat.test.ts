@@ -124,6 +124,21 @@ describe("chat service", () => {
   });
 });
 
+describe("export (FK-7)", () => {
+  it("writes Markdown and lossless JSON", async () => {
+    const { chat } = setup(vi.fn().mockResolvedValue(answer("Hello there.")));
+    const cv = chat.create({ provider: "GROQ", model: "openai/gpt-oss-20b", title: "Greeting: hi!" });
+    await turn(chat, cv.id, "Hi!");
+    const md = chat.export(cv.id, "md");
+    expect(md).toMatchObject({ contentType: "text/markdown; charset=utf-8", filename: "greeting-hi.md" });
+    expect(md.body).toContain("# Greeting: hi!");
+    expect(md.body).toMatch(/## You · .*\n\nHi!\n\n## Assistant · .*\n\nHello there\./);
+    const json = JSON.parse(chat.export(cv.id, "json").body);
+    expect(json.messages.map((m: { content: string }) => m.content)).toEqual(["Hi!", "Hello there."]);
+    expect(() => chat.export(cv.id, "pdf")).toThrow(ChatError);
+  });
+});
+
 describe("chat over the daemon API", () => {
   async function boot(fetchImpl: (...args: any[]) => Promise<Response>) {
     const { store, chat } = setup(fetchImpl);

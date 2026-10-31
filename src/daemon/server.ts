@@ -267,6 +267,12 @@ export class Daemon {
           this.chat().delete(id);
           res.writeHead(204).end();
           return;
+        case "GET /conversations/:id/export": {
+          const out = this.chat().export(id, url.searchParams.get("format") ?? undefined);
+          res.writeHead(200, { "Content-Type": out.contentType, "Content-Disposition": `attachment; filename="${out.filename}"`, "Cache-Control": "no-store" });
+          res.end(out.body);
+          return;
+        }
         case "POST /conversations/:id/abort":
           return this.json(res, 200, { aborted: this.chat().abort(id) });
         case "POST /conversations/:id/messages": {
