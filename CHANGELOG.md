@@ -13,6 +13,13 @@ development history remains grouped by date.
   (companies, agents with reporting lines, routines and execution ledger,
   conversations with full-text search), and a 60 s scheduler with one
   catch-up run after sleep.
+- The daemon now runs due routines for real: one streamed model call per run
+  through the shared core client (Anthropic via the official SDK, OpenAI-
+  compatible providers, Ollama/LM Studio), with per-agent effort, BYOK keys
+  read from `braavo keys` and redacted from errors, and the reply stored as a
+  searchable conversation plus a token cost event.
+- Add `daemon install|uninstall` (macOS): a per-user LaunchAgent that starts
+  the daemon at login and restarts it after a crash; `--dry-run` prints it.
 - Add `monitor add|list|rm|check|log` (prototype): model-free web page change
   detection with an optional local Ollama summary of real changes only. Text or
   price mode, `--every` interval with `check --due` for cron/launchd, untrusted

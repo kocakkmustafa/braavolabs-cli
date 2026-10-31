@@ -1350,10 +1350,13 @@ async function main(): Promise<void> {
         if (runningDaemon(paths)) die(t("Daemon running · pid {0} · port {1}", runningDaemon(paths)!.pid, runningDaemon(paths)!.port));
         const { DaemonStore } = await import("./daemon/store");
         const { Daemon } = await import("./daemon/server");
+        const { runRoutine } = await import("./daemon/runner");
         process.umask(0o077); // every file the daemon creates (db, WAL, logs) is owner-only
         const token = ensureToken(paths);
         const store = new DaemonStore(paths.db);
-        const daemon = new Daemon({ store, token, version });
+        // Due routines call their agent's model with the local BYOK key (never logged or stored).
+        const keys = makeKeyStore();
+        const daemon = new Daemon({ store, token, version, runRoutine: routineId => runRoutine(store, routineId, { keys }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();
@@ -1400,7 +1403,29 @@ async function main(): Promise<void> {
         emit(flags, { running: true, ...live, health }, () => `${t("Daemon running · pid {0} · port {1}", live.pid, live.port)}${health ? "" : " · !"}`);
         return;
       }
-      usage("usage: braavo daemon run | start | stop | status [--json]");
+      if (sub === "install" || sub === "uninstall") {
+        // macOS LaunchAgent: start at login, restart after a crash. Other platforms run `daemon run` under their own service manager.
+        if (process.platform !== "darwin") die(t("Daemon install is macOS-only for now; run `braavo daemon run` under your service manager."));
+        const launchd = await import("./daemon/launchd");
+        if (sub === "uninstall") {
+          const removed = launchd.uninstall();
+          emit(flags, { removed }, () => (removed ? t("Daemon LaunchAgent removed.") : t("Daemon LaunchAgent is not installed.")));
+          return;
+        }
+        const { realpathSync } = await import("node:fs");
+        const target = { node: launchd.stableNodePath(process.execPath), script: realpathSync(process.argv[1]), log: paths.log };
+        if (has(flags, "dry-run")) {
+          const plan = launchd.planInstall(target);
+          emit(flags, plan, () => `${plan.path}\n\n${plan.plist}`);
+          return;
+        }
+        // A second `daemon run` would exit non-zero and launchd would keep restarting it.
+        if (runningDaemon(paths)) die(t("Stop the running daemon first: braavo daemon stop"));
+        const { plist: _plist, ...plan } = launchd.install(target);
+        emit(flags, plan, () => t("Daemon LaunchAgent installed: {0}", plan.path));
+        return;
+      }
+      usage("usage: braavo daemon run | start | stop | status | install [--dry-run] | uninstall [--json]");
       return;
     }
 

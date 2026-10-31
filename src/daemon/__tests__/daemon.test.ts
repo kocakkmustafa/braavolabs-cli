@@ -181,4 +181,22 @@ describe("local API", () => {
     await daemon.tick();
     expect((await call("GET", `/v1/routines/${routine.id}/executions`)).body.executions).toMatchObject([{ outcome: "failed", note: "provider down" }]);
   });
+
+  it("runs a routine on demand without moving its schedule, one run at a time", async () => {
+    let release!: () => void;
+    const runRoutine = vi.fn(() => new Promise<{ outcome: string }>(resolve => { release = () => resolve({ outcome: "ran" }); }));
+    const { call } = await boot({ now: () => new Date(T0), runRoutine });
+    const company = (await call("POST", "/v1/companies", { name: "C" })).body.company;
+    const agent = (await call("POST", `/v1/companies/${company.id}/agents`, { name: "A", role: "r", provider: "OLLAMA", model: "q" })).body.agent;
+    const routine = (await call("POST", `/v1/companies/${company.id}/routines`, { agentId: agent.id, name: "W", prompt: "p", rrule: "FREQ=HOURLY", timezone: "UTC" })).body.routine;
+    const first = call("POST", `/v1/routines/${routine.id}/run`);
+    await vi.waitFor(() => expect(runRoutine).toHaveBeenCalledTimes(1));
+    expect((await call("POST", `/v1/routines/${routine.id}/run`)).status).toBe(409);
+    release();
+    expect((await first).body).toEqual({ outcome: "ran" });
+    expect((await call("POST", "/v1/routines/rt_missing/run")).status).toBe(404);
+    const after = (await call("GET", `/v1/companies/${company.id}/routines`)).body.routines[0];
+    expect(after.next_fire_at).toBe(routine.next_fire_at);
+    expect((await call("GET", `/v1/routines/${routine.id}/executions`)).body.executions).toMatchObject([{ outcome: "ran", scheduled_for: iso(T0) }]);
+  });
 });

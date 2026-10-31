@@ -391,11 +391,15 @@ braavo daemon start     # detached; prints pid and port
 braavo daemon status [--json]
 braavo daemon stop
 braavo daemon run       # foreground (desktop sidecar, launchd/systemd)
+braavo daemon install [--dry-run]   # macOS: per-user LaunchAgent, starts at login
+braavo daemon uninstall
 ```
 
 - Local API on `127.0.0.1` only, random port, bearer token in `~/.braavo/daemon/token` (`0600`); browser origins and foreign `Host` headers are refused.
 - Data in `~/.braavo/braavo.db` (SQLite, WAL, owner-only): companies, agents with reporting lines, tasks, routines and their execution ledger, conversations (full-text search), costs and activity.
-- Routines tick every 60 s. After a sleep only the latest missed firing runs, once, and is reported; the others are recorded as skipped. Routines cannot create routines.
+- Routines tick every 60 s. After a sleep only the latest missed firing runs, once, and is reported; the others are recorded as skipped. Routines cannot create routines. `POST /v1/routines/:id/run` runs one now without moving its schedule.
+- A due routine makes one model call for its agent (provider, model and effort from the agent) and stores the reply as a searchable conversation with a token cost event. Keys come from `braavo keys add <provider>` (macOS keychain) and are only sent to that provider; local providers (Ollama, LM Studio) need none. Supported: Anthropic (official SDK), OpenAI, Groq, Cerebras, Mistral, OpenRouter, DeepSeek, Kimi, Qwen, Zhipu, Ollama, LM Studio. Routine preflight checks and an agent tool loop are not implemented yet; USD cost is not computed yet (tokens only).
+- `install` writes `~/Library/LaunchAgents/com.braavolabs.daemon.plist` (no secrets, no environment) and loads it into your login session; the daemon restarts only after a crash. `--dry-run` prints the plist without installing.
 
 ### direct
 

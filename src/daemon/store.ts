@@ -182,6 +182,16 @@ export class DaemonStore {
         WHERE message_fts MATCH ? ORDER BY rank LIMIT ?`).all(phrase, limit) as unknown as Array<{ id: string; conversation_id: string; content: string }>;
   }
 
+  // ─── Cost ──────────────────────────────────────────────────────────────
+  recordCost(input: { companyId?: string; agentId?: string; runId?: string; provider: string; model: string; inputTokens: number; outputTokens: number; usd?: number }): void {
+    this.db.prepare("INSERT INTO cost_event(id, company_id, agent_id, run_id, provider, model, input_tokens, output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(`ce_${randomUUID()}`, input.companyId ?? null, input.agentId ?? null, input.runId ?? null, input.provider, input.model, input.inputTokens, input.outputTokens, input.usd ?? 0, this.now());
+  }
+  costEvents(companyId: string): Array<{ agent_id: string | null; provider: string; model: string; input_tokens: number; output_tokens: number; usd: number }> {
+    return this.db.prepare("SELECT agent_id, provider, model, input_tokens, output_tokens, usd FROM cost_event WHERE company_id = ? ORDER BY at, rowid")
+      .all(companyId) as unknown as Array<{ agent_id: string | null; provider: string; model: string; input_tokens: number; output_tokens: number; usd: number }>;
+  }
+
   // ─── Activity ──────────────────────────────────────────────────────────
   activity(input: { companyId?: string; actor: string; verb: string; objectType?: string; objectId?: string; summary?: string }): void {
     this.db.prepare("INSERT INTO activity(id, company_id, actor, verb, object_type, object_id, summary, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")

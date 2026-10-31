@@ -106,20 +106,35 @@ export class Daemon {
         this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: action.outcome, nextFireAt: action.nextFireAt, fired: false });
         continue;
       }
-      this.running.add(action.routineId);
-      try {
-        const result = this.o.runRoutine ? await this.o.runRoutine(action.routineId, action) : { outcome: "ran" };
-        this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: result.outcome, note: result.note, nextFireAt: action.nextFireAt, fired: true });
-        const event: DaemonEvent = { type: "routine.executed", routineId: action.routineId, outcome: result.outcome, scheduledFor: action.scheduledFor, catchUp: action.catchUp };
-        this.emit(event);
-        if (action.catchUp) this.o.notify?.(event);
-      } catch (error) {
-        this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: "failed", note: (error as Error).message.slice(0, 200), nextFireAt: action.nextFireAt, fired: true });
-      } finally {
-        this.running.delete(action.routineId);
-      }
+      await this.execute(action.routineId, action.scheduledFor, action.catchUp, action.nextFireAt);
     }
     return actions;
+  }
+
+  /** Run a routine now, outside its schedule (API "run now"); the schedule itself is unchanged. */
+  async runNow(routineId: string): Promise<{ outcome: string; note?: string }> {
+    const routine = this.o.store.getRoutine(routineId);
+    if (!routine) throw new HttpError(404, "routine not found");
+    if (this.running.has(routineId)) throw new HttpError(409, "routine is already running");
+    return this.execute(routineId, this.now().toISOString(), false, routine.next_fire_at ?? routine.created_at);
+  }
+
+  private async execute(routineId: string, scheduledFor: string, catchUp: boolean, nextFireAt: string): Promise<{ outcome: string; note?: string }> {
+    this.running.add(routineId);
+    try {
+      const result = this.o.runRoutine ? await this.o.runRoutine(routineId, { scheduledFor, catchUp }) : { outcome: "ran" };
+      this.o.store.recordExecution({ routineId, scheduledFor, outcome: result.outcome, note: result.note, nextFireAt, fired: true });
+      const event: DaemonEvent = { type: "routine.executed", routineId, outcome: result.outcome, scheduledFor, catchUp };
+      this.emit(event);
+      if (catchUp) this.o.notify?.(event);
+      return result;
+    } catch (error) {
+      const note = (error as Error).message.slice(0, 200);
+      this.o.store.recordExecution({ routineId, scheduledFor, outcome: "failed", note, nextFireAt, fired: true });
+      return { outcome: "failed", note };
+    } finally {
+      this.running.delete(routineId);
+    }
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -199,6 +214,8 @@ export class Daemon {
           });
           return this.json(res, 201, { routine });
         }
+        case "POST /routines/:id/run":
+          return this.json(res, 200, await this.runNow(id));
         case "GET /routines/:id/executions": {
           if (!store.getRoutine(id)) throw new HttpError(404, "routine not found");
           return this.json(res, 200, { executions: store.executions(id) });
