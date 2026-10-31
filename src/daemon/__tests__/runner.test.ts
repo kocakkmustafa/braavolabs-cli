@@ -146,3 +146,56 @@ describe("launchd agent", () => {
     expect(uninstall(deps)).toBe(false);
   });
 });
+
+describe("web preflight (market analyst)", () => {
+  const page = (price: string) => new Response(`<html><body><h2>Pro</h2><p>${price} / month</p><div class="cookie-banner">Accept</div></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+
+  async function scenario(keys: Record<string, string>) {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "braavo-web-"));
+    const { store, co, rt } = setup({ provider: "GROQ", model: "openai/gpt-oss-20b" }, { type: "web", urls: ["https://rival.example/pricing"], notify: ["price", "plans", "promo"] });
+    let price = "$49";
+    const model = vi.fn(async () => sse({ choices: [{ delta: { content: "- Pro dropped from $49 to $39." }, finish_reason: "stop" }] }, { choices: [], usage: { prompt_tokens: 80, completion_tokens: 9 } }));
+    const fetchImpl = vi.fn(async (url: string, init: any) => (String(url).startsWith("https://rival.example") ? page(price) : model(url, init)));
+    const notes: Array<[string, string]> = [];
+    const deps = { keys: { get: (p: string) => keys[p] }, fetchImpl: fetchImpl as never, monitorRoot: join(root, "monitor"), memoryRoot: join(root, "memory"), notify: (a: string, b: string) => notes.push([a, b]) };
+    return { store, co, rt, root, model, notes, deps, setPrice: (p: string) => { price = p; } };
+  }
+
+  it("calls no model until a page changes, then summarises, writes memory and notifies", async () => {
+    const { readFileSync } = await import("node:fs");
+    const s = await scenario({ groq: KEY });
+    expect(await runRoutine(s.store, s.rt.id, s.deps)).toEqual({ outcome: "no-change", note: "1 pages · 1 baseline" });
+    expect(await runRoutine(s.store, s.rt.id, s.deps)).toEqual({ outcome: "no-change", note: "1 pages" });
+    expect(s.model).not.toHaveBeenCalled();
+
+    s.setPrice("$39");
+    const result = await runRoutine(s.store, s.rt.id, s.deps);
+    expect(result.outcome).toBe("changed");
+    expect(s.model).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse((s.model.mock.calls[0] as any)[1].body).messages.at(-1).content as string;
+    expect(sent).toContain('<untrusted source="https://rival.example/pricing"');
+    expect(sent).toContain("$39");
+    const memory = readFileSync(`${s.deps.memoryRoot}/${s.co.id}/findings/analyst.md`, "utf8");
+    expect(memory).toContain("https://rival.example/pricing");
+    expect(memory).toContain("price: +$39");
+    expect(memory).toContain("Pro dropped from $49 to $39.");
+    expect(s.notes).toEqual([["Analyst: 1 change", "Pro dropped from $49 to $39."]]);
+    expect(s.store.recentActivity(s.co.id)[0]).toMatchObject({ verb: "found-change" });
+    expect(dump(s.store)).not.toContain(KEY);
+  });
+
+  it("still records and notifies a change when no model is usable", async () => {
+    const { readFileSync } = await import("node:fs");
+    const s = await scenario({});
+    await runRoutine(s.store, s.rt.id, s.deps);
+    s.setPrice("$29");
+    const result = await runRoutine(s.store, s.rt.id, s.deps);
+    expect(result.outcome).toBe("changed");
+    expect(result.note).toContain("no summary: no groq key");
+    expect(readFileSync(`${s.deps.memoryRoot}/${s.co.id}/findings/analyst.md`, "utf8")).toContain("price: +$29, -$49");
+    expect(s.notes[0][1]).toBe("price: +$29, -$49");
+  });
+});
