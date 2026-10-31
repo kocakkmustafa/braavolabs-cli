@@ -2,16 +2,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from "node:crypto";
 import { DaemonStore } from "./store";
 import { firstFireAt, intervalMs, planTick, TICK_MS, type TickAction } from "./scheduler";
+import { ChatError, type ChatEvent, type ChatService } from "./chat";
 /**
  * Local daemon API (platform docs/ai-company/TASARIM.tr.md §9). Loopback only,
  * bearer token from ~/.braavo/daemon/token (0600), JSON in/out, one SSE event
  * stream. The mobile companion never connects here; it goes through the cloud
  * relay with outbound connections only.
  *
- * This first slice serves companies, agents (org chart), routines and their
- * execution ledger, and runs the scheduler tick. Executing a routine is an
- * injected hook (`runRoutine`) so the agent loop can plug in without touching
- * the scheduler or the API.
+ * It serves companies, agents (org chart), routines and their execution
+ * ledger, runs the scheduler tick, and — when a ChatService is given — the
+ * chat endpoints of docs/DAEMON-CHAT.md. Executing a routine is an injected
+ * hook (`runRoutine`) so the agent loop can plug in without touching the
+ * scheduler or the API.
  */
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -27,14 +29,17 @@ export interface DaemonOptions {
   runRoutine?: (routineId: string, info: { scheduledFor: string; catchUp: boolean }) => Promise<{ outcome: string; note?: string }>;
   /** Called for every catch-up run so the user is told what ran after a sleep. */
   notify?: (event: DaemonEvent) => void;
+  /** Chat engine (plan 1.2); chat routes answer 404 without it. */
+  chat?: ChatService;
 }
 
 export type DaemonEvent =
   | { type: "routine.executed"; routineId: string; outcome: string; scheduledFor: string; catchUp: boolean }
   | { type: "agent.status"; agentId: string; status: string }
-  | { type: "company.changed"; companyId: string };
+  | { type: "company.changed"; companyId: string }
+  | { type: "conversation.changed"; conversationId: string };
 
-class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+class HttpError extends Error { constructor(readonly status: number, message: string, readonly code?: string) { super(message); } }
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   const presented = header?.startsWith("Bearer ") ? header.slice(7) : "";
@@ -147,7 +152,8 @@ export class Daemon {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const parts = url.pathname.split("/").filter(Boolean);
       if (parts[0] !== "v1") throw new HttpError(404, "not found");
-      const route = `${req.method} /${parts.slice(1).map((p, i) => (i % 2 === 1 ? ":id" : p)).join("/")}`;
+      const literal = `${req.method} /${parts.slice(1).join("/")}`;
+      const route = literal === "POST /conversations/import" ? literal : `${req.method} /${parts.slice(1).map((p, i) => (i % 2 === 1 ? ":id" : p)).join("/")}`;
       const id = parts[2];
       const store = this.o.store;
 
@@ -220,13 +226,64 @@ export class Daemon {
           if (!store.getRoutine(id)) throw new HttpError(404, "routine not found");
           return this.json(res, 200, { executions: store.executions(id) });
         }
+        case "GET /models":
+          return this.json(res, 200, await this.chat().models());
+        case "GET /conversations":
+          return this.json(res, 200, { conversations: this.chat().list(Number(url.searchParams.get("limit") ?? 50) || 50, url.searchParams.get("before") ?? undefined) });
+        case "POST /conversations": {
+          const body = await readJson(req);
+          return this.json(res, 201, { conversation: this.chat().create({ title: body.title, provider: body.provider, model: body.model, effort: body.effort }) });
+        }
+        case "POST /conversations/import": {
+          const body = await readJson(req);
+          return this.json(res, 200, this.chat().import(body.source, body.conversations));
+        }
+        case "GET /conversations/:id":
+          return this.json(res, 200, this.chat().get(id));
+        case "PATCH /conversations/:id": {
+          const body = await readJson(req);
+          return this.json(res, 200, { conversation: this.chat().update(id, body) });
+        }
+        case "DELETE /conversations/:id":
+          this.chat().delete(id);
+          res.writeHead(204).end();
+          return;
+        case "POST /conversations/:id/abort":
+          return this.json(res, 200, { aborted: this.chat().abort(id) });
+        case "POST /conversations/:id/messages": {
+          const body = await readJson(req);
+          await this.streamTurn(id, body.content, res);
+          return;
+        }
+        case "GET /search":
+          return this.json(res, 200, { results: this.chat().search(url.searchParams.get("q"), Number(url.searchParams.get("limit") ?? 20) || 20) });
         default:
           throw new HttpError(404, "not found");
       }
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
-      this.json(res, status, { error: error instanceof HttpError ? error.message : "internal error" });
+      const known = error instanceof HttpError || error instanceof ChatError;
+      const status = known ? error.status : 500;
+      const code = error instanceof ChatError ? error.code : error instanceof HttpError ? error.code : undefined;
+      this.json(res, status, { error: known ? error.message : "internal error", ...(code ? { code } : {}) });
     }
+  }
+
+  private chat(): ChatService {
+    if (!this.o.chat) throw new HttpError(404, "chat is not enabled on this daemon");
+    return this.o.chat;
+  }
+
+  /** SSE turn: headers go out with the first event, so validation errors still answer as plain JSON. */
+  private async streamTurn(id: string, content: unknown, res: ServerResponse): Promise<void> {
+    const controller = new AbortController();
+    res.on("close", () => { if (!res.writableFinished) controller.abort(); });
+    const write = (event: ChatEvent) => {
+      if (!res.headersSent) res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      const { type, ...data } = event;
+      if (!res.destroyed) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    await this.chat().send(id, content, write, controller.signal);
+    res.end();
   }
 
   private json(res: ServerResponse, status: number, body: unknown): void {
