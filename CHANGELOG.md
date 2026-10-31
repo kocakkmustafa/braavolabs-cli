@@ -8,6 +8,11 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Add `daemon run|start|stop|status`: the first slice of the local AI-company
+  runtime — loopback-only token-authenticated API, owner-only SQLite store
+  (companies, agents with reporting lines, routines and execution ledger,
+  conversations with full-text search), and a 60 s scheduler with one
+  catch-up run after sleep.
 - Add `monitor add|list|rm|check|log` (prototype): model-free web page change
   detection with an optional local Ollama summary of real changes only. Text or
   price mode, `--every` interval with `check --due` for cron/launchd, untrusted

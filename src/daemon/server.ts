@@ -1,0 +1,220 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+import { DaemonStore } from "./store";
+import { firstFireAt, intervalMs, planTick, TICK_MS, type TickAction } from "./scheduler";
+/**
+ * Local daemon API (platform docs/ai-company/TASARIM.tr.md §9). Loopback only,
+ * bearer token from ~/.braavo/daemon/token (0600), JSON in/out, one SSE event
+ * stream. The mobile companion never connects here; it goes through the cloud
+ * relay with outbound connections only.
+ *
+ * This first slice serves companies, agents (org chart), routines and their
+ * execution ledger, and runs the scheduler tick. Executing a routine is an
+ * injected hook (`runRoutine`) so the agent loop can plug in without touching
+ * the scheduler or the API.
+ */
+
+const MAX_BODY_BYTES = 256 * 1024;
+const PROVIDERS = new Set(["ANTHROPIC", "OPENAI", "GOOGLE", "MISTRAL", "GROQ", "OPENROUTER", "DEEPSEEK", "KIMI", "QWEN", "CEREBRAS", "ZHIPU", "OLLAMA", "LMSTUDIO", "CUSTOM"]);
+const EFFORTS = new Set(["none", "low", "medium", "high", "max"]);
+
+export interface DaemonOptions {
+  store: DaemonStore;
+  token: string;
+  version: string;
+  now?: () => Date;
+  /** Executes a due routine; resolves to a short note for the ledger. Default: record "ran" with no work. */
+  runRoutine?: (routineId: string, info: { scheduledFor: string; catchUp: boolean }) => Promise<{ outcome: string; note?: string }>;
+  /** Called for every catch-up run so the user is told what ran after a sleep. */
+  notify?: (event: DaemonEvent) => void;
+}
+
+export type DaemonEvent =
+  | { type: "routine.executed"; routineId: string; outcome: string; scheduledFor: string; catchUp: boolean }
+  | { type: "agent.status"; agentId: string; status: string }
+  | { type: "company.changed"; companyId: string };
+
+class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+
+function tokenMatches(header: string | undefined, token: string): boolean {
+  const presented = header?.startsWith("Bearer ") ? header.slice(7) : "";
+  const a = Buffer.from(presented); const b = Buffer.from(token);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+async function readJson(req: IncomingMessage): Promise<any> {
+  let size = 0; const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY_BYTES) throw new HttpError(413, "body too large");
+    chunks.push(chunk as Buffer);
+  }
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new HttpError(400, "invalid JSON"); }
+}
+
+const str = (v: unknown, field: string, max = 200): string => {
+  if (typeof v !== "string" || !v.trim() || v.length > max) throw new HttpError(400, `${field} is required (≤${max} chars)`);
+  return v.trim();
+};
+
+export class Daemon {
+  readonly server: Server;
+  private readonly subscribers = new Set<ServerResponse>();
+  private readonly running = new Set<string>();
+  private timer?: NodeJS.Timeout;
+  private readonly now: () => Date;
+
+  constructor(private readonly o: DaemonOptions) {
+    this.now = o.now ?? (() => new Date());
+    this.server = createServer((req, res) => { void this.handle(req, res); });
+  }
+
+  listen(port = 0): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(port, "127.0.0.1", () => resolve((this.server.address() as { port: number }).port));
+    });
+  }
+
+  startTicking(): void {
+    void this.tick();
+    this.timer = setInterval(() => { void this.tick(); }, TICK_MS);
+    this.timer.unref?.();
+  }
+
+  async close(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+    for (const res of this.subscribers) res.end();
+    await new Promise<void>(resolve => this.server.close(() => resolve()));
+  }
+
+  emit(event: DaemonEvent): void {
+    const frame = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    for (const res of this.subscribers) res.write(frame);
+  }
+
+  /** One scheduler pass; returns the actions taken (exposed for tests and `routine run-now`). */
+  async tick(): Promise<TickAction[]> {
+    const routines = this.o.store.listRoutines().map(r => ({
+      id: r.id, rrule: r.rrule, catchUp: (r.catch_up === "skip" ? "skip" : "once") as "once" | "skip",
+      nextFireAt: r.next_fire_at ?? r.created_at, enabled: r.enabled === 1, running: this.running.has(r.id),
+    }));
+    const actions = planTick(routines, this.now());
+    for (const action of actions) {
+      if (action.kind === "skip") {
+        this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: action.outcome, nextFireAt: action.nextFireAt, fired: false });
+        continue;
+      }
+      this.running.add(action.routineId);
+      try {
+        const result = this.o.runRoutine ? await this.o.runRoutine(action.routineId, action) : { outcome: "ran" };
+        this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: result.outcome, note: result.note, nextFireAt: action.nextFireAt, fired: true });
+        const event: DaemonEvent = { type: "routine.executed", routineId: action.routineId, outcome: result.outcome, scheduledFor: action.scheduledFor, catchUp: action.catchUp };
+        this.emit(event);
+        if (action.catchUp) this.o.notify?.(event);
+      } catch (error) {
+        this.o.store.recordExecution({ routineId: action.routineId, scheduledFor: action.scheduledFor, outcome: "failed", note: (error as Error).message.slice(0, 200), nextFireAt: action.nextFireAt, fired: true });
+      } finally {
+        this.running.delete(action.routineId);
+      }
+    }
+    return actions;
+  }
+
+  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      // Loopback-only listener, plus refuse browser cross-origin calls and DNS-rebinding hosts.
+      if (req.headers.origin) throw new HttpError(403, "cross-origin requests are not allowed");
+      const host = (req.headers.host ?? "").replace(/:\d+$/, "");
+      if (host !== "127.0.0.1" && host !== "localhost") throw new HttpError(403, "unexpected host");
+      if (!tokenMatches(req.headers.authorization, this.o.token)) throw new HttpError(401, "unauthorized");
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts[0] !== "v1") throw new HttpError(404, "not found");
+      const route = `${req.method} /${parts.slice(1).map((p, i) => (i % 2 === 1 ? ":id" : p)).join("/")}`;
+      const id = parts[2];
+      const store = this.o.store;
+
+      switch (route) {
+        case "GET /health":
+          return this.json(res, 200, { ok: true, version: this.o.version, schema: store.schemaVersion(), running: [...this.running] });
+        case "GET /events": {
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+          res.write(": connected\n\n");
+          this.subscribers.add(res);
+          req.on("close", () => this.subscribers.delete(res));
+          return;
+        }
+        case "GET /companies":
+          return this.json(res, 200, { companies: store.listCompanies() });
+        case "POST /companies": {
+          const body = await readJson(req);
+          const company = store.createCompany({ name: str(body.name, "name", 120), mission: typeof body.mission === "string" ? body.mission.slice(0, 4000) : undefined });
+          this.emit({ type: "company.changed", companyId: company.id });
+          return this.json(res, 201, { company });
+        }
+        case "GET /companies/:id/org": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          return this.json(res, 200, { agents: store.listAgents(id), activity: store.recentActivity(id, 20) });
+        }
+        case "POST /companies/:id/agents": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          const provider = str(body.provider, "provider", 20);
+          if (!PROVIDERS.has(provider)) throw new HttpError(400, "unknown provider");
+          if (body.effort !== undefined && !EFFORTS.has(body.effort)) throw new HttpError(400, "unknown effort");
+          if (body.effortRounding !== undefined && body.effortRounding !== "down" && body.effortRounding !== "up") throw new HttpError(400, "effortRounding must be down or up");
+          const manager = body.reportsToAgentId ?? null;
+          if (manager !== null) {
+            const m = store.getAgent(String(manager));
+            // A manager must exist in the same company; a brand-new agent cannot create a cycle.
+            if (!m || m.company_id !== id) throw new HttpError(400, "reportsToAgentId must be an agent of this company");
+          }
+          const agent = store.createAgent({
+            companyId: id, name: str(body.name, "name", 80), role: str(body.role, "role", 80), provider, model: str(body.model, "model"),
+            title: typeof body.title === "string" ? body.title.slice(0, 80) : undefined, systemPrompt: typeof body.systemPrompt === "string" ? body.systemPrompt.slice(0, 20_000) : undefined,
+            effort: body.effort, effortRounding: body.effortRounding, reportsToAgentId: manager,
+          });
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 201, { agent });
+        }
+        case "GET /companies/:id/routines":
+          return this.json(res, 200, { routines: store.listRoutines(id) });
+        case "POST /companies/:id/routines": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          // Runaway guard (design §6.3): a routine run cannot create routines.
+          if (body.origin === "routine") throw new HttpError(403, "routines cannot create routines");
+          const agent = store.getAgent(str(body.agentId, "agentId", 80));
+          if (!agent || agent.company_id !== id) throw new HttpError(400, "agentId must be an agent of this company");
+          const rrule = str(body.rrule, "rrule", 200);
+          if (intervalMs(rrule) === undefined) throw new HttpError(400, "rrule must be FREQ=MINUTELY|HOURLY|DAILY|WEEKLY with optional INTERVAL (minimum 15 minutes)");
+          const timezone = str(body.timezone ?? "UTC", "timezone", 64);
+          try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); } catch { throw new HttpError(400, "unknown time zone"); }
+          const routine = store.createRoutine({
+            companyId: id, agentId: agent.id, name: str(body.name, "name", 120), prompt: str(body.prompt, "prompt", 20_000), rrule, timezone,
+            createdBy: "user", preflight: body.preflight, delivery: body.delivery, catchUp: body.catchUp === "skip" ? "skip" : "once",
+            nextFireAt: firstFireAt(rrule, this.now())!,
+          });
+          return this.json(res, 201, { routine });
+        }
+        case "GET /routines/:id/executions": {
+          if (!store.getRoutine(id)) throw new HttpError(404, "routine not found");
+          return this.json(res, 200, { executions: store.executions(id) });
+        }
+        default:
+          throw new HttpError(404, "not found");
+      }
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      this.json(res, status, { error: error instanceof HttpError ? error.message : "internal error" });
+    }
+  }
+
+  private json(res: ServerResponse, status: number, body: unknown): void {
+    if (res.headersSent) { res.end(); return; }
+    res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(body));
+  }
+}

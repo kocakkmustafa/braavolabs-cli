@@ -382,6 +382,21 @@ braavo monitor rm <id>
 - `--summarize` asks a local Ollama model only for monitors that changed. Page lines are passed as untrusted data and the model is told not to follow instructions inside them.
 - Only plain `http(s)` URLs without embedded credentials; pages over 2 MB are refused. State lives in `~/.braavo/monitor/` (files `0600`, directories `0700`): `monitors.json`, `<id>/last.txt`, `<id>/state.json`, `ledger.jsonl` (last 500 checks).
 
+### daemon
+
+Early slice of the local AI-company runtime. Everything runs on your machine; Braavolabs' cloud never executes agents.
+
+```bash
+braavo daemon start     # detached; prints pid and port
+braavo daemon status [--json]
+braavo daemon stop
+braavo daemon run       # foreground (desktop sidecar, launchd/systemd)
+```
+
+- Local API on `127.0.0.1` only, random port, bearer token in `~/.braavo/daemon/token` (`0600`); browser origins and foreign `Host` headers are refused.
+- Data in `~/.braavo/braavo.db` (SQLite, WAL, owner-only): companies, agents with reporting lines, tasks, routines and their execution ledger, conversations (full-text search), costs and activity.
+- Routines tick every 60 s. After a sleep only the latest missed firing runs, once, and is reported; the others are recorded as skipped. Routines cannot create routines.
+
 ### direct
 
 Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `braavo keys`. The Braavolabs server is never contacted.

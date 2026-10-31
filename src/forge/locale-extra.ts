@@ -308,4 +308,9 @@ export const extraRows = [
 ["plans: +{0} −{1}","piani: +{0} −{1}","paket: +{0} −{1}","플랜: +{0} −{1}","plany: +{0} −{1}","प्लान: +{0} −{1}","套餐：+{0} −{1}"],
 ["promotion: {0}","promozione: {0}","promosi: {0}","프로모션: {0}","promocja: {0}","प्रमोशन: {0}","促销：{0}"],
 ["new release: {0}","nuova versione: {0}","rilis baru: {0}","새 릴리스: {0}","nowe wydanie: {0}","नई रिलीज़: {0}","新版本：{0}"],
+["Run the local daemon: agents, schedules and the local API","Esegui il daemon locale: agenti, pianificazioni e API locale","Jalankan daemon lokal: agen, jadwal, dan API lokal","로컬 데몬 실행: 에이전트, 일정, 로컬 API","Uruchom lokalnego demona: agenci, harmonogramy i lokalne API","लोकल डेमन चलाएँ: एजेंट, शेड्यूल और लोकल API","运行本地守护进程：代理、计划任务和本地 API"],
+["Daemon running · pid {0} · port {1}","Daemon in esecuzione · pid {0} · porta {1}","Daemon berjalan · pid {0} · port {1}","데몬 실행 중 · pid {0} · 포트 {1}","Demon działa · pid {0} · port {1}","डेमन चल रहा है · pid {0} · पोर्ट {1}","守护进程运行中 · pid {0} · 端口 {1}"],
+["Daemon is not running.","Il daemon non è in esecuzione.","Daemon tidak berjalan.","데몬이 실행 중이 아닙니다.","Demon nie działa.","डेमन नहीं चल रहा है।","守护进程未运行。"],
+["Daemon stopped.","Daemon arrestato.","Daemon dihentikan.","데몬을 중지했습니다.","Zatrzymano demona.","डेमन रोक दिया गया।","守护进程已停止。"],
+["Daemon did not start; see {0}","Il daemon non si è avviato; vedi {0}","Daemon tidak dimulai; lihat {0}","데몬이 시작되지 않았습니다. {0}을(를) 확인하세요","Demon się nie uruchomił; zobacz {0}","डेमन शुरू नहीं हुआ; देखें {0}","守护进程未启动；请查看 {0}"],
 ] as const;

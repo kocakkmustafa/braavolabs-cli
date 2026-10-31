@@ -100,6 +100,7 @@ import {
   type MonitorDef,
 } from "./forge/monitor";
 import { createRelayTransport } from "./forge/relay-transport";
+import { daemonPaths, ensureToken, runningDaemon, writeState, clearState } from "./daemon/lifecycle";
 import { RelayBridge } from "./forge/relay-bridge";
 import { collectRepoContext, prependRepoContext } from "./forge/repo";
 import {
@@ -1336,6 +1337,70 @@ async function main(): Promise<void> {
         default:
           usage("usage: braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize [--model <name>] [--host <url>]] | log <id>");
       }
+      return;
+    }
+
+    case "daemon": {
+      // Local daemon (AI company runtime): loopback API + scheduler. `run` stays in the
+      // foreground (desktop sidecar, launchd/systemd); `start` detaches it.
+      const paths = daemonPaths();
+      const sub = positionals[0];
+      const version = (require("../package.json") as { version: string }).version;
+      if (sub === "run") {
+        if (runningDaemon(paths)) die(t("Daemon running · pid {0} · port {1}", runningDaemon(paths)!.pid, runningDaemon(paths)!.port));
+        const { DaemonStore } = await import("./daemon/store");
+        const { Daemon } = await import("./daemon/server");
+        process.umask(0o077); // every file the daemon creates (db, WAL, logs) is owner-only
+        const token = ensureToken(paths);
+        const store = new DaemonStore(paths.db);
+        const daemon = new Daemon({ store, token, version });
+        const port = await daemon.listen(0);
+        writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
+        daemon.startTicking();
+        console.log(t("Daemon running · pid {0} · port {1}", process.pid, port));
+        await new Promise<void>(resolve => {
+          const stop = () => resolve();
+          process.once("SIGTERM", stop); process.once("SIGINT", stop);
+        });
+        await daemon.close(); store.close(); clearState(paths);
+        return;
+      }
+      if (sub === "start") {
+        const live = runningDaemon(paths);
+        if (live) { emit(flags, live, () => t("Daemon running · pid {0} · port {1}", live.pid, live.port)); return; }
+        const { openSync, mkdirSync } = await import("node:fs");
+        const { spawn } = await import("node:child_process");
+        mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+        const log = openSync(paths.log, "a", 0o600);
+        const child = spawn(process.execPath, [process.argv[1], "daemon", "run"], { detached: true, stdio: ["ignore", log, log] });
+        child.unref();
+        for (let i = 0; i < 50; i++) {
+          const state = runningDaemon(paths);
+          if (state) { emit(flags, state, () => t("Daemon running · pid {0} · port {1}", state.pid, state.port)); return; }
+          await new Promise(r => setTimeout(r, 100));
+        }
+        die(t("Daemon did not start; see {0}", paths.log));
+      }
+      if (sub === "stop") {
+        const live = runningDaemon(paths);
+        if (!live) { emit(flags, { running: false }, () => t("Daemon is not running.")); return; }
+        process.kill(live.pid, "SIGTERM");
+        for (let i = 0; i < 50 && runningDaemon(paths); i++) await new Promise(r => setTimeout(r, 100));
+        emit(flags, { running: false, pid: live.pid }, () => t("Daemon stopped."));
+        return;
+      }
+      if (sub === "status") {
+        const live = runningDaemon(paths);
+        if (!live) { emit(flags, { running: false }, () => t("Daemon is not running.")); process.exitCode = EXIT.GENERAL; return; }
+        let health: unknown = null;
+        try {
+          const res = await fetch(`http://127.0.0.1:${live.port}/v1/health`, { headers: { Authorization: `Bearer ${ensureToken(paths)}` }, signal: AbortSignal.timeout(3000) });
+          health = await res.json();
+        } catch { /* reported as unhealthy below */ }
+        emit(flags, { running: true, ...live, health }, () => `${t("Daemon running · pid {0} · port {1}", live.pid, live.port)}${health ? "" : " · !"}`);
+        return;
+      }
+      usage("usage: braavo daemon run | start | stop | status [--json]");
       return;
     }
 

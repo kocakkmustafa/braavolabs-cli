@@ -355,6 +355,11 @@ const rows = [
 ["plans: +{0} −{1}","planlar: +{0} −{1}","planes: +{0} −{1}","planos: +{0} −{1}","Tarife: +{0} −{1}","offres : +{0} −{1}","プラン: +{0} −{1}","الخطط: +{0} −{1}"],
 ["promotion: {0}","kampanya: {0}","promoción: {0}","promoção: {0}","Aktion: {0}","promotion : {0}","キャンペーン: {0}","عرض ترويجي: {0}"],
 ["new release: {0}","yeni sürüm: {0}","nueva versión: {0}","nova versão: {0}","neue Version: {0}","nouvelle version : {0}","新しいリリース: {0}","إصدار جديد: {0}"],
+["Run the local daemon: agents, schedules and the local API","Yerel daemon'u çalıştır: ajanlar, zamanlamalar ve yerel API","Ejecuta el daemon local: agentes, programaciones y la API local","Executa o daemon local: agentes, agendamentos e a API local","Lokalen Daemon ausführen: Agenten, Zeitpläne und lokale API","Exécuter le démon local : agents, planifications et API locale","ローカルデーモンを実行: エージェント、スケジュール、ローカル API","تشغيل الخدمة المحلية: الوكلاء والجدولة وواجهة API المحلية"],
+["Daemon running · pid {0} · port {1}","Daemon çalışıyor · pid {0} · port {1}","Daemon en ejecución · pid {0} · puerto {1}","Daemon em execução · pid {0} · porta {1}","Daemon läuft · PID {0} · Port {1}","Démon actif · pid {0} · port {1}","デーモン実行中 · pid {0} · ポート {1}","الخدمة تعمل · pid {0} · المنفذ {1}"],
+["Daemon is not running.","Daemon çalışmıyor.","El daemon no está en ejecución.","O daemon não está em execução.","Daemon läuft nicht.","Le démon n’est pas actif.","デーモンは実行されていません。","الخدمة لا تعمل."],
+["Daemon stopped.","Daemon durduruldu.","Daemon detenido.","Daemon parado.","Daemon gestoppt.","Démon arrêté.","デーモンを停止しました。","تم إيقاف الخدمة."],
+["Daemon did not start; see {0}","Daemon başlamadı; bkz. {0}","El daemon no se inició; consulta {0}","O daemon não iniciou; veja {0}","Daemon wurde nicht gestartet; siehe {0}","Le démon n’a pas démarré ; voir {0}","デーモンが起動しませんでした。{0} を確認してください","لم تبدأ الخدمة؛ راجع {0}"],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;
