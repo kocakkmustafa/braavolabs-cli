@@ -191,6 +191,18 @@ describe("web preflight (market analyst)", () => {
     expect(dump(s.store)).not.toContain(KEY);
   });
 
+  it("treats a page that changes on every fetch as unstable: no model call, no notification, no price fact", async () => {
+    const s = await scenario({ groq: KEY });
+    await runRoutine(s.store, s.rt.id, s.deps);
+    let flip = false;
+    const rotating = { ...s.deps, fetchImpl: (async (url: string, init: any) => { if (String(url).startsWith("https://rival.example")) { flip = !flip; s.setPrice(flip ? "$39" : "$59"); } return (s.deps.fetchImpl as any)(url, init); }) as never };
+    const result = await runRoutine(s.store, s.rt.id, rotating);
+    expect(result).toEqual({ outcome: "no-change", note: "1 pages · 1 unstable" });
+    expect(s.model).not.toHaveBeenCalled();
+    expect(s.notes).toEqual([]);
+    expect(s.store.facts(s.co.id, "price").map(f => f.value)).toEqual(["$49"]);
+  });
+
   it("still records and notifies a change when no model is usable", async () => {
     const { readFileSync } = await import("node:fs");
     const s = await scenario({});

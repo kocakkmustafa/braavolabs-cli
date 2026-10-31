@@ -104,11 +104,18 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
     try { outcomes.push(await checkMonitor(def, { store: monitorStore, fetchImpl: deps.fetchImpl as never })); }
     catch { failed.push(url); }
   }
-  // FK-13: every page's price set over time (baseline and changes), for the panel's history.
-  for (const o of outcomes) if (o.prices.length || o.previousPrices.length) store.recordFact({ companyId: routine.company_id, subject: o.url, predicate: "price", value: o.prices.join(", ") || "—", at: o.at, source: routine.id });
-  const changed = outcomes.filter(o => o.kind === "changed");
+  // A change must survive an immediate second fetch: pages that rotate prices per request
+  // (A/B tests, monthly/annual toggles) are "unstable" and neither summarised nor notified.
+  const unstable = new Set<string>();
+  for (const o of outcomes.filter(x => x.kind === "changed")) {
+    try { if ((await checkMonitor(defs.get(o.url)!, { store: monitorStore, fetchImpl: deps.fetchImpl as never })).kind !== "no-change") unstable.add(o.url); }
+    catch { /* the first fetch stands */ }
+  }
+  // FK-13: every page's price set over time (baseline and confirmed changes), for the panel's history.
+  for (const o of outcomes) if (!unstable.has(o.url) && (o.prices.length || o.previousPrices.length)) store.recordFact({ companyId: routine.company_id, subject: o.url, predicate: "price", value: o.prices.join(", ") || "—", at: o.at, source: routine.id });
+  const changed = outcomes.filter(o => o.kind === "changed" && !unstable.has(o.url));
   const baseline = outcomes.filter(o => o.kind === "first").length;
-  const counts = [`${urls.length} pages`, baseline ? `${baseline} baseline` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");
+  const counts = [`${urls.length} pages`, baseline ? `${baseline} baseline` : undefined, unstable.size ? `${unstable.size} unstable` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");
   if (!changed.length) return { outcome: failed.length === urls.length ? "failed" : "no-change", note: counts };
 
   // A change: let the agent summarise it, page text as untrusted data.
