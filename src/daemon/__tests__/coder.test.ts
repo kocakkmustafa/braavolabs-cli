@@ -110,3 +110,39 @@ describe("coding agent loop", () => {
     expect(declined.sent[1].messages.at(-1).content).toBe("error: the user declined this change");
   });
 });
+
+describe("web_fetch (FK-8)", () => {
+  const resolvePublic = async () => ["93.184.216.34"];
+
+  it("checks the allowlist, refuses addresses, localhost and private resolution", async () => {
+    const { checkWebUrl } = await import("../coder");
+    await expect(checkWebUrl("https://docs.example.com/a", ["example.com"], resolvePublic)).resolves.toBeInstanceOf(URL);
+    await expect(checkWebUrl("https://evil.com/", ["example.com"], resolvePublic)).rejects.toThrow(/not in the allowed domains/);
+    await expect(checkWebUrl("https://notexample.com/", ["example.com"], resolvePublic)).rejects.toThrow(/not in the allowed/);
+    await expect(checkWebUrl("http://127.0.0.1/", ["127.0.0.1"], resolvePublic)).rejects.toThrow(/addresses and localhost/);
+    await expect(checkWebUrl("https://user:pw@example.com/", ["example.com"], resolvePublic)).rejects.toThrow(/plain http/);
+    await expect(checkWebUrl("https://intranet.example.com/", ["example.com"], async () => ["10.0.0.5"])).rejects.toThrow(/private address/);
+    await expect(checkWebUrl("https://v6.example.com/", ["example.com"], async () => ["::ffff:192.168.1.2"])).rejects.toThrow(/private address/);
+  });
+
+  it("is offered only with an allowlist, wraps text as untrusted and re-checks redirects", async () => {
+    const root = project(); const cp = tmp();
+    const fetchImpl = async (url: any) => String(url).includes("/moved")
+      ? new Response("", { status: 302, headers: { location: "https://evil.com/x" } })
+      : new Response("<html><body><h1>API</h1><p>Use fetch()</p><script>x</script></body></html>", { status: 200, headers: { "content-type": "text/html" } });
+    const { call, sent } = scripted([
+      [tool("1", "web_fetch", { url: "https://docs.example.com/api" }), tool("2", "web_fetch", { url: "https://docs.example.com/moved" }), { type: "done", stopReason: "tool_use" }],
+      [{ type: "text", text: "done" }, { type: "done", stopReason: "end_turn" }],
+    ]);
+    await runCoder({ root, task: "t", call, checkpointDir: cp, sessionId: "w", web: { allow: ["example.com"], fetchImpl: fetchImpl as never, resolve: resolvePublic } });
+    expect(sent[0].tools.map((t: any) => t.name)).toContain("web_fetch");
+    const results = sent[1].messages.filter((m: any) => m.role === "tool").map((m: any) => m.content);
+    expect(results[0]).toMatch(/^<untrusted source="https:\/\/docs\.example\.com\/api">/);
+    expect(results[0]).toContain("Use fetch()");
+    expect(results[1]).toMatch(/evil\.com is not in the allowed domains/);
+
+    const off = scripted([[{ type: "text", text: "x" }, { type: "done", stopReason: "end_turn" }]]);
+    await runCoder({ root, task: "t", call: off.call, checkpointDir: cp, sessionId: "w2" });
+    expect(off.sent[0].tools.map((t: any) => t.name)).not.toContain("web_fetch");
+  });
+});

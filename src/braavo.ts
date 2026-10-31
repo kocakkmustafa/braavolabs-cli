@@ -1409,7 +1409,7 @@ async function main(): Promise<void> {
         emit(flags, { restored }, () => (restored.length ? t("Reverted {0} file(s): {1}", restored.length, restored.join(", ")) : t("Nothing to undo.")));
         return;
       }
-      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--max-turns <n>] | undo";
+      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--max-turns <n>] | undo";
       const task = positionals.join(" ").trim();
       if (!task) usage(codeUsage);
       const { parseModelFlag } = await import("./forge/daemon-client");
@@ -1447,6 +1447,7 @@ async function main(): Promise<void> {
       const sessionId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       console.error(`${target!.provider}/${target!.model} · ${root}${has(flags, "plan") ? " · plan" : ""}`);
       const result = await runCoder({
+        web: { allow: (flag(flags, "allow-web") ?? "").split(",").map(d => d.trim().toLowerCase().replace(/^\*\./, "")).filter(d => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) },
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
           if (ev.type === "text") process.stdout.write(ev.text);
