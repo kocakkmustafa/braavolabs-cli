@@ -1402,14 +1402,14 @@ async function main(): Promise<void> {
       // Our own coding agent (plan 3.2; FK-1–FK-3) on the user's own key or local model: reads and
       // edits files under --dir, shows every change as a diff, asks before writing, `undo` restores.
       const { join, resolve } = await import("node:path");
-      const { runCoder, undoSession } = await import("./daemon/coder");
+      const { loadHooks, runCoder, undoSession } = await import("./daemon/coder");
       const checkpointDir = join(CONFIG_DIR, "checkpoints");
       if (positionals[0] === "undo") {
         const restored = undoSession(checkpointDir, flag(flags, "session"));
         emit(flags, { restored }, () => (restored.length ? t("Reverted {0} file(s): {1}", restored.length, restored.join(", ")) : t("Nothing to undo.")));
         return;
       }
-      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--review-model PROVIDER/model] [--max-turns <n>] | undo";
+      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--review-model PROVIDER/model] [--project-hooks] [--max-turns <n>] | undo";
       const task = positionals.join(" ").trim();
       if (!task) usage(codeUsage);
       const { parseModelFlag } = await import("./forge/daemon-client");
@@ -1458,6 +1458,7 @@ async function main(): Promise<void> {
       const result = await runCoder({
         web: { allow: (flag(flags, "allow-web") ?? "").split(",").map(d => d.trim().toLowerCase().replace(/^\*\./, "")).filter(d => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) },
         reviewer: reviewer?.ok ? reviewer : undefined,
+        hooks: loadHooks([join(CONFIG_DIR, "hooks.json"), ...(has(flags, "project-hooks") ? [join(root, ".braavo", "hooks.json")] : [])]),
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
           if (ev.type === "text") process.stdout.write(ev.text);

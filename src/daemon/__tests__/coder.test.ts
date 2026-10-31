@@ -172,3 +172,25 @@ describe("second-model review (FK-9)", () => {
     expect(await reviewChange(reviewerSaying("I think it is fine") as any, "t", { path: "a", diff: "+x" })).toMatchObject({ verdict: "risky" });
   });
 });
+
+describe("hooks (FK-5)", () => {
+  it("lets a preWrite hook veto a write and feeds postWrite output back to the model", async () => {
+    const { loadHooks } = await import("../coder");
+    const root = project(); const cp = tmp();
+    const userFile = join(cp, "hooks.json");
+    writeFileSync(userFile, JSON.stringify({ preWrite: ['case "$BRAAVO_FILE" in *.env) echo "no env files" >&2; exit 1;; esac'], postWrite: ['echo "formatted $BRAAVO_FILE"'] }));
+    const hooks = loadHooks([userFile, join(root, "missing.json")]);
+    const { call, sent } = scripted([
+      [tool("1", "write_file", { path: "secrets.env", content: "KEY=1\n" }), tool("2", "write_file", { path: "src/new.ts", content: "export {};\n" }), { type: "done", stopReason: "tool_use" }],
+      [{ type: "text", text: "ok" }, { type: "done", stopReason: "end_turn" }],
+    ]);
+    const result = await runCoder({ root, task: "t", call, hooks, checkpointDir: cp, sessionId: "h" });
+    const results = sent[1].messages.filter((m: any) => m.role === "tool").map((m: any) => m.content);
+    expect(results[0]).toBe("error: a preWrite hook refused secrets.env: no env files");
+    expect(existsSync(join(root, "secrets.env"))).toBe(false);
+    expect(results[1]).toContain("postWrite hooks:\n$ echo \"formatted $BRAAVO_FILE\"\nformatted src/new.ts");
+    expect(result.changes.map(c => c.path)).toEqual(["src/new.ts"]);
+    // No hooks unless the caller passes them (a cloned repo cannot run its own).
+    expect(loadHooks([])).toEqual({ preWrite: [], postWrite: [] });
+  });
+});

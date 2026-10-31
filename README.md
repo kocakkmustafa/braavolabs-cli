@@ -427,6 +427,7 @@ braavo code undo                                          # restore every file t
 - Paths never leave the directory (no `..`, absolute paths, links out, or `.git`). Before each write the previous content is saved under `~/.braavo/checkpoints/`.
 - `--allow-web docs.example.com,developer.mozilla.org` gives the agent a `web_fetch` tool for those domains only (redirects re-checked, private addresses refused, text marked untrusted).
 - `--review-model PROVIDER/model` has a second model review every diff first; a "risky" verdict is shown with its reason and always needs your confirmation, even with `--yes` (refused without a terminal).
+- Hooks: `~/.braavo/hooks.json` → `{"preWrite": ["<cmd>"], "postWrite": ["<cmd>"]}`. A failing `preWrite` command refuses the write; `postWrite` output (formatter, tests) goes back to the agent. The file path is in `BRAAVO_FILE`. A project's own `.braavo/hooks.json` runs only with `--project-hooks`.
 - No shell tool yet; running commands waits for the daemon sandbox.
 
 ### company
