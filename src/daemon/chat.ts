@@ -84,6 +84,18 @@ export class ChatService {
     return { providers: AI_PROVIDERS.map(id => ({ id, hasKey: keyed.has(id), local: LOCAL_PROVIDERS.has(id) })), local, suggestions };
   }
 
+  /** The user's own keys and pulled local models, as @braavo/core UserModels. */
+  async userModels(): Promise<{ keys: Set<AIProviderType>; local: { OLLAMA: string[]; LMSTUDIO: string[] } }> {
+    const m = await this.models();
+    return { keys: new Set(m.providers.filter(p => p.hasKey).map(p => p.id)), local: m.local };
+  }
+
+  /** True when the daemon can call this provider now: a stored key, or a local provider. */
+  canUse(provider: string): boolean {
+    if (!isAIProvider(provider)) return false;
+    return LOCAL_PROVIDERS.has(provider) || this.deps.keyProviders().some(p => p.toUpperCase() === provider);
+  }
+
   private async localModels(url: string, pick: (body: any) => unknown[]): Promise<string[]> {
     try {
       const res = await (this.deps.fetchImpl ?? fetch)(url, { signal: AbortSignal.timeout(800) });

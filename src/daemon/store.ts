@@ -128,18 +128,38 @@ export class DaemonStore {
   createAgent(input: {
     companyId: string; name: string; role: string; title?: string; systemPrompt?: string; provider: string; model: string;
     effort?: string; effortRounding?: string; reportsToAgentId?: string | null; budgetUsdMonthly?: number; engine?: string; autonomy?: string;
+    heartbeatRrule?: string; status?: string;
   }): AgentRow {
     const at = this.now(); const id = `ag_${randomUUID()}`;
     this.db.prepare(`INSERT INTO agent(id, company_id, name, role, title, system_prompt, autonomy, reports_to_agent_id, provider, model,
-        effort, effort_rounding, budget_usd_monthly, engine, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        effort, effort_rounding, budget_usd_monthly, engine, heartbeat_rrule, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, input.companyId, input.name, input.role, input.title ?? null, input.systemPrompt ?? "", input.autonomy ?? "BALANCED",
         input.reportsToAgentId ?? null, input.provider, input.model, input.effort ?? null, input.effortRounding ?? "down",
-        input.budgetUsdMonthly ?? null, input.engine ?? "native", at, at);
+        input.budgetUsdMonthly ?? null, input.engine ?? "native", input.heartbeatRrule ?? null, input.status ?? "idle", at, at);
     this.activity({ companyId: input.companyId, actor: "user", verb: "hired", objectType: "agent", objectId: id, summary: input.name });
     return this.getAgent(id)!;
   }
   getAgent(id: string): AgentRow | undefined { return this.db.prepare("SELECT * FROM agent WHERE id = ?").get(id) as AgentRow | undefined; }
   listAgents(companyId: string): AgentRow[] { return this.db.prepare("SELECT * FROM agent WHERE company_id = ? ORDER BY created_at").all(companyId) as unknown as AgentRow[]; }
+  updateAgent(id: string, patch: { provider?: string; model?: string; effort?: string | null; status?: string; budgetUsdMonthly?: number | null; reportsToAgentId?: string | null }): void {
+    const cur = this.getAgent(id);
+    if (!cur) return;
+    this.db.prepare("UPDATE agent SET provider = ?, model = ?, effort = ?, status = ?, budget_usd_monthly = ?, reports_to_agent_id = ?, updated_at = ? WHERE id = ?")
+      .run(patch.provider ?? cur.provider, patch.model ?? cur.model, patch.effort === undefined ? cur.effort : patch.effort, patch.status ?? cur.status,
+        patch.budgetUsdMonthly === undefined ? cur.budget_usd_monthly : patch.budgetUsdMonthly,
+        patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId, this.now(), id);
+  }
+  /** Token totals per agent since `sinceIso` (cost_event rows). */
+  agentCosts(companyId: string, sinceIso: string): Array<{ agent_id: string | null; input_tokens: number; output_tokens: number; usd: number; runs: number }> {
+    return this.db.prepare(`SELECT agent_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(usd) AS usd, COUNT(*) AS runs
+        FROM cost_event WHERE company_id = ? AND at >= ? GROUP BY agent_id`).all(companyId, sinceIso) as unknown as Array<{ agent_id: string | null; input_tokens: number; output_tokens: number; usd: number; runs: number }>;
+  }
+  /** Latest execution per routine of a company. */
+  lastExecutions(companyId: string): Array<{ routine_id: string; fired_at: string; outcome: string; note: string | null }> {
+    return this.db.prepare(`SELECT e.routine_id, e.fired_at, e.outcome, e.note FROM routine_execution e JOIN routine r ON r.id = e.routine_id
+        WHERE r.company_id = ? AND e.rowid = (SELECT x.rowid FROM routine_execution x WHERE x.routine_id = e.routine_id ORDER BY x.fired_at DESC, x.rowid DESC LIMIT 1)`)
+      .all(companyId) as unknown as Array<{ routine_id: string; fired_at: string; outcome: string; note: string | null }>;
+  }
   setAgentStatus(id: string, status: string): void {
     this.db.prepare("UPDATE agent SET status = ?, updated_at = ? WHERE id = ?").run(status, this.now(), id);
   }

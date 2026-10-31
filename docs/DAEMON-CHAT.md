@@ -53,6 +53,8 @@ type ImportConversation = {
   `@braavo/core` effort profiles and drops it for unprofiled models.
 - Import is idempotent on `(source, externalId)`: re-sending the same conversation is
   `skipped`, never duplicated. Clear the source copy only after a successful response.
+  `ids` follows the request order and includes skipped conversations. The import body may
+  be up to 16 MiB (other requests: 256 KiB); only `user` and `assistant` messages are kept.
 - `GET /v1/events` (existing SSE stream) also carries
   `conversation.changed { conversationId }` whenever a conversation is created, renamed,
   deleted or gets a message, so other open surfaces can refresh.

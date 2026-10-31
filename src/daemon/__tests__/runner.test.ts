@@ -157,7 +157,7 @@ describe("web preflight (market analyst)", () => {
     const root = mkdtempSync(join(tmpdir(), "braavo-web-"));
     const { store, co, rt } = setup({ provider: "GROQ", model: "openai/gpt-oss-20b" }, { type: "web", urls: ["https://rival.example/pricing"], notify: ["price", "plans", "promo"] });
     let price = "$49";
-    const model = vi.fn(async () => sse({ choices: [{ delta: { content: "- Pro dropped from $49 to $39." }, finish_reason: "stop" }] }, { choices: [], usage: { prompt_tokens: 80, completion_tokens: 9 } }));
+    const model = vi.fn(async (_url: string, _init: any) => sse({ choices: [{ delta: { content: "- Pro dropped from $49 to $39." }, finish_reason: "stop" }] }, { choices: [], usage: { prompt_tokens: 80, completion_tokens: 9 } }));
     const fetchImpl = vi.fn(async (url: string, init: any) => (String(url).startsWith("https://rival.example") ? page(price) : model(url, init)));
     const notes: Array<[string, string]> = [];
     const deps = { keys: { get: (p: string) => keys[p] }, fetchImpl: fetchImpl as never, monitorRoot: join(root, "monitor"), memoryRoot: join(root, "memory"), notify: (a: string, b: string) => notes.push([a, b]) };

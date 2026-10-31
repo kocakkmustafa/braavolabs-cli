@@ -58,6 +58,7 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   if (!routine) return { outcome: "failed", note: "routine not found" };
   const agent = store.getAgent(routine.agent_id);
   if (!agent) return { outcome: "failed", note: "agent not found" };
+  if (agent.status === "paused") return { outcome: "skipped-paused", note: agent.name };
 
   let preflight: { type?: unknown };
   try { preflight = JSON.parse(routine.preflight); } catch { preflight = {}; }

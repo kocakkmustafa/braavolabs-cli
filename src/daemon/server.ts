@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { DaemonStore } from "./store";
 import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
+import { CompanyError, hire, panel, updateAgent } from "./company";
 /**
  * Local daemon API (platform docs/ai-company/TASARIM.tr.md §9). Loopback only,
  * bearer token from ~/.braavo/daemon/token (0600), JSON in/out, one SSE event
@@ -17,6 +18,8 @@ import { ChatError, type ChatEvent, type ChatService } from "./chat";
  */
 
 const MAX_BODY_BYTES = 256 * 1024;
+/** History import carries whole conversations (desktop localStorage migration). */
+const MAX_IMPORT_BODY_BYTES = 16 * 1024 * 1024;
 const PROVIDERS = new Set(["ANTHROPIC", "OPENAI", "GOOGLE", "MISTRAL", "GROQ", "OPENROUTER", "DEEPSEEK", "KIMI", "QWEN", "CEREBRAS", "ZHIPU", "OLLAMA", "LMSTUDIO", "CUSTOM"]);
 const EFFORTS = new Set(["none", "low", "medium", "high", "max"]);
 
@@ -47,11 +50,11 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function readJson(req: IncomingMessage): Promise<any> {
+async function readJson(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<any> {
   let size = 0; const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, "body too large");
+    if (size > max) throw new HttpError(413, "body too large");
     chunks.push(chunk as Buffer);
   }
   if (!chunks.length) return {};
@@ -200,6 +203,22 @@ export class Daemon {
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, { agent });
         }
+        case "GET /companies/:id/panel":
+          return this.json(res, 200, panel(store, id, this.now()));
+        case "POST /companies/:id/hire": {
+          const body = await readJson(req);
+          const models = this.o.chat ? await this.o.chat.userModels() : { keys: new Set<never>() };
+          const result = hire(store, id, body, models, this.now());
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 201, result);
+        }
+        case "PATCH /agents/:id": {
+          const body = await readJson(req);
+          const agent = updateAgent(store, id, body, provider => this.o.chat?.canUse(provider) ?? false);
+          this.emit({ type: "agent.status", agentId: agent.id, status: agent.status });
+          this.emit({ type: "company.changed", companyId: agent.company_id });
+          return this.json(res, 200, { agent });
+        }
         case "GET /companies/:id/routines":
           return this.json(res, 200, { routines: store.listRoutines(id) });
         case "POST /companies/:id/routines": {
@@ -235,7 +254,7 @@ export class Daemon {
           return this.json(res, 201, { conversation: this.chat().create({ title: body.title, provider: body.provider, model: body.model, effort: body.effort }) });
         }
         case "POST /conversations/import": {
-          const body = await readJson(req);
+          const body = await readJson(req, MAX_IMPORT_BODY_BYTES);
           return this.json(res, 200, this.chat().import(body.source, body.conversations));
         }
         case "GET /conversations/:id":
@@ -261,7 +280,7 @@ export class Daemon {
           throw new HttpError(404, "not found");
       }
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof ChatError;
+      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError;
       const status = known ? error.status : 500;
       const code = error instanceof ChatError ? error.code : error instanceof HttpError ? error.code : undefined;
       this.json(res, status, { error: known ? error.message : "internal error", ...(code ? { code } : {}) });
