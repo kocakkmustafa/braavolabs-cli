@@ -63,6 +63,12 @@ const MIGRATIONS: string[] = [
    CREATE UNIQUE INDEX conversation_external ON conversation(source, external_id) WHERE external_id IS NOT NULL;
    CREATE INDEX conversation_updated ON conversation(updated_at);
    CREATE INDEX message_conversation ON message(conversation_id, at);`,
+  // 3: temporal facts (design §7.8, FK-13) — e.g. a competitor page's prices over time.
+  `CREATE TABLE fact (
+     id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+     subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL,
+     valid_from TEXT NOT NULL, valid_to TEXT, source TEXT);
+   CREATE INDEX fact_subject ON fact(company_id, subject, predicate, valid_from);`,
 ];
 
 export interface CompanyRow { id: string; name: string; mission: string; status: string; monthly_budget_usd: number | null; created_at: string; updated_at: string }
@@ -249,6 +255,22 @@ export class DaemonStore {
     return this.db.prepare(`SELECT m.id, m.conversation_id, m.role, m.content, m.at, snippet(message_fts, 0, '', '', '…', 16) AS snippet
         FROM message_fts f JOIN message m ON m.rowid = f.rowid WHERE message_fts MATCH ? ORDER BY rank LIMIT ?`)
       .all(phrase, limit) as unknown as Array<{ id: string; conversation_id: string; role: string; content: string; snippet: string; at: string }>;
+  }
+
+  // ─── Facts ─────────────────────────────────────────────────────────────
+  /** Record a value; when it differs from the current one, the current one is closed (bi-temporal, no deletes). */
+  recordFact(input: { companyId: string; subject: string; predicate: string; value: string; at?: string; source?: string }): boolean {
+    const at = input.at ?? this.now();
+    const current = this.db.prepare("SELECT id, value FROM fact WHERE company_id = ? AND subject = ? AND predicate = ? AND valid_to IS NULL").get(input.companyId, input.subject, input.predicate) as { id: string; value: string } | undefined;
+    if (current?.value === input.value) return false;
+    if (current) this.db.prepare("UPDATE fact SET valid_to = ? WHERE id = ?").run(at, current.id);
+    this.db.prepare("INSERT INTO fact(id, company_id, subject, predicate, value, valid_from, source) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(`fa_${randomUUID()}`, input.companyId, input.subject, input.predicate, input.value, at, input.source ?? null);
+    return true;
+  }
+  facts(companyId: string, predicate: string, subject?: string): Array<{ subject: string; value: string; valid_from: string; valid_to: string | null }> {
+    return this.db.prepare(`SELECT subject, value, valid_from, valid_to FROM fact WHERE company_id = ? AND predicate = ? AND (? IS NULL OR subject = ?)
+        ORDER BY subject, valid_from, rowid`).all(companyId, predicate, subject ?? null, subject ?? null) as unknown as Array<{ subject: string; value: string; valid_from: string; valid_to: string | null }>;
   }
 
   // ─── Cost ──────────────────────────────────────────────────────────────

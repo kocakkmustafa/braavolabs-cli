@@ -184,6 +184,10 @@ describe("web preflight (market analyst)", () => {
     expect(memory).toContain("Pro dropped from $49 to $39.");
     expect(s.notes).toEqual([["Analyst: 1 change", "Pro dropped from $49 to $39."]]);
     expect(s.store.recentActivity(s.co.id)[0]).toMatchObject({ verb: "found-change" });
+    // FK-13: the page's price history: $49 from the baseline, closed when $39 appeared.
+    const history = s.store.facts(s.co.id, "price");
+    expect(history.map(f => [f.value, f.valid_to === null])).toEqual([["$49", false], ["$39", true]]);
+    expect(history[0].valid_to).toBe(history[1].valid_from);
     expect(dump(s.store)).not.toContain(KEY);
   });
 

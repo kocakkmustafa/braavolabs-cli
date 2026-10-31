@@ -8,6 +8,8 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Competitor price history: watch routines record each page's price set as
+  temporal facts (schema 3); `GET /companies/:id/prices`, `company prices`.
 - `code --allow-web <domains>` (allowlisted web_fetch) and
   `code --review-model PROVIDER/model` (second model reviews each diff; a
   risky verdict always needs a human).

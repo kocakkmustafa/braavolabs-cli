@@ -1483,7 +1483,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1595,6 +1595,17 @@ async function main(): Promise<void> {
         if (!routine) die(t("Agent or routine not found: {0}", positionals.slice(1).join(" ")));
         const result = await call<{ outcome: string; note?: string }>("POST", `/routines/${routine.id}/run`);
         emit(flags, result, () => `${routine.name}: ${result.outcome}${result.note ? ` · ${result.note}` : ""}`);
+        return;
+      }
+      if (sub === "prices") {
+        // FK-13: competitor price history recorded by the watch routines.
+        const { prices } = await call<{ prices: Array<{ subject: string; value: string; valid_from: string; valid_to: string | null }> }>("GET", `/companies/${companyId}/prices${flag(flags, "url") ? `?url=${encodeURIComponent(flag(flags, "url")!)}` : ""}`);
+        emit(flags, { prices }, () => {
+          if (!prices.length) return t("No findings yet.");
+          const out: string[] = []; let last = "";
+          for (const f of prices) { if (f.subject !== last) { out.push(f.subject); last = f.subject; } out.push(`  ${when(f.valid_from)} → ${f.valid_to ? when(f.valid_to) : "…"}  ${f.value}`); }
+          return out.join("\n");
+        });
         return;
       }
       if (sub === "findings") {

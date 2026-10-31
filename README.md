@@ -443,6 +443,7 @@ braavo company set "Finance Tracker" --pause | --resume
 braavo company watch "Rivals of app X" --urls @app-x/KAYNAKLAR.md --every 6h
 braavo company run "Watch competitors"                    # run a routine now
 braavo company findings [--role market-analyst]
+braavo company prices [--url <page>]                     # competitor price history (from the watch routines)
 ```
 
 - Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.

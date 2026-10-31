@@ -104,6 +104,8 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
     try { outcomes.push(await checkMonitor(def, { store: monitorStore, fetchImpl: deps.fetchImpl as never })); }
     catch { failed.push(url); }
   }
+  // FK-13: every page's price set over time (baseline and changes), for the panel's history.
+  for (const o of outcomes) if (o.prices.length || o.previousPrices.length) store.recordFact({ companyId: routine.company_id, subject: o.url, predicate: "price", value: o.prices.join(", ") || "—", at: o.at, source: routine.id });
   const changed = outcomes.filter(o => o.kind === "changed");
   const baseline = outcomes.filter(o => o.kind === "first").length;
   const counts = [`${urls.length} pages`, baseline ? `${baseline} baseline` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");

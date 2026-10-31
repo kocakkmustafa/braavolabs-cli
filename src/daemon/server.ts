@@ -205,6 +205,9 @@ export class Daemon {
         }
         case "GET /companies/:id/panel":
           return this.json(res, 200, panel(store, id, this.now()));
+        case "GET /companies/:id/prices":
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          return this.json(res, 200, { prices: store.facts(id, "price", url.searchParams.get("url") ?? undefined) });
         case "POST /companies/:id/hire": {
           const body = await readJson(req);
           const models = this.o.chat ? await this.o.chat.userModels() : { keys: new Set<never>() };
