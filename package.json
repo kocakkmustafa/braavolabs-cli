@@ -1,6 +1,6 @@
 {
   "name": "@braavolabs/cli",
-  "version": "0.2.0",
+  "version": "1.1.0",
   "packageManager": "pnpm@10.33.0",
   "description": "Braavolabs CLI — one terminal for the multi-model council (ask/cascade/savings, BYOK keys, local/direct, spawn, fix, MCP) and pipeline control (runs, steering, handoffs, connections). Near-dep-free (zod for the opt-in spawn --bridge companion relay; the official Anthropic SDK for the local daemon), self-host capable.",
   "license": "SEE LICENSE IN LICENSE",
