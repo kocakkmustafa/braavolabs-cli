@@ -32,6 +32,8 @@ export interface RunnerDeps extends ProviderDeps {
   notify?: (title: string, body: string) => void;
 }
 
+const SETUP_NOTE = "setup needed: add a key (braavo keys add <provider>) or pull a local model (braavo models pull <name>); see braavo setup";
+
 const pageId = (url: string) => `p-${createHash("sha256").update(url).digest("hex").slice(0, 12)}`;
 
 function signalLines(o: CheckOutcome): string[] {
@@ -59,10 +61,13 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   const agent = store.getAgent(routine.agent_id);
   if (!agent) return { outcome: "failed", note: "agent not found" };
   if (agent.status === "paused") return { outcome: "skipped-paused", note: agent.name };
+  // K3: an agent in error has no usable model yet; its stored provider is only a placeholder.
+  const setupNeeded = agent.status === "error";
 
   let preflight: { type?: unknown };
   try { preflight = JSON.parse(routine.preflight); } catch { preflight = {}; }
   if (preflight.type === "web") return runWebRoutine(store, routine, agent, preflight as { urls?: unknown; notify?: unknown }, deps);
+  if (setupNeeded) return { outcome: "failed", note: SETUP_NOTE };
   if (preflight.type !== "none") return { outcome: "skipped-preflight-unsupported", note: `preflight ${String(preflight.type)} not implemented` };
 
   const call = prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
@@ -120,7 +125,9 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
 
   // A change: let the agent summarise it, page text as untrusted data.
   let summary: string | undefined; let note: string | undefined; let conversationId: string | undefined;
-  const call = prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
+  const call = agent.status === "error"
+    ? { ok: false as const, code: "missing-key" as const, message: SETUP_NOTE }
+    : prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
   const prompt = [routine.prompt, "", ...changed.map(o => summaryPrompt(defs.get(o.url)!, o))].join("\n");
   if (call.ok) {
     try {
@@ -137,9 +144,9 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
   } else note = `no summary: ${call.message}`;
 
   const at = new Date().toISOString();
-  const file = appendFinding(deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at, title: routine.name, pages: changed, summary });
+  appendFinding(deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at, title: routine.name, pages: changed, summary });
   store.activity({ companyId: routine.company_id, actor: agent.id, verb: "found-change", objectType: "routine", objectId: routine.id, summary: `${changed.length} of ${urls.length} pages changed` });
   const firstLine = (summary ?? signalLines(changed[0]).join("; ")).split("\n").find(l => l.trim())?.replace(/^[-*•]\s*/, "").slice(0, 180) ?? "";
   try { deps.notify?.(`${agent.name}: ${changed.length} change${changed.length > 1 ? "s" : ""}`, firstLine); } catch { /* notification is best effort */ }
-  return { outcome: "changed", note: [counts, `${changed.length} changed`, conversationId, note, file].filter(Boolean).join(" · ") };
+  return { outcome: "changed", note: [counts, `${changed.length} changed`, conversationId, note].filter(Boolean).join(" · ") };
 }

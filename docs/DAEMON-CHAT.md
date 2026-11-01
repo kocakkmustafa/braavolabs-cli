@@ -34,6 +34,7 @@ Design reference: platform `docs/ai-company/TASARIM.tr.md` §4.3, §9 (branch
 | `POST /v1/conversations/:id/abort` | — | `{ aborted: boolean }` |
 | `POST /v1/conversations/import` | `{ source, conversations: ImportConversation[] }` | `{ imported, skipped, ids }` |
 | `GET /v1/conversations/:id/export?format=md\|json` | — | Markdown (default) or JSON file body with `Content-Disposition` |
+| `GET /v1/templates` | — | `{ templates: [{ id, names {en,tr}, role, domain, reportsTo, tier, effort, routines[{key, names, rrule, preflight}] }] }` |
 | `GET /v1/search?q=&limit=20` | — | `{ results: [{ messageId, conversationId, role, snippet, at }] }` |
 
 ```ts

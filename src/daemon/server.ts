@@ -4,6 +4,7 @@ import { DaemonStore } from "./store";
 import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
 import { CompanyError, hire, panel, updateAgent } from "./company";
+import { AGENT_TEMPLATES } from "../core/templates";
 /**
  * Local daemon API (platform docs/ai-company/TASARIM.tr.md §9). Loopback only,
  * bearer token from ~/.braavo/daemon/token (0600), JSON in/out, one SSE event
@@ -172,7 +173,10 @@ export class Daemon {
           res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
           res.write(": connected\n\n");
           this.subscribers.add(res);
-          req.on("close", () => this.subscribers.delete(res));
+          // A comment every 25 s lets clients notice a half-open connection.
+          const beat = setInterval(() => { if (!res.destroyed) res.write(": keepalive\n\n"); }, 25_000);
+          beat.unref?.();
+          req.on("close", () => { clearInterval(beat); this.subscribers.delete(res); });
           return;
         }
         case "GET /companies":
@@ -208,6 +212,8 @@ export class Daemon {
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, { agent });
         }
+        case "GET /templates":
+          return this.json(res, 200, { templates: AGENT_TEMPLATES.map(t => ({ id: t.id, names: t.names, role: t.role, domain: t.domain, reportsTo: t.reportsTo, tier: t.tier, effort: t.effort, routines: t.routines.map(r => ({ key: r.key, names: r.names, rrule: r.rrule, preflight: r.preflight.type })) })) });
         case "GET /companies/:id/panel":
           return this.json(res, 200, panel(store, id, this.now()));
         case "GET /companies/:id/prices":

@@ -211,7 +211,21 @@ describe("web preflight (market analyst)", () => {
     const result = await runRoutine(s.store, s.rt.id, s.deps);
     expect(result.outcome).toBe("changed");
     expect(result.note).toContain("no summary: no groq key");
+    expect(result.note).not.toContain("/");  // no file paths in notes; the memory file is known by convention
     expect(readFileSync(`${s.deps.memoryRoot}/${s.co.id}/findings/analyst.md`, "utf8")).toContain("price: +$29, -$49");
     expect(s.notes[0][1]).toBe("price: +$29, -$49");
+  });
+});
+
+describe("agents awaiting setup (K3)", () => {
+  it("never names the placeholder provider and still watches pages model-free", async () => {
+    const { store, ag, rt } = setup({ provider: "ANTHROPIC", model: "claude-opus-5-5" });
+    store.setAgentStatus(ag.id, "error");
+    const fetchImpl = vi.fn();
+    const result = await runRoutine(store, rt.id, { keys: { get: () => KEY }, fetchImpl: fetchImpl as never });
+    expect(result.outcome).toBe("failed");
+    expect(result.note).toMatch(/^setup needed: add a key/);
+    expect(result.note).not.toMatch(/anthropic/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

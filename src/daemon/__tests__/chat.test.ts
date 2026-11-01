@@ -175,6 +175,9 @@ describe("chat over the daemon API", () => {
     const list = JSON.parse((await call("GET", "/v1/conversations?limit=10")).text).conversations;
     expect(list).toHaveLength(2);
     expect(JSON.parse((await call("GET", "/v1/search?q=imported")).text).results).toHaveLength(1);
+    const templates = JSON.parse((await call("GET", "/v1/templates")).text).templates;
+    expect(templates.map((t: { id: string }) => t.id)).toEqual(["ceo", "market-analyst", "content-social", "customer-voice", "finance-tracker", "tech-lead", "release-tracker"]);
+    expect(templates[1]).toMatchObject({ names: { tr: "Pazar Analisti" }, tier: "light", routines: [{ key: "watch-competitors", preflight: "web" }] });
     expect((await call("DELETE", `/v1/conversations/${id}`)).status).toBe(204);
     expect((await call("GET", `/v1/conversations/${id}`)).status).toBe(404);
     expect(JSON.parse((await call("GET", "/v1/search?q=Hello")).text).results).toEqual([]);
