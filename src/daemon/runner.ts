@@ -1,4 +1,5 @@
 import type { DaemonStore } from "./store";
+import { budgetBlock, checkBudgets } from "./budget";
 import { collectStream } from "../core/stream";
 import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
 import { effortNote, prepareCall, redact, type ProviderDeps } from "./provider";
@@ -63,12 +64,15 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   const agent = store.getAgent(routine.agent_id);
   if (!agent) return { outcome: "failed", note: "agent not found" };
   if (agent.status === "paused") return { outcome: "skipped-paused", note: agent.name };
+  // Over budget: model calls stop; a web routine still runs its free page check.
+  const blocked = budgetBlock(store, routine.company_id, agent.id, new Date().toISOString());
   // K3: an agent in error has no usable model yet; its stored provider is only a placeholder.
   const setupNeeded = agent.status === "error";
 
   let preflight: { type?: unknown };
   try { preflight = JSON.parse(routine.preflight); } catch { preflight = {}; }
-  if (preflight.type === "web") return runWebRoutine(store, routine, agent, preflight as { urls?: unknown; notify?: unknown }, deps);
+  if (preflight.type === "web") return runWebRoutine(store, routine, agent, preflight as { urls?: unknown; notify?: unknown }, deps, blocked);
+  if (blocked) return { outcome: "skipped-budget", note: blocked };
   if (setupNeeded) return { outcome: "failed", note: SETUP_NOTE };
   if (preflight.type !== "none") return { outcome: "skipped-preflight-unsupported", note: `preflight ${String(preflight.type)} not implemented` };
 
@@ -88,6 +92,7 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   store.addMessage(conversationId, "user", routine.prompt);
   store.addMessage(conversationId, "assistant", result.text);
   store.recordCost({ companyId: routine.company_id, agentId: agent.id, runId: conversationId, provider, model: agent.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
+  checkBudgets(store, routine.company_id, agent.id, new Date().toISOString(), deps.notify);
   store.activity({ companyId: routine.company_id, actor: agent.id, verb: "ran-routine", objectType: "routine", objectId: routine.id, summary: routine.name });
 
   const note = [conversationId, `${result.inputTokens}/${result.outputTokens} tokens`, result.stopReason !== "end_turn" ? `stop ${result.stopReason}` : undefined, effortNote(call.effort)]
@@ -98,7 +103,7 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
 type Routine = NonNullable<ReturnType<DaemonStore["getRoutine"]>>;
 type Agent = NonNullable<ReturnType<DaemonStore["getAgent"]>>;
 
-async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent, preflight: { urls?: unknown; notify?: unknown }, deps: RunnerDeps): Promise<RunResult> {
+async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent, preflight: { urls?: unknown; notify?: unknown }, deps: RunnerDeps, budgetBlocked: string | null = null): Promise<RunResult> {
   const urls = Array.isArray(preflight.urls) ? preflight.urls.filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u)).slice(0, 20) : [];
   if (!urls.length) return { outcome: "failed", note: "web preflight has no URLs" };
   const notify = (Array.isArray(preflight.notify) ? preflight.notify : ["price", "plans", "promo", "release"]) as NotifyKind[];
@@ -139,6 +144,8 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
   let summary: string | undefined; let note: string | undefined; let conversationId: string | undefined;
   const call = agent.status === "error"
     ? { ok: false as const, code: "missing-key" as const, message: SETUP_NOTE }
+    : budgetBlocked
+    ? { ok: false as const, code: "missing-key" as const, message: budgetBlocked }
     : prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
   const prompt = [routine.prompt, "", ...changed.map(o => summaryPrompt(defs.get(o.url)!, o))].join("\n");
   if (call.ok) {
@@ -150,6 +157,7 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
       store.addMessage(conversationId, "user", prompt);
       if (summary) store.addMessage(conversationId, "assistant", summary, { stopReason: result.stopReason });
       store.recordCost({ companyId: routine.company_id, agentId: agent.id, runId: conversationId, provider: agent.provider, model: agent.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
+      checkBudgets(store, routine.company_id, agent.id, new Date().toISOString(), deps.notify);
     } catch (error) {
       note = `summary failed: ${redact(error instanceof Error ? error.message : String(error), call.apiKey, 120)}`;
     }

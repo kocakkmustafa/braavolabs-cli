@@ -1,4 +1,5 @@
 import type { AgentRow, DaemonStore } from "./store";
+import { budgetLine } from "./budget";
 import { hireFromTemplates, TEMPLATE_IDS, type TemplateId, type UserModels } from "../core/templates";
 import { orgTree, validateOrg, type OrgNode } from "../core/company";
 import { AGENT_EFFORTS } from "../core/effort";
@@ -77,6 +78,8 @@ export function hire(store: DaemonStore, companyId: string, req: HireRequest, mo
 export interface PanelAgent {
   id: string; name: string; role: string; title: string | null; provider: string; model: string; effort: string | null; status: string;
   reportsToAgentId: string | null; budgetUsdMonthly: number | null; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
+  /** Share of the agent's monthly budget used (null when it has no budget). */
+  budgetRatio: number | null;
 }
 
 /** One snapshot for every surface: org tree, agents with month usage, routines with last outcome, activity. */
@@ -91,6 +94,7 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
       id: a.id, name: a.name, role: a.role, title: a.title, provider: a.provider, model: a.model, effort: a.effort, status: a.status,
       reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly,
       month: { inputTokens: c?.input_tokens ?? 0, outputTokens: c?.output_tokens ?? 0, usd: c?.usd ?? 0, runs: c?.runs ?? 0 },
+      budgetRatio: a.budget_usd_monthly && a.budget_usd_monthly > 0 ? (c?.usd ?? 0) / a.budget_usd_monthly : a.budget_usd_monthly === 0 ? 1 : null,
     };
   });
   const last = new Map(store.lastExecutions(companyId).map(e => [e.routine_id, e]));
@@ -101,9 +105,17 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
   }));
   const tree: OrgNode[] = orgTree(agents.map(a => ({ id: a.id, reportsToAgentId: a.reportsToAgentId })));
   const totals = agents.reduce((t, a) => ({ inputTokens: t.inputTokens + a.month.inputTokens, outputTokens: t.outputTokens + a.month.outputTokens, usd: t.usd + a.month.usd }), { inputTokens: 0, outputTokens: 0, usd: 0 });
+  const budget = budgetLine(store, companyId, now.toISOString());
+  const recent = store.listTasks(companyId, undefined, 200);
+  const count = (status: string) => recent.filter(t => t.status === status).length;
   return {
     company: { id: company.id, name: company.name, mission: company.mission, status: company.status, monthlyBudgetUsd: company.monthly_budget_usd },
-    agents, tree, routines, activity: store.recentActivity(companyId, 20), month: { since: monthStart, ...totals },
+    agents, tree, routines, activity: store.recentActivity(companyId, 20),
+    month: { since: monthStart, ...totals, unpricedCalls: budget.unpricedCalls, budgetRatio: budget.ratio === Infinity ? 1 : budget.ratio },
+    tasks: {
+      open: count("OPEN"), running: count("RUNNING"), done: count("DONE"), failed: count("FAILED"),
+      recent: recent.slice(0, 10).map(t => ({ id: t.id, title: t.title, status: t.status, assigneeAgentId: t.assignee_agent_id, note: t.note, updatedAt: t.updated_at })),
+    },
   };
 }
 
@@ -146,17 +158,27 @@ export function updateAgent(store: DaemonStore, agentId: string, body: Record<st
 /** Plain-text panel for surfaces that only show text (phone over the relay, logs). */
 export function panelText(p: ReturnType<typeof panel>): string {
   const byId = new Map(p.agents.map(a => [a.id, a]));
-  const out = [`${p.company.name} · ${p.agents.length} agents · ${p.month.inputTokens}/${p.month.outputTokens} tokens this month`];
+  const pct = (r: number | null) => (r === null ? "" : ` (${Math.round(r * 100)}%)`);
+  const budget = p.company.monthlyBudgetUsd !== null ? ` of $${p.company.monthlyBudgetUsd.toFixed(2)}${pct(p.month.budgetRatio)}` : "";
+  const out = [
+    `${p.company.name} · ${p.agents.length} agents · $${p.month.usd.toFixed(2)}${budget} · ${p.month.inputTokens}/${p.month.outputTokens} tokens this month`,
+    ...(p.month.unpricedCalls ? [`${p.month.unpricedCalls} calls on unpriced models (set prices in ~/.braavo/prices.json)`] : []),
+  ];
   const walk = (nodes: OrgNode[], depth: number) => nodes.forEach(n => {
     const a = byId.get(n.id)!;
     const model = a.status === "error" ? "setup needed on the computer (braavo setup)" : `${a.provider}/${a.model}`;
-    out.push(`${"  ".repeat(depth)}• ${a.name} — ${model} · ${a.effort ?? "default"} · ${a.status}`);
+    const spend = a.budgetUsdMonthly !== null ? ` · $${a.month.usd.toFixed(2)}/$${a.budgetUsdMonthly.toFixed(2)}${pct(a.budgetRatio)}` : a.month.usd ? ` · $${a.month.usd.toFixed(2)}` : "";
+    out.push(`${"  ".repeat(depth)}• ${a.name} — ${model} · ${a.effort ?? "default"} · ${a.status}${spend}`);
     walk(n.children, depth + 1);
   });
   walk(p.tree, 0);
   if (p.routines.length) {
     out.push("", "Routines:");
     for (const r of p.routines) out.push(`• ${r.name} — next ${r.nextFireAt?.slice(0, 16).replace("T", " ") ?? "—"} UTC${r.last ? ` · last ${r.last.outcome}` : ""}`);
+  }
+  if (p.tasks.open + p.tasks.running + p.tasks.done + p.tasks.failed > 0) {
+    out.push("", `Tasks: ${p.tasks.open} open · ${p.tasks.running} running · ${p.tasks.done} done · ${p.tasks.failed} failed`);
+    for (const t of p.tasks.recent.slice(0, 5)) out.push(`• ${t.title.slice(0, 80)} — ${t.status}${t.note ? ` · ${t.note.slice(0, 80)}` : ""}`);
   }
   return out.join("\n");
 }

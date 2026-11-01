@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { usdFor, type PriceOverrides } from "./pricing";
 /**
  * Local daemon storage (platform docs/ai-company/TASARIM.tr.md §3–4): one
  * SQLite file (WAL) holding the company, agents, tasks, runs, routines and
@@ -69,7 +70,25 @@ const MIGRATIONS: string[] = [
      subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL,
      valid_from TEXT NOT NULL, valid_to TEXT, source TEXT);
    CREATE INDEX fact_subject ON fact(company_id, subject, predicate, valid_from);`,
+  // 4: tasks (plan 2.3) and USD cost/budgets (plan 2.9, FK-12).
+  `ALTER TABLE cost_event ADD COLUMN priced INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE task ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE task ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual';
+   ALTER TABLE task ADD COLUMN result TEXT;
+   ALTER TABLE task ADD COLUMN note TEXT;
+   ALTER TABLE task ADD COLUMN conversation_id TEXT;
+   ALTER TABLE task ADD COLUMN started_at TEXT;
+   ALTER TABLE task ADD COLUMN ended_at TEXT;
+   CREATE INDEX task_company ON task(company_id, status, priority);
+   CREATE INDEX cost_event_company ON cost_event(company_id, at);`,
 ];
+
+export interface TaskRow {
+  id: string; company_id: string; title: string; body: string; assignee_agent_id: string | null; created_by: string; status: string;
+  locked_by_run_id: string | null; priority: number; origin: string; result: string | null; note: string | null; conversation_id: string | null;
+  started_at: string | null; ended_at: string | null; created_at: string; updated_at: string;
+}
+export const TASK_STATUSES = ["OPEN", "RUNNING", "DONE", "FAILED", "CANCELLED"] as const;
 
 export interface CompanyRow { id: string; name: string; mission: string; status: string; monthly_budget_usd: number | null; created_at: string; updated_at: string }
 export interface AgentRow {
@@ -91,6 +110,8 @@ export interface ConversationSummary extends ConversationRow { message_count: nu
 export interface MessageRow { id: string; conversation_id: string; role: string; content: string; at: string; stop_reason: string | null }
 
 export class DaemonStore {
+  /** User price overrides (~/.braavo/prices.json); built-in prices cover Anthropic and local runtimes. */
+  priceOverrides: PriceOverrides = {};
   readonly db: DatabaseSync;
   constructor(path: string, private readonly now: () => string = () => new Date().toISOString()) {
     this.db = new DatabaseSync(path);
@@ -274,13 +295,65 @@ export class DaemonStore {
   }
 
   // ─── Cost ──────────────────────────────────────────────────────────────
-  recordCost(input: { companyId?: string; agentId?: string; runId?: string; provider: string; model: string; inputTokens: number; outputTokens: number; usd?: number }): void {
-    this.db.prepare("INSERT INTO cost_event(id, company_id, agent_id, run_id, provider, model, input_tokens, output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(`ce_${randomUUID()}`, input.companyId ?? null, input.agentId ?? null, input.runId ?? null, input.provider, input.model, input.inputTokens, input.outputTokens, input.usd ?? 0, this.now());
+  /** Records tokens and, when the model is priced, USD; returns the USD (null when unpriced). */
+  recordCost(input: { companyId?: string; agentId?: string; runId?: string; provider: string; model: string; inputTokens: number; outputTokens: number; usd?: number }): number | null {
+    const usd = input.usd ?? usdFor(input.provider, input.model, input.inputTokens, input.outputTokens, this.priceOverrides);
+    this.db.prepare("INSERT INTO cost_event(id, company_id, agent_id, run_id, provider, model, input_tokens, output_tokens, usd, priced, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(`ce_${randomUUID()}`, input.companyId ?? null, input.agentId ?? null, input.runId ?? null, input.provider, input.model, input.inputTokens, input.outputTokens, usd ?? 0, usd === null ? 0 : 1, this.now());
+    return usd;
+  }
+  /** Priced USD and unpriced call count since `sinceIso`, for a company or one agent. */
+  spend(companyId: string, sinceIso: string, agentId?: string): { usd: number; unpriced: number } {
+    const row = this.db.prepare(`SELECT COALESCE(SUM(usd), 0) AS usd, COALESCE(SUM(CASE WHEN priced = 0 THEN 1 ELSE 0 END), 0) AS unpriced
+        FROM cost_event WHERE company_id = ? AND at >= ? AND (? IS NULL OR agent_id = ?)`).get(companyId, sinceIso, agentId ?? null, agentId ?? null) as { usd: number; unpriced: number };
+    return { usd: row.usd, unpriced: row.unpriced };
   }
   costEvents(companyId: string): Array<{ agent_id: string | null; provider: string; model: string; input_tokens: number; output_tokens: number; usd: number }> {
     return this.db.prepare("SELECT agent_id, provider, model, input_tokens, output_tokens, usd FROM cost_event WHERE company_id = ? ORDER BY at, rowid")
       .all(companyId) as unknown as Array<{ agent_id: string | null; provider: string; model: string; input_tokens: number; output_tokens: number; usd: number }>;
+  }
+
+  // ─── Tasks (plan 2.3) ──────────────────────────────────────────────────
+  createTask(input: { companyId: string; title: string; body?: string; assigneeAgentId?: string | null; createdBy: string; priority?: number; origin?: string }): TaskRow {
+    const id = `tk_${randomUUID()}`; const now = this.now();
+    this.db.prepare(`INSERT INTO task(id, company_id, title, body, assignee_agent_id, created_by, status, priority, origin, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`)
+      .run(id, input.companyId, input.title, input.body ?? "", input.assigneeAgentId ?? null, input.createdBy, input.priority ?? 0, input.origin ?? "manual", now, now);
+    return this.getTask(id)!;
+  }
+  getTask(id: string): TaskRow | undefined { return this.db.prepare("SELECT * FROM task WHERE id = ?").get(id) as TaskRow | undefined; }
+  listTasks(companyId: string, status?: string, limit = 100): TaskRow[] {
+    return this.db.prepare(`SELECT * FROM task WHERE company_id = ? AND (? IS NULL OR status = ?)
+        ORDER BY CASE status WHEN 'RUNNING' THEN 0 WHEN 'OPEN' THEN 1 ELSE 2 END, priority DESC, created_at DESC LIMIT ?`)
+      .all(companyId, status ?? null, status ?? null, limit) as unknown as TaskRow[];
+  }
+  updateTask(id: string, patch: { status?: string; assigneeAgentId?: string | null; result?: string | null; note?: string | null; conversationId?: string; startedAt?: string; endedAt?: string; lockedByRunId?: string | null }): void {
+    const cur = this.getTask(id);
+    if (!cur) return;
+    this.db.prepare(`UPDATE task SET status = ?, assignee_agent_id = ?, result = ?, note = ?, conversation_id = ?, started_at = ?, ended_at = ?, locked_by_run_id = ?, updated_at = ? WHERE id = ?`)
+      .run(patch.status ?? cur.status, patch.assigneeAgentId === undefined ? cur.assignee_agent_id : patch.assigneeAgentId,
+        patch.result === undefined ? cur.result : patch.result, patch.note === undefined ? cur.note : patch.note,
+        patch.conversationId ?? cur.conversation_id, patch.startedAt ?? cur.started_at, patch.endedAt ?? cur.ended_at,
+        patch.lockedByRunId === undefined ? cur.locked_by_run_id : patch.lockedByRunId, this.now(), id);
+  }
+  /** Atomically claims an OPEN task for a run; false when another run got it first. */
+  claimTask(id: string, runId: string): boolean {
+    const r = this.db.prepare("UPDATE task SET status = 'RUNNING', locked_by_run_id = ?, started_at = ?, updated_at = ? WHERE id = ? AND status = 'OPEN' AND locked_by_run_id IS NULL")
+      .run(runId, this.now(), this.now(), id) as { changes: number | bigint };
+    return Number(r.changes) === 1;
+  }
+  /** OPEN tasks with an assignee, highest priority and oldest first. */
+  runnableTasks(limit = 10): TaskRow[] {
+    return this.db.prepare(`SELECT t.* FROM task t JOIN agent a ON a.id = t.assignee_agent_id
+        WHERE t.status = 'OPEN' AND t.locked_by_run_id IS NULL AND a.status IN ('idle', 'running')
+        ORDER BY t.priority DESC, t.created_at LIMIT ?`).all(limit) as unknown as TaskRow[];
+  }
+  setCompanyBudget(id: string, monthlyBudgetUsd: number | null): void {
+    this.db.prepare("UPDATE company SET monthly_budget_usd = ?, updated_at = ? WHERE id = ?").run(monthlyBudgetUsd, this.now(), id);
+  }
+  /** Whether an activity with this verb/object exists since `sinceIso` (once-per-month budget alerts). */
+  hasActivity(companyId: string, verb: string, objectId: string, sinceIso: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM activity WHERE company_id = ? AND verb = ? AND object_id = ? AND at >= ? LIMIT 1").get(companyId, verb, objectId, sinceIso));
   }
 
   // ─── Activity ──────────────────────────────────────────────────────────
