@@ -208,7 +208,7 @@ export function panelSnapshot(p: ReturnType<typeof panel>) {
       runsThisMonth: a.month.runs,
     })),
     routines: p.routines.slice(0, 50).map(r => ({
-      name: r.name.slice(0, 120), agentId: r.agentId,
+      id: r.id, name: r.name.slice(0, 120), agentId: r.agentId,
       nextFireAt: r.nextFireAt && !Number.isNaN(Date.parse(r.nextFireAt)) ? new Date(r.nextFireAt).toISOString() : null,
       lastOutcome: r.last ? r.last.outcome.slice(0, 40) : null,
     })),

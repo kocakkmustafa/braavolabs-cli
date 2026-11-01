@@ -192,6 +192,7 @@ export const PanelSnapshotEventSchema = z.object({
     runsThisMonth: z.number().int().min(0).max(1_000_000),
   })).max(MAX_SNAPSHOT_AGENTS),
   routines: z.array(z.object({
+    id: structuredId,
     name: shortText(120),
     agentId: structuredId,
     nextFireAt: z.string().datetime().nullable(),
@@ -266,7 +267,7 @@ export function redactSessionEventInput(ev: SessionEventInput): SessionEventInpu
           ...a, id: redactStructuredId(a.id), name: redact(a.name), role: redact(a.role),
           managerId: a.managerId === null ? null : redactStructuredId(a.managerId), model: a.model === null ? null : redact(a.model),
         })),
-        routines: ev.routines.map(r => ({ ...r, name: redact(r.name), agentId: redactStructuredId(r.agentId) })),
+        routines: ev.routines.map(r => ({ ...r, id: redactStructuredId(r.id), name: redact(r.name), agentId: redactStructuredId(r.agentId) })),
       };
   }
 }
