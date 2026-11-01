@@ -38,6 +38,7 @@ import {
   redactSessionEventInput,
   type ControlCommand,
   type SessionEventInput,
+  type PanelSnapshotEvent,
   type SessionEventState,
   type SessionRegistration,
 } from "./relay-protocol";
@@ -231,6 +232,11 @@ export class RelayBridge {
 
   /** A mirror is not a durable transcript; local stdout/stderr remain complete. */
   getDroppedOutputCount(): number { return this.droppedOutput; }
+
+  /** Company panel snapshot for the phone (opt-in on the relay; an older relay refuses it, which is harmless). */
+  emitPanelSnapshot(snapshot: Omit<PanelSnapshotEvent, "type">): Promise<void> {
+    return this.post({ type: "panel-snapshot", ...snapshot });
+  }
 
   /** Mirror a redacted audit-ledger line. */
   emitAudit(summary: string): Promise<void> {

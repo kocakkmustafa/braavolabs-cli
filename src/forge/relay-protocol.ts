@@ -168,12 +168,48 @@ export const StatusEventSchema = z.object({
   state: z.enum(SESSION_STATES),
 });
 
+// Company panel snapshot from a local daemon (AI company, platform docs/ai-company/
+// SIRKET-PANELI.tr.md §3): a bounded, typed picture of the org — never transcripts, prompts
+// or keys. Companions opt in (`include=panel-snapshot` on poll/stream) so app versions that
+// predate this type never receive it.
+export const PANEL_SNAPSHOT = "panel-snapshot";
+export const MAX_SNAPSHOT_AGENTS = 50;
+export const MAX_SNAPSHOT_ROUTINES = 50;
+const shortText = (max: number) => z.string().trim().min(1).max(max);
+const structuredId = z.string().trim().min(1).max(MAX_ACTION_ID_LEN);
+export const PanelSnapshotEventSchema = z.object({
+  type: z.literal(PANEL_SNAPSHOT),
+  company: z.object({ name: shortText(120) }),
+  agents: z.array(z.object({
+    id: structuredId,
+    name: shortText(80),
+    role: shortText(80),
+    managerId: structuredId.nullable(),
+    /** `PROVIDER/model`, or null while the agent still needs a key or local model. */
+    model: z.string().trim().min(1).max(200).nullable(),
+    effort: z.enum(["none", "low", "medium", "high", "max"]).nullable(),
+    status: z.enum(["idle", "running", "waiting", "error", "paused"]),
+    runsThisMonth: z.number().int().min(0).max(1_000_000),
+  })).max(MAX_SNAPSHOT_AGENTS),
+  routines: z.array(z.object({
+    id: structuredId,
+    name: shortText(120),
+    agentId: structuredId,
+    nextFireAt: z.string().datetime().nullable(),
+    lastOutcome: z.string().trim().min(1).max(40).nullable(),
+  })).max(MAX_SNAPSHOT_ROUTINES),
+  month: z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0) }),
+});
+
+export type PanelSnapshotEvent = z.infer<typeof PanelSnapshotEventSchema>;
+
 export const SessionEventInputSchema = z.discriminatedUnion("type", [
   ApprovalRequestEventSchema,
   AgentTurnEventSchema,
   OutputEventSchema,
   AuditEventSchema,
   StatusEventSchema,
+  PanelSnapshotEventSchema,
 ]);
 /** What this LOCAL session posts — no envelope yet (server assigns it). */
 export type SessionEventInput = z.infer<typeof SessionEventInputSchema>;
@@ -222,6 +258,17 @@ export function redactSessionEventInput(ev: SessionEventInput): SessionEventInpu
     }
     case "status":
       return ev; // no free text to redact
+    case "panel-snapshot":
+      // Names are free text (full pass); ids round-trip (structured pass); enums need none.
+      return {
+        ...ev,
+        company: { name: redact(ev.company.name) },
+        agents: ev.agents.map(a => ({
+          ...a, id: redactStructuredId(a.id), name: redact(a.name), role: redact(a.role),
+          managerId: a.managerId === null ? null : redactStructuredId(a.managerId), model: a.model === null ? null : redact(a.model),
+        })),
+        routines: ev.routines.map(r => ({ ...r, id: redactStructuredId(r.id), name: redact(r.name), agentId: redactStructuredId(r.agentId) })),
+      };
   }
 }
 

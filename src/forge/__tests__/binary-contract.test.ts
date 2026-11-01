@@ -400,9 +400,9 @@ describe("compiled CLI handoff outcome contract", () => {
 // Actual compiled command entry, temporary homes, injected fetch only.
 describe("compiled fourteen-language CLI", () => {
   const locales = ["tr", "en", "es-419", "pt-BR", "de", "fr", "ja", "ar", "it", "ko", "id", "pl", "hi", "zh-Hans"];
-  const commands = ["login","logout","use","ask","cancel","cascade","savings","keys","media-key","image","voice","local","direct","models","spawn","fix","mcp","whoami","runs","run","steer","handoffs","handoff","continue","connections","doctor","init","watch","approve","pause","stop","cost","policy","audit","connect","agent","session"];
+  const commands = ["login","logout","use","ask","cancel","cascade","savings","keys","media-key","image","voice","local","direct","models","spawn","fix","mcp","whoami","runs","run","steer","handoffs","handoff","continue","connections","doctor","init","watch","approve","pause","stop","cost","policy","audit","connect","agent","session","monitor","daemon","chat","company","code","setup"];
   for (const locale of locales) {
-    it(`${locale}: help and all37 command-help routes require no config, credential or network`, () => {
+    it(`${locale}: help and all43 command-help routes require no config, credential or network`, () => {
       const f = fixture(); const full = f.run(["--lang", locale, "help"]);
       expect(full.status).toBe(EXIT.OK); expect(full.stdout).not.toContain("�");
       for (const command of commands) {
@@ -411,7 +411,7 @@ describe("compiled fourteen-language CLI", () => {
         expect(result.status, result.stderr).toBe(EXIT.OK); expect(result.stdout).toContain(`braavo ${command}`);
       }
       expect(f.calls()).toHaveLength(0); expect(f.config()).toBeUndefined();
-    }, 30000);
+    }, 60000); // 44 sequential CLI processes per locale; 30 s left no headroom on a shared machine
     it(`${locale}: refusal sends no request and leaves the account untouched`, () => {
       const f = fixture(authenticated); const result = f.run(["--lang", locale, "stop", "synthetic-run"]);
       expect(result.status).toBe(EXIT.CONFIRMATION_REQUIRED); expect(result.stderr).toContain("synthetic-run");

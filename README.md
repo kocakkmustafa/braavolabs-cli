@@ -354,6 +354,118 @@ braavo local "..." --host http://192.168.1.50:11434
 - Base URL resolution: `--host` flag > `OLLAMA_HOST` env var > `http://localhost:11434`.
 - If Ollama isn't running (or unreachable at the resolved host), braavo fails honestly: `Ollama not reachable — is it running?` — it does not retry silently or fabricate a response.
 
+### monitor
+
+Prototype: watch web pages (a competitor's pricing page, a changelog, a campaign page) and only involve a model when something actually changed. Local only — no login, no server round-trip.
+
+```bash
+braavo monitor add https://rival.example/pricing --every 6h --label Rival
+braavo monitor add https://rival.example/changelog --notify release
+braavo monitor list
+braavo monitor check            # check every monitor now
+braavo monitor check --due      # only those whose interval has passed (for cron/launchd)
+braavo monitor check --summarize [--model <name>] [--host <url>]   # local Ollama summary of real changes
+braavo monitor log <id>
+braavo monitor rm <id>
+```
+
+- The check is model-free: fetch, extract signals, compare with the last snapshot.
+- `--notify` picks what counts as news (comma list, default `price,plans,promo,release`):
+  - `price` — currency+amount tokens appear or disappear;
+  - `plans` — headings whose section carries a price are added or removed;
+  - `promo` — struck-through prices, whole-number discount percentages (5–90%), promo/sale/offer/countdown containers;
+  - `release` — new version numbers in headings or new dated `<time datetime>` entries (old entries scrolling off are ignored);
+  - `text` — any visible-text change (noisiest).
+  Signals are structural, so they work in any page language. `--price` is shorthand for `--notify price`.
+- Noise is ignored: cookie/consent banners, `<time>` text, countdown digits, clock times and numeric dates.
+- `--every` accepts `30m`, `6h`, `1d` (minimum `15m`, default `6h`). There is no background scheduler yet; run `braavo monitor check --due` from cron or launchd.
+- `--summarize` asks a local Ollama model only for monitors that changed. Page lines are passed as untrusted data and the model is told not to follow instructions inside them.
+- Only plain `http(s)` URLs without embedded credentials; pages over 2 MB are refused. State lives in `~/.braavo/monitor/` (files `0600`, directories `0700`): `monitors.json`, `<id>/last.txt`, `<id>/state.json`, `ledger.jsonl` (last 500 checks).
+
+### daemon
+
+Early slice of the local AI-company runtime. Everything runs on your machine; Braavolabs' cloud never executes agents.
+
+```bash
+braavo daemon start     # detached; prints pid and port
+braavo daemon status [--json]
+braavo daemon stop
+braavo daemon run [--relay]       # foreground (desktop sidecar, launchd/systemd)
+braavo daemon install [--relay] [--dry-run]   # macOS: per-user LaunchAgent, starts at login
+braavo daemon uninstall
+```
+
+- Local API on `127.0.0.1` only, random port, bearer token in `~/.braavo/daemon/token` (`0600`); browser origins and foreign `Host` headers are refused.
+- Data in `~/.braavo/braavo.db` (SQLite, WAL, owner-only): companies, agents with reporting lines, tasks, routines and their execution ledger, conversations (full-text search), costs and activity.
+- Routines tick every 60 s. After a sleep only the latest missed firing runs, once, and is reported; the others are recorded as skipped. Routines cannot create routines. `POST /v1/routines/:id/run` runs one now without moving its schedule.
+- A due routine makes one model call for its agent (provider, model and effort from the agent) and stores the reply as a searchable conversation with a token cost event. Keys come from `braavo keys add <provider>` (macOS keychain) and are only sent to that provider; local providers (Ollama, LM Studio) need none. Supported: Anthropic (official SDK), OpenAI, Groq, Cerebras, Mistral, OpenRouter, DeepSeek, Kimi, Qwen, Zhipu, Ollama, LM Studio. Routine preflight checks and an agent tool loop are not implemented yet; USD cost is not computed yet (tokens only).
+- `install` writes `~/Library/LaunchAgents/com.braavolabs.daemon.plist` (no secrets, no environment) and loads it into your login session; the daemon restarts only after a crash. `--dry-run` prints the plist without installing.
+- Chat: multi-turn, streamed conversations on your own keys or local models (see `chat` below and [docs/DAEMON-CHAT.md](docs/DAEMON-CHAT.md) for the API the desktop and mobile apps use).
+- `--relay` (opt-in, needs `braavo login`) registers one relay session so the mobile app can chat with this computer. Outbound connections only; each message from the phone is a turn in the current conversation (`/new`, `/model PROVIDER/model`), stop aborts the turn.
+
+### setup
+
+```bash
+braavo setup [--json]          # daemon, stored key names, Ollama / LM Studio models, suggested model per tier, next step
+braavo models pull qwen3:8b    # pull a model into your local Ollama (progress shown)
+```
+
+Everything runs on your own keys or local models; `setup` tells you which of the two you have and what to do when you have neither.
+
+### code
+
+Our own coding agent on your own key or local model. It reads, searches and edits files under one directory, shows every change as a diff and asks before writing.
+
+```bash
+braavo code "use a template string in greet()" [--dir .] [--model OLLAMA/qwen3-coder:30b]
+braavo code "how would you split this module?" --plan    # read-only tools, ends with a plan
+braavo code "…" --yes                                     # apply without asking (non-interactive)
+braavo code undo                                          # restore every file the last run changed
+```
+
+- `AGENTS.md` / `CLAUDE.md` in the directory and its parents are given to the model as project instructions.
+- Paths never leave the directory (no `..`, absolute paths, links out, or `.git`). Before each write the previous content is saved under `~/.braavo/checkpoints/`.
+- `--allow-web docs.example.com,developer.mozilla.org` gives the agent a `web_fetch` tool for those domains only (redirects re-checked, private addresses refused, text marked untrusted).
+- `--review-model PROVIDER/model` has a second model review every diff first; a "risky" verdict is shown with its reason and always needs your confirmation, even with `--yes` (refused without a terminal).
+- Hooks: `~/.braavo/hooks.json` → `{"preWrite": ["<cmd>"], "postWrite": ["<cmd>"]}`. A failing `preWrite` command refuses the write; `postWrite` output (formatter, tests) goes back to the agent. The file path is in `BRAAVO_FILE`. A project's own `.braavo/hooks.json` runs only with `--project-hooks`.
+- `--shell`: the agent may run commands (tests, builds) in an OS sandbox — macOS `sandbox-exec`, Linux `bwrap`; without one the tool is off. No network, writes only inside the project (not `.git`) and temp, credential folders (`~/.braavo`, `~/.ssh`, `~/.aws`, …) unreadable, and no API keys in the environment. You confirm every command in the terminal; `--yes` never covers commands, and files a command changes are not part of `braavo code undo`.
+- No shell tool yet; running commands waits for the daemon sandbox.
+
+### company
+
+Your company on this computer ("Şirket / Company"): the seven starter agents (General Manager; Market Analyst; Content and Social Media Lead with the Customer Voice Analyst; Finance Tracker; Technical Lead with the Release and Dependency Tracker), their routines and an org panel. Needs the daemon.
+
+```bash
+braavo company init "YULA Lab" --watch https://rival.example/pricing,https://rival.example/changelog --timezone Europe/Istanbul
+braavo company init "YULA Lab" --watch @KAYNAKLAR.md     # every http(s) URL in the file (max 20)
+braavo company show [--json]                              # org tree with model · effort · status, routines, activity
+braavo company set market-analyst --model OLLAMA/qwen3:8b --effort low
+braavo company set "Finance Tracker" --pause | --resume
+braavo company watch "Rivals of app X" --urls @app-x/KAYNAKLAR.md --every 6h
+braavo company run "Watch competitors"                    # run a routine now
+braavo company findings [--role market-analyst]
+braavo company prices [--url <page>]                     # competitor price history (from the watch routines)
+```
+
+- Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.
+- Watch routines check pages model-free; the model is called only when a price, plan, promotion or release changed. Findings are appended to `~/.braavo/memory/<company>/findings/<role>.md` and shown as a macOS notification (and on the phone with `daemon run --relay`).
+- Calendar routines (e.g. Monday 09:00) run in the time zone you give; after sleep the latest missed run happens once.
+
+### chat
+
+Multi-turn chat through the local daemon. History lives in `~/.braavo/braavo.db` and is shared with the desktop and mobile apps.
+
+```bash
+braavo chat                                  # interactive; /new, /model P/m, /export [json], /exit; Ctrl-C stops a reply
+braavo chat "question" [--model PROVIDER/model] [--effort low|medium|high]
+braavo chat --continue last "follow-up"      # or --continue <conversationId>
+echo "text" | braavo chat --continue last
+braavo chat list | show <id> | search <text> [--json]
+```
+
+- Without `--model`, the model is suggested from the keys you stored (`braavo keys add`) and the models you pulled into Ollama or LM Studio; with neither, the command tells you what to set up.
+- The conversation id is printed to stderr after a one-shot message (`--quiet` hides it).
+
 ### direct
 
 Serverless BYOK: a single-shot completion straight to a provider's own API, using a key from `braavo keys`. The Braavolabs server is never contacted.
@@ -368,7 +480,7 @@ Supported providers (Lane-A v1): `anthropic`, `openai`, `groq`.
 
 | Provider | Endpoint | Auth | Default `--model` |
 |---|---|---|---|
-| `anthropic` | `POST https://api.anthropic.com/v1/messages` | `x-api-key` header | `claude-3-5-sonnet-20241022` |
+| `anthropic` | `POST https://api.anthropic.com/v1/messages` | `x-api-key` header | `claude-sonnet-5-5` |
 | `openai` | `POST https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `gpt-4o-mini` |
 | `groq` | `POST https://api.groq.com/openai/v1/chat/completions` (openai-compatible) | `Authorization: Bearer` | `llama-3.1-8b-instant` |
 

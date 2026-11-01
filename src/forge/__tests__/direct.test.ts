@@ -43,10 +43,14 @@ describe("directChat: anthropic", () => {
     expect(captured.headers["anthropic-version"]).toBe("2023-06-01");
     expect(captured.body).toEqual({
       model: "claude-3-5-sonnet-20241022",
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages: [{ role: "user", content: "hi" }],
     });
     expect(res.content).toBe("hello from claude");
+  });
+
+  it("defaults Anthropic to the current Sonnet, never a retired Claude 3.x id", () => {
+    expect(DIRECT_DEFAULT_MODEL.anthropic).toBe("claude-sonnet-5-5");
   });
 });
 

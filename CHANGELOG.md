@@ -5,6 +5,69 @@ here. The format loosely follows [Keep a Changelog](https://keepachangelog.com/)
 Versioned entries describe release candidates and published packages; older
 development history remains grouped by date.
 
+## Unreleased
+
+### Changed
+- `direct` and `fix --via direct` default Anthropic to
+  `claude-sonnet-5-5` (claude-3-5-sonnet is retired) and allow 4096 output
+  tokens, since current models think before answering.
+
+### Added
+- `code --shell`: the coding agent can run commands (tests, builds) in an OS
+  sandbox (macOS `sandbox-exec`, Linux `bwrap`): no network, writes only in
+  the project, credential folders unreadable, no API keys in the
+  environment, and a terminal confirmation for every command.
+- Watch routines treat a price-only change back to a price set seen in the
+  last 14 days as "recurring" (slow A/B tests): kept in the price history,
+  no finding or notification.
+- Competitor price history: watch routines record each page's price set as
+  temporal facts (schema 3); `GET /companies/:id/prices`, `company prices`.
+- `code --allow-web <domains>` (allowlisted web_fetch) and
+  `code --review-model PROVIDER/model` (second model reviews each diff; a
+  risky verdict always needs a human).
+- Add `setup` (daemon, key names, local models, suggested model per tier,
+  next step) and `models pull <name>` (pull into the local Ollama), and
+  `chat export <id> [--format md|json]`.
+- Add `code`: our own coding agent (read, search, edit, write inside one
+  directory) on your own key or local model, with project instructions from
+  `AGENTS.md`/`CLAUDE.md`, a diff and a confirmation for every write,
+  `--plan` (read-only), and `code undo` from per-write checkpoints.
+- Add `company`: create your local company from the seven starter agents
+  (`init`, `hire`), see the org panel (`show`), tune agents (`set --model
+  --effort --pause/--resume`), add competitor watch routines (`watch --urls
+  @file`), run one now (`run`) and read findings (`findings`). The daemon
+  gains `POST /companies/:id/hire`, `GET /companies/:id/panel` and
+  `PATCH /agents/:id`, calendar routines in the routine's time zone, and web
+  preflight that calls the model only when a watched page really changed.
+- Add `chat`: multi-turn, streamed chat through the local daemon (`list`,
+  `show`, `search`, `--continue`, piped input), models suggested from your own
+  keys and pulled local models. The daemon gains the chat API shared with the
+  desktop and mobile apps (docs/DAEMON-CHAT.md): conversations, SSE turns,
+  abort, idempotent history import and search.
+- Add `daemon run|start|install --relay`: opt-in phone chat over the existing
+  relay protocol, one relay session per computer.
+- Add `daemon run|start|stop|status`: the first slice of the local AI-company
+  runtime — loopback-only token-authenticated API, owner-only SQLite store
+  (companies, agents with reporting lines, routines and execution ledger,
+  conversations with full-text search), and a 60 s scheduler with one
+  catch-up run after sleep.
+- The daemon now runs due routines for real: one streamed model call per run
+  through the shared core client (Anthropic via the official SDK, OpenAI-
+  compatible providers, Ollama/LM Studio), with per-agent effort, BYOK keys
+  read from `braavo keys` and redacted from errors, and the reply stored as a
+  searchable conversation plus a token cost event.
+- Add `daemon install|uninstall` (macOS): a per-user LaunchAgent that starts
+  the daemon at login and restarts it after a crash; `--dry-run` prints it.
+- Add `monitor add|list|rm|check|log` (prototype): model-free web page change
+  detection with an optional local Ollama summary of real changes only. Text or
+  price mode, `--every` interval with `check --due` for cron/launchd, untrusted
+  page content wrapping, 2 MB page cap, `0600` state under `~/.braavo/monitor/`.
+  Human output is localized in all 14 languages.
+- `monitor add --notify price,plans,promo,release,text` chooses what counts as a
+  change per monitor (default: the four structural kinds). Signals come from page
+  structure, not keywords; cookie/consent banners, `<time>` text and countdowns
+  are ignored. Monitors and state saved by the first prototype keep working.
+
 ## 0.2.0 — release candidate
 
 The latest published version is 0.1.1. Version 0.1.2 was prepared as a release
