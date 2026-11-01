@@ -411,7 +411,7 @@ describe("compiled fourteen-language CLI", () => {
         expect(result.status, result.stderr).toBe(EXIT.OK); expect(result.stdout).toContain(`braavo ${command}`);
       }
       expect(f.calls()).toHaveLength(0); expect(f.config()).toBeUndefined();
-    }, 30000);
+    }, 60000); // 44 sequential CLI processes per locale; 30 s left no headroom on a shared machine
     it(`${locale}: refusal sends no request and leaves the account untouched`, () => {
       const f = fixture(authenticated); const result = f.run(["--lang", locale, "stop", "synthetic-run"]);
       expect(result.status).toBe(EXIT.CONFIRMATION_REQUIRED); expect(result.stderr).toContain("synthetic-run");

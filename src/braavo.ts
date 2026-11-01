@@ -99,9 +99,7 @@ import {
   type CheckOutcome,
   type MonitorDef,
 } from "./forge/monitor";
-import { createRelayTransport } from "./forge/relay-transport";
 import { daemonPaths, ensureToken, runningDaemon, writeState, clearState } from "./daemon/lifecycle";
-import { RelayBridge } from "./forge/relay-bridge";
 import { collectRepoContext, prependRepoContext } from "./forge/repo";
 import {
   SUGGESTION_NOTE,
@@ -899,6 +897,9 @@ async function main(): Promise<void> {
         requireAuth(cfg);
         const childRef = makeChildRef();
         const handlers = makeSpawnBridgeHandlers(childRef);
+        // zod + the relay contract load only on this opt-in path (and `daemon run --relay`).
+        const { createRelayTransport } = await import("./forge/relay-transport");
+        const { RelayBridge } = await import("./forge/relay-bridge");
         const transport = createRelayTransport({ cfg });
         const bridge = new RelayBridge(transport, handlers, { onOutputDropped: () => ui.warn(t("Companion output omitted: relay is slower than the local program. Local output is unchanged.")) });
         try {
@@ -1789,6 +1790,8 @@ async function main(): Promise<void> {
               run: routineId => daemon!.runNow(routineId), canUse: p => chat.canUse(p), memoryRoot: `${CONFIG_DIR}/memory`,
             }),
           });
+          const { createRelayTransport } = await import("./forge/relay-transport");
+          const { RelayBridge } = await import("./forge/relay-bridge");
           const bridge = new RelayBridge(createRelayTransport({ cfg }), relayChat.handlers());
           relayChat.attach(bridge);
           relayAudit = text => { void bridge.emitAudit(text.slice(0, 4000)); };
