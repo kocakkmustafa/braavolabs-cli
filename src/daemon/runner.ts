@@ -35,6 +35,8 @@ export interface RunnerDeps extends ProviderDeps {
 const SETUP_NOTE = "setup needed: add a key (braavo keys add <provider>) or pull a local model (braavo models pull <name>); see braavo setup";
 
 const pageId = (url: string) => `p-${createHash("sha256").update(url).digest("hex").slice(0, 12)}`;
+const RECURRING_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const priceKey = (prices: string[]) => [...new Set(prices.map(p => p.replace(/\s+/g, "")))].sort().join("|");
 
 function signalLines(o: CheckOutcome): string[] {
   const lines = o.changes.filter(c => c.kind !== "text").map(c => `${c.kind}: ${[...c.added.map(a => `+${a}`), ...c.removed.map(r => `-${r}`)].join(", ")}`);
@@ -116,11 +118,21 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
     try { if ((await checkMonitor(defs.get(o.url)!, { store: monitorStore, fetchImpl: deps.fetchImpl as never })).kind !== "no-change") unstable.add(o.url); }
     catch { /* the first fetch stands */ }
   }
+  // Pages that serve one price set for hours and another after (slow A/B tests) pass the second
+  // fetch; a price-only change back to a set already seen in the last 14 days is "recurring":
+  // kept in the history, not summarised or notified.
+  const recurring = new Set<string>();
+  const since = new Date(Date.now() - RECURRING_WINDOW_MS).toISOString();
+  for (const o of outcomes) {
+    if (o.kind !== "changed" || unstable.has(o.url) || !o.prices.length || o.changes.some(c => c.kind !== "price")) continue;
+    const key = priceKey(o.prices);
+    if (store.facts(routine.company_id, "price", o.url).some(f => f.valid_to !== null && f.valid_to >= since && priceKey(f.value.split(", ")) === key)) recurring.add(o.url);
+  }
   // FK-13: every page's price set over time (baseline and confirmed changes), for the panel's history.
   for (const o of outcomes) if (!unstable.has(o.url) && (o.prices.length || o.previousPrices.length)) store.recordFact({ companyId: routine.company_id, subject: o.url, predicate: "price", value: o.prices.join(", ") || "—", at: o.at, source: routine.id });
-  const changed = outcomes.filter(o => o.kind === "changed" && !unstable.has(o.url));
+  const changed = outcomes.filter(o => o.kind === "changed" && !unstable.has(o.url) && !recurring.has(o.url));
   const baseline = outcomes.filter(o => o.kind === "first").length;
-  const counts = [`${urls.length} pages`, baseline ? `${baseline} baseline` : undefined, unstable.size ? `${unstable.size} unstable` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");
+  const counts = [`${urls.length} pages`, baseline ? `${baseline} baseline` : undefined, unstable.size ? `${unstable.size} unstable` : undefined, recurring.size ? `${recurring.size} recurring` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");
   if (!changed.length) return { outcome: failed.length === urls.length ? "failed" : "no-change", note: counts };
 
   // A change: let the agent summarise it, page text as untrusted data.

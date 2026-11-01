@@ -203,6 +203,23 @@ describe("web preflight (market analyst)", () => {
     expect(s.store.facts(s.co.id, "price").map(f => f.value)).toEqual(["$49"]);
   });
 
+  it("treats a price set that comes back within 14 days as recurring: history kept, no finding or notification", async () => {
+    const s = await scenario({ groq: KEY });
+    await runRoutine(s.store, s.rt.id, s.deps);
+    s.setPrice("$39");
+    expect((await runRoutine(s.store, s.rt.id, s.deps)).outcome).toBe("changed");
+    s.model.mockClear(); s.notes.length = 0;
+    s.setPrice("$49");
+    const result = await runRoutine(s.store, s.rt.id, s.deps);
+    expect(result).toEqual({ outcome: "no-change", note: "1 pages · 1 recurring" });
+    expect(s.model).not.toHaveBeenCalled();
+    expect(s.notes).toEqual([]);
+    expect(s.store.facts(s.co.id, "price").map(f => f.value)).toEqual(["$49", "$39", "$49"]);
+    // A price never seen before is still news.
+    s.setPrice("$29");
+    expect((await runRoutine(s.store, s.rt.id, s.deps)).outcome).toBe("changed");
+  });
+
   it("still records and notifies a change when no model is usable", async () => {
     const { readFileSync } = await import("node:fs");
     const s = await scenario({});
