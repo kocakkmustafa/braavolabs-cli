@@ -69,7 +69,7 @@ describe("store", () => {
   it("migrates once, keeps foreign keys and searches message history", () => {
     const dir = tmp(); const path = join(dir, "braavo.db");
     const store = new DaemonStore(path); closers.push(() => store.close());
-    expect(store.schemaVersion()).toBe(3);
+    expect(store.schemaVersion()).toBe(4);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const company = store.createCompany({ name: "YULA Lab" });
     const ceo = store.createAgent({ companyId: company.id, name: "CEO", role: "ceo", provider: "ANTHROPIC", model: "claude-opus-5-5", effort: "medium" });
@@ -83,7 +83,7 @@ describe("store", () => {
     expect(store.searchMessages('"); DROP TABLE message; --')).toEqual([]);
     store.close(); closers.pop();
     const reopened = new DaemonStore(path); closers.push(() => reopened.close());
-    expect(reopened.schemaVersion()).toBe(3);
+    expect(reopened.schemaVersion()).toBe(4);
     expect(reopened.recentActivity(company.id).map(a => a.verb).sort()).toEqual(["created", "hired", "hired"]);
   });
 });
@@ -126,7 +126,7 @@ describe("local API", () => {
     expect((await call("GET", "/v1/health", undefined, { Authorization: "Bearer wrong" })).status).toBe(401);
     expect((await call("GET", "/v1/health", undefined, { Origin: "https://evil.example" })).status).toBe(403);
     expect((await call("GET", "/v1/health", undefined, { Host: "evil.example" })).status).toBe(403);
-    expect((await call("GET", "/v1/health")).body).toMatchObject({ ok: true, version: "test", schema: 3 });
+    expect((await call("GET", "/v1/health")).body).toMatchObject({ ok: true, version: "test", schema: 4 });
     expect((await call("GET", "/v2/health")).status).toBe(404);
   });
 
