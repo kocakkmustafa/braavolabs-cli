@@ -8,6 +8,13 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- `code --shell`: the coding agent can run commands (tests, builds) in an OS
+  sandbox (macOS `sandbox-exec`, Linux `bwrap`): no network, writes only in
+  the project, credential folders unreadable, no API keys in the
+  environment, and a terminal confirmation for every command.
+- Watch routines treat a price-only change back to a price set seen in the
+  last 14 days as "recurring" (slow A/B tests): kept in the price history,
+  no finding or notification.
 - Competitor price history: watch routines record each page's price set as
   temporal facts (schema 3); `GET /companies/:id/prices`, `company prices`.
 - `code --allow-web <domains>` (allowlisted web_fetch) and

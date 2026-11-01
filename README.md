@@ -428,6 +428,7 @@ braavo code undo                                          # restore every file t
 - `--allow-web docs.example.com,developer.mozilla.org` gives the agent a `web_fetch` tool for those domains only (redirects re-checked, private addresses refused, text marked untrusted).
 - `--review-model PROVIDER/model` has a second model review every diff first; a "risky" verdict is shown with its reason and always needs your confirmation, even with `--yes` (refused without a terminal).
 - Hooks: `~/.braavo/hooks.json` → `{"preWrite": ["<cmd>"], "postWrite": ["<cmd>"]}`. A failing `preWrite` command refuses the write; `postWrite` output (formatter, tests) goes back to the agent. The file path is in `BRAAVO_FILE`. A project's own `.braavo/hooks.json` runs only with `--project-hooks`.
+- `--shell`: the agent may run commands (tests, builds) in an OS sandbox — macOS `sandbox-exec`, Linux `bwrap`; without one the tool is off. No network, writes only inside the project (not `.git`) and temp, credential folders (`~/.braavo`, `~/.ssh`, `~/.aws`, …) unreadable, and no API keys in the environment. You confirm every command in the terminal; `--yes` never covers commands, and files a command changes are not part of `braavo code undo`.
 - No shell tool yet; running commands waits for the daemon sandbox.
 
 ### company

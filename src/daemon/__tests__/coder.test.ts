@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { insideRoot, projectInstructions, runCoder, undoSession, unifiedDiff, type CoderEvent } from "../coder";
+import { insideRoot, projectInstructions, runCoder, sandboxArgv, undoSession, unifiedDiff, type CoderEvent } from "../coder";
 import type { StreamEvent } from "../../core/providers";
 
 const dirs: string[] = [];
@@ -192,5 +192,61 @@ describe("hooks (FK-5)", () => {
     expect(result.changes.map(c => c.path)).toEqual(["src/new.ts"]);
     // No hooks unless the caller passes them (a cloned repo cannot run its own).
     expect(loadHooks([])).toEqual({ preWrite: [], postWrite: [] });
+  });
+});
+
+describe("sandboxed shell (FK-15)", () => {
+  it("builds a sandbox per OS and refuses to run without one", () => {
+    const root = project(); const home = tmp();
+    mkdirSync(join(home, ".ssh")); writeFileSync(join(home, ".netrc"), "machine x");
+    expect(sandboxArgv(root, "ls", "win32", home)).toBeNull();
+    expect(sandboxArgv(root, "ls", "linux", home, () => false)).toBeNull();
+    const bwrap = sandboxArgv(root, "ls", "linux", home, b => b === "bwrap")!;
+    expect(bwrap.slice(0, 3)).toEqual(["bwrap", "--ro-bind", "/"]);
+    expect(bwrap).toEqual(expect.arrayContaining(["--unshare-all", "--bind", root]));
+    expect(bwrap.join(" ")).toContain(`--tmpfs ${join(home, ".ssh")}`);
+    expect(bwrap.join(" ")).toContain(`--ro-bind /dev/null ${join(home, ".netrc")}`);
+    expect(bwrap.slice(-3)).toEqual(["/bin/sh", "-c", "ls"]);
+  });
+
+  it("is offered only with shell and never in plan mode; a declined command does not run", async () => {
+    const root = project(); const cp = tmp();
+    const platform = "darwin" as const;
+    const names = (sent: any[]) => sent[0].tools.map((t: any) => t.name);
+    const off = scripted([]); await runCoder({ root, task: "t", call: off.call as never, checkpointDir: cp, sessionId: "s" });
+    expect(names(off.sent)).not.toContain("run_command");
+    const plan = scripted([]); await runCoder({ root, task: "t", call: plan.call as never, checkpointDir: cp, sessionId: "s", plan: true, shell: { platform } });
+    expect(names(plan.sent)).not.toContain("run_command");
+    if (process.platform !== "darwin") return;
+    const asked: string[] = [];
+    const { call, sent } = scripted([[tool("1", "run_command", { command: "touch made.txt" }), { type: "done", stopReason: "tool_use" }]]);
+    await runCoder({ root, task: "t", call: call as never, checkpointDir: cp, sessionId: "s", shell: { platform, approve: async c => { asked.push(c); return false; } } });
+    expect(names(sent)).toContain("run_command");
+    expect(asked).toEqual(["touch made.txt"]);
+    expect(sent[1].messages.at(-1).content).toBe("error: the user declined this command");
+    expect(existsSync(join(root, "made.txt"))).toBe(false);
+  });
+
+  it.runIf(process.platform === "darwin")("runs approved commands with no network, no writes to .git, no secrets and no API keys", async () => {
+    const root = project(); const cp = tmp(); const home = realpathSync(tmp());
+    mkdirSync(join(root, ".git")); mkdirSync(join(home, ".braavo")); writeFileSync(join(home, ".braavo", "keys"), "sk-secret");
+    process.env.ANTHROPIC_API_KEY = "sk-ant-parent";
+    const command = [
+      "echo ok > made.txt && echo write-ok",
+      "(echo x > .git/x) 2>/dev/null || echo git-denied",
+      `(cat ${join(home, ".braavo", "keys")}) 2>/dev/null || echo secret-denied`,
+      "echo key=${ANTHROPIC_API_KEY:-none}",
+      "(curl -sS -m 3 https://example.com >/dev/null) 2>/dev/null || echo net-denied",
+    ].join("; ");
+    const { call, sent } = scripted([[tool("1", "run_command", { command }), { type: "done", stopReason: "tool_use" }]]);
+    try {
+      await runCoder({ root, task: "t", call: call as never, checkpointDir: cp, sessionId: "s", shell: { platform: "darwin", home, approve: async () => true } });
+    } finally { delete process.env.ANTHROPIC_API_KEY; }
+    const out: string = sent[1].messages.at(-1).content;
+    expect(out.split("\n")[0]).toBe("exit 0");
+    for (const line of ["write-ok", "git-denied", "secret-denied", "key=none", "net-denied"]) expect(out).toContain(line);
+    expect(out).not.toContain("sk-secret");
+    expect(readFileSync(join(root, "made.txt"), "utf8")).toBe("ok\n");
+    expect(existsSync(join(root, ".git", "x"))).toBe(false);
   });
 });

@@ -1410,7 +1410,7 @@ async function main(): Promise<void> {
         emit(flags, { restored }, () => (restored.length ? t("Reverted {0} file(s): {1}", restored.length, restored.join(", ")) : t("Nothing to undo.")));
         return;
       }
-      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--review-model PROVIDER/model] [--project-hooks] [--max-turns <n>] | undo";
+      const codeUsage = "usage: braavo code <task> [--dir <path>] [--model PROVIDER/model] [--effort low|medium|high] [--plan] [--yes] [--allow-web <domain,...>] [--review-model PROVIDER/model] [--project-hooks] [--shell] [--max-turns <n>] | undo";
       const task = positionals.join(" ").trim();
       if (!task) usage(codeUsage);
       const { parseModelFlag } = await import("./forge/daemon-client");
@@ -1452,6 +1452,15 @@ async function main(): Promise<void> {
         if (/^a/i.test(answer.trim())) { applyAll = !risky || applyAll; return true; }
         return /^y/i.test(answer.trim());
       };
+      // FK-15: sandboxed commands; each one is asked in the terminal, --yes never covers them.
+      let warnedShell = false;
+      const approveCommand = async (command: string): Promise<boolean> => {
+        if (!interactive) { if (!warnedShell) { warnedShell = true; console.error(t("Commands need confirmation in a terminal.")); } return false; }
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>(r => rl.question(`\n$ ${command}\n${t("Run this command in the sandbox? [y]es / [n]o")} `, r));
+        rl.close();
+        return /^y/i.test(answer.trim());
+      };
       const controller = new AbortController();
       process.once("SIGINT", () => controller.abort());
       const sessionId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -1459,6 +1468,7 @@ async function main(): Promise<void> {
       const result = await runCoder({
         web: { allow: (flag(flags, "allow-web") ?? "").split(",").map(d => d.trim().toLowerCase().replace(/^\*\./, "")).filter(d => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) },
         reviewer: reviewer?.ok ? reviewer : undefined,
+        shell: has(flags, "shell") ? { approve: approveCommand } : undefined,
         hooks: loadHooks([join(CONFIG_DIR, "hooks.json"), ...(has(flags, "project-hooks") ? [join(root, ".braavo", "hooks.json")] : [])]),
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
