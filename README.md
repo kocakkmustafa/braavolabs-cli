@@ -480,7 +480,7 @@ Supported providers (Lane-A v1): `anthropic`, `openai`, `groq`.
 
 | Provider | Endpoint | Auth | Default `--model` |
 |---|---|---|---|
-| `anthropic` | `POST https://api.anthropic.com/v1/messages` | `x-api-key` header | `claude-3-5-sonnet-20241022` |
+| `anthropic` | `POST https://api.anthropic.com/v1/messages` | `x-api-key` header | `claude-sonnet-5-5` |
 | `openai` | `POST https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `gpt-4o-mini` |
 | `groq` | `POST https://api.groq.com/openai/v1/chat/completions` (openai-compatible) | `Authorization: Bearer` | `llama-3.1-8b-instant` |
 

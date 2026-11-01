@@ -7,6 +7,11 @@ development history remains grouped by date.
 
 ## Unreleased
 
+### Changed
+- `direct` and `fix --via direct` default Anthropic to
+  `claude-sonnet-5-5` (claude-3-5-sonnet is retired) and allow 4096 output
+  tokens, since current models think before answering.
+
 ### Added
 - `code --shell`: the coding agent can run commands (tests, builds) in an OS
   sandbox (macOS `sandbox-exec`, Linux `bwrap`): no network, writes only in
