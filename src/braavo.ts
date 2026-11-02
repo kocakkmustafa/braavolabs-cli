@@ -1548,7 +1548,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | goal add <title> [--body <text>] [--manager <agent>] [--run] | goal list | goal show|run <id> | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1647,6 +1647,44 @@ async function main(): Promise<void> {
         });
         emit(flags, agent, () => t("CLI employee hired: {0}", `${agent.name} · ${agent.engine} · ${agent.workdir} · ${agent.approval_policy}`));
         return;
+      }
+      if (sub === "goal") {
+        // Plan 4.5: a goal for the manager, who plans, hands steps to the team and re-plans when stuck.
+        const action = positionals[1] ?? "list";
+        const findGoal = async (ref: string | undefined) => {
+          if (!ref) usage(companyUsage);
+          const { goals } = await call<{ goals: any[] }>("GET", `/companies/${companyId}/goals`);
+          const g = goals.find(x => x.id === ref || x.id.startsWith(ref!));
+          if (!g) die(t("Agent or routine not found: {0}", ref!));
+          return g;
+        };
+        if (action === "add") {
+          const title = positionals.slice(2).join(" ").trim();
+          if (!title) usage(companyUsage);
+          const { goal } = await call<{ goal: any }>("POST", `/companies/${companyId}/goals`, { title, body: flag(flags, "body"), manager: flag(flags, "manager") });
+          if (has(flags, "run")) await call("POST", `/goals/${goal.id}/run`);
+          emit(flags, goal, () => `${t("Goal added: {0}", goal.title)}  ${goal.id}${has(flags, "run") ? `\n${t("Goal started: {0}", goal.id)}` : ""}`);
+          return;
+        }
+        if (action === "list") {
+          const { goals } = await call<{ goals: any[] }>("GET", `/companies/${companyId}/goals`);
+          emit(flags, goals, () => goals.length ? goals.map(g => `${g.id.slice(0, 11)}  ${String(g.status).padEnd(8)} ${String(g.title).slice(0, 70)}${g.ledger ? ` · ${g.ledger.progress.length}/${g.ledger.plan.length}` : ""}${g.note ? ` · ${String(g.note).slice(0, 80)}` : ""}`).join("\n") : t("No goals yet."));
+          return;
+        }
+        if (action === "show") {
+          const g = await findGoal(positionals[2]);
+          const { goal } = await call<{ goal: any }>("GET", `/goals/${g.id}`);
+          const { ledgerMarkdown, emptyLedger } = await import("./daemon/ledger");
+          emit(flags, goal, () => ledgerMarkdown(goal, goal.ledger ?? emptyLedger(), goal.result).trimEnd() + (goal.note ? `\n\n${goal.note}` : ""));
+          return;
+        }
+        if (action === "run") {
+          const g = await findGoal(positionals[2]);
+          await call("POST", `/goals/${g.id}/run`);
+          emit(flags, { id: g.id, running: true }, () => t("Goal started: {0}", g.title));
+          return;
+        }
+        usage(companyUsage);
       }
       if (sub === "approvals") {
         const { approvals } = await call<{ approvals: Array<{ id: string; title: string; tool: string; paths: string[]; status: string; created_at: string }> }>("GET", `/companies/${companyId}/approvals?status=pending`);
@@ -2103,7 +2141,14 @@ async function main(): Promise<void> {
           context: (agent: { id: string }) => [memory.snapshot(agent.id), skills.promptFor(store.agentSkills(agent.id))].filter(Boolean).join("\n\n"),
           onEvent: (taskId: string, e: { kind: string }) => daemon?.emit({ type: "task.event", taskId, kind: e.kind }),
         };
-        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
+        // Plan 4.5: goals run through the manager's ledger; steps go through the same task runner.
+        const { runGoal } = await import("./daemon/ledger");
+        const runTaskNow = (taskId: string) => runTask(store, taskId, { keys, notify, memory, skills, browser, worker });
+        const goals = (goalId: string) => runGoal(store, goalId, {
+          keys, memory, notify, runTask: runTaskNow, skills: id => store.agentSkills(id),
+          onChange: id => { const g = store.getGoal(id); if (g) daemon?.emit({ type: "goal.changed", goalId: id, companyId: g.company_id }); },
+        });
+        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, runGoal: goals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         // Plan 4.4: companies hired before consolidation existed get their nightly routine now.

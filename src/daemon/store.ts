@@ -113,6 +113,13 @@ const MIGRATIONS: string[] = [
   // 9: compaction (plan 4.4) — a running summary per conversation and the last message it covers.
   `ALTER TABLE conversation ADD COLUMN summary TEXT;
    ALTER TABLE conversation ADD COLUMN summary_upto TEXT;`,
+  // 10: the manager's ledger (plan 4.5) — goals with their task and progress ledgers; steps link back.
+  `CREATE TABLE goal (
+     id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+     manager_agent_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+     ledger TEXT, replans INTEGER NOT NULL DEFAULT 0, note TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+   CREATE INDEX goal_company ON goal(company_id, created_at);
+   ALTER TABLE task ADD COLUMN goal_id TEXT;`,
 ];
 
 export interface TaskRow {
@@ -121,6 +128,11 @@ export interface TaskRow {
   started_at: string | null; ended_at: string | null; created_at: string; updated_at: string;
 }
 export const TASK_STATUSES = ["OPEN", "RUNNING", "DONE", "FAILED", "CANCELLED"] as const;
+
+export interface GoalRow {
+  id: string; company_id: string; manager_agent_id: string; title: string; body: string; status: string;
+  ledger: string | null; replans: number; note: string | null; result: string | null; created_at: string; updated_at: string;
+}
 
 export interface ApprovalRow {
   id: string; company_id: string; agent_id: string | null; task_id: string | null; title: string; tool: string; paths: string;
@@ -221,6 +233,25 @@ export class DaemonStore {
         patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
         patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
+  // ─── Goals (plan 4.5) ─────────────────────────────────────────────────
+  createGoal(input: { id: string; companyId: string; managerAgentId: string; title: string; body?: string }): GoalRow {
+    const now = this.now();
+    this.db.prepare("INSERT INTO goal(id, company_id, manager_agent_id, title, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?)")
+      .run(input.id, input.companyId, input.managerAgentId, input.title, input.body ?? "", now, now);
+    return this.getGoal(input.id)!;
+  }
+  getGoal(id: string): GoalRow | undefined { return this.db.prepare("SELECT * FROM goal WHERE id = ?").get(id) as GoalRow | undefined; }
+  listGoals(companyId: string): GoalRow[] { return this.db.prepare("SELECT * FROM goal WHERE company_id = ? ORDER BY created_at DESC LIMIT 50").all(companyId) as unknown as GoalRow[]; }
+  updateGoal(id: string, patch: { status?: string; ledger?: string; note?: string | null; result?: string | null; replans?: number }): void {
+    const cur = this.getGoal(id);
+    if (!cur) return;
+    this.db.prepare("UPDATE goal SET status = ?, ledger = ?, note = ?, result = ?, replans = ?, updated_at = ? WHERE id = ?").run(
+      patch.status ?? cur.status, patch.ledger ?? cur.ledger, patch.note === undefined ? cur.note : patch.note,
+      patch.result === undefined ? cur.result : patch.result, patch.replans ?? cur.replans, this.now(), id);
+  }
+  setTaskGoal(taskId: string, goalId: string): void { this.db.prepare("UPDATE task SET goal_id = ? WHERE id = ?").run(goalId, taskId); }
+  goalTasks(goalId: string): TaskRow[] { return this.db.prepare("SELECT * FROM task WHERE goal_id = ? ORDER BY created_at, rowid").all(goalId) as unknown as TaskRow[]; }
+
   setConversationSummary(id: string, summary: string, uptoMessageId: string): void {
     this.db.prepare("UPDATE conversation SET summary = ?, summary_upto = ? WHERE id = ?").run(summary, uptoMessageId, id);
   }
@@ -437,7 +468,8 @@ export class DaemonStore {
   /** OPEN tasks with an assignee, highest priority and oldest first. */
   runnableTasks(limit = 10): TaskRow[] {
     return this.db.prepare(`SELECT t.* FROM task t JOIN agent a ON a.id = t.assignee_agent_id
-        WHERE t.status = 'OPEN' AND t.locked_by_run_id IS NULL AND a.status IN ('idle', 'running')
+        -- Goal steps are run by the manager's ledger loop, never by the tick (plan 4.5).
+        WHERE t.status = 'OPEN' AND t.locked_by_run_id IS NULL AND a.status IN ('idle', 'running') AND t.origin != 'goal'
         ORDER BY t.priority DESC, t.created_at LIMIT ?`).all(limit) as unknown as TaskRow[];
   }
   setCompanyBudget(id: string, monthlyBudgetUsd: number | null): void {
