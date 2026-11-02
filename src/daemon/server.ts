@@ -11,6 +11,7 @@ import type { ApprovalCenter } from "./workers";
 import { ensureConsolidationRoutine } from "./compaction";
 import { newGoalId } from "./ledger";
 import { MAX_WEBHOOK_BYTES, parseEvents, parseRepo } from "./github";
+import { parseChannels, parseSlackEvents } from "./slack";
 import { newTriggerId, TRIGGER_KINDS, watchableFolder, MIN_EVERY_MINUTES, MAX_TRIGGERS_PER_COMPANY, MAX_FOLDER_TRIGGERS, type TriggerEngine } from "./triggers";
 import { blockedReason } from "./browse";
 import { existsSync } from "node:fs";
@@ -304,7 +305,7 @@ export class Daemon {
           const engine = this.triggerEngine();
           if (!store.getCompany(id)) throw new HttpError(404, "company not found");
           const body = await readJson(req);
-          if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web, files or github");
+          if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web, files, github or slack");
           const existing = store.listTriggers(id);
           if (existing.length >= MAX_TRIGGERS_PER_COMPANY) throw new HttpError(409, `a company can have at most ${MAX_TRIGGERS_PER_COMPANY} triggers`);
           if (body.kind === "files" && store.listAllTriggers().filter(t => t.kind === "files").length >= MAX_FOLDER_TRIGGERS) throw new HttpError(409, `at most ${MAX_FOLDER_TRIGGERS} folder watches on this computer`);
@@ -313,7 +314,13 @@ export class Daemon {
           const every = body.everyMinutes === undefined ? 30 : Number(body.everyMinutes);
           if (!Number.isInteger(every) || every < MIN_EVERY_MINUTES || every > 7 * 24 * 60) throw new HttpError(400, `everyMinutes must be ${MIN_EVERY_MINUTES}–10080`);
           let config: Record<string, unknown>;
-          if (body.kind === "github") {
+          if (body.kind === "slack") {
+            const events = parseSlackEvents(body.events);
+            if (!events) throw new HttpError(400, "events must be mention, dm or both");
+            const channels = parseChannels(body.channels);
+            if (!channels) throw new HttpError(400, "channels must be Slack channel ids such as C0123ABCD");
+            config = { events, channels };
+          } else if (body.kind === "github") {
             const repo = typeof body.repo === "string" ? parseRepo(body.repo) : null;
             if (!repo) throw new HttpError(400, "repo must look like owner/name");
             const events = parseEvents(body.events);
@@ -334,7 +341,7 @@ export class Daemon {
           }
           const trigger = store.createTrigger({
             id: newTriggerId(), companyId: id, agentId: agent.id, kind: body.kind, config,
-            name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : `${body.kind}: ${String(config.url ?? config.path ?? config.repo).slice(0, 100)}`,
+            name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : `${body.kind}: ${String(config.url ?? config.path ?? config.repo ?? (config.events as string[]).join(" + ")).slice(0, 100)}`,
             taskTitle: typeof body.title === "string" ? body.title.slice(0, 300) : undefined, taskBody: typeof body.body === "string" ? body.body.slice(0, 4_000) : undefined,
           });
           // The webhook secret is shown once, here; afterwards it lives only in the keychain.

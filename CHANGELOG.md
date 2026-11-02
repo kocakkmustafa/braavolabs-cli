@@ -14,6 +14,10 @@ development history remains grouped by date.
   gives the trigger an HMAC-checked address on the daemon and a one-time secret.
   `braavo github login | status | logout` signs in with the Braavolabs GitHub
   App's device flow; the token stays in the OS keychain.
+- Slack triggers: `braavo company trigger add slack` turns mentions of your
+  Slack app and direct messages to it into tasks over Socket Mode (no public
+  address). The answer is posted to the thread only after you approve it.
+  `braavo slack connect | status | disconnect` keeps the tokens in the keychain.
 
 ### Changed
 - The macOS keychain lookup no longer prints `security`'s "item not found" line.
