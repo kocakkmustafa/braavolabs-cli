@@ -363,10 +363,10 @@ export class Daemon {
         case "GET /models":
           return this.json(res, 200, await this.chat().models());
         case "GET /conversations":
-          return this.json(res, 200, { conversations: this.chat().list(Number(url.searchParams.get("limit") ?? 50) || 50, url.searchParams.get("before") ?? undefined) });
+          return this.json(res, 200, { conversations: this.chat().list(Number(url.searchParams.get("limit") ?? 50) || 50, url.searchParams.get("before") ?? undefined, url.searchParams.get("agentId") ?? undefined) });
         case "POST /conversations": {
           const body = await readJson(req);
-          return this.json(res, 201, { conversation: this.chat().create({ title: body.title, provider: body.provider, model: body.model, effort: body.effort }) });
+          return this.json(res, 201, { conversation: this.chat().create({ title: body.title, provider: body.provider, model: body.model, effort: body.effort, agentId: body.agentId }) });
         }
         case "POST /conversations/import": {
           const body = await readJson(req, MAX_IMPORT_BODY_BYTES);

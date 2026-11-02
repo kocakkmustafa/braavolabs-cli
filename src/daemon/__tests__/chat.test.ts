@@ -124,6 +124,38 @@ describe("chat service", () => {
   });
 });
 
+describe("agent conversations", () => {
+  it("uses the agent's model and system prompt, files spend under the agent, and lists by agent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(answer("On it, boss."));
+    const { store, chat } = setup(fetchImpl);
+    const co = store.createCompany({ name: "Acme" });
+    const ag = store.createAgent({ companyId: co.id, name: "Writer", role: "content-social", provider: "GROQ", model: "openai/gpt-oss-20b", systemPrompt: "You write launch copy." });
+    chat.create({ provider: "GROQ", model: "openai/gpt-oss-20b" });
+    const cv = chat.create({ agentId: ag.id });
+    expect(cv).toMatchObject({ agentId: ag.id, companyId: co.id, provider: "GROQ", model: "openai/gpt-oss-20b" });
+    await turn(chat, cv.id, "Draft a tweet");
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages[0]).toEqual({ role: "system", content: "You write launch copy." });
+    expect(store.db.prepare("SELECT agent_id, company_id FROM cost_event").get()).toEqual({ agent_id: ag.id, company_id: co.id });
+    expect(chat.list(50, undefined, ag.id).map(c => c.id)).toEqual([cv.id]);
+    expect(() => chat.create({ agentId: "ag_missing" })).toThrow(ChatError);
+  });
+
+  it("refuses an agent that needs setup or whose budget is used", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(answer("never"));
+    const { store, chat } = setup(fetchImpl);
+    const co = store.createCompany({ name: "Acme" });
+    const broken = store.createAgent({ companyId: co.id, name: "Broken", role: "ceo", provider: "GROQ", model: "x" });
+    store.setAgentStatus(broken.id, "error");
+    expect(() => chat.create({ agentId: broken.id })).toThrow(/needs setup/);
+    const ag = store.createAgent({ companyId: co.id, name: "Spender", role: "ceo", provider: "GROQ", model: "openai/gpt-oss-20b" });
+    store.db.prepare("UPDATE agent SET budget_usd_monthly = 0 WHERE id = ?").run(ag.id);
+    const cv = chat.create({ agentId: ag.id });
+    await expect(turn(chat, cv.id, "hi")).rejects.toMatchObject({ status: 402, code: "budget" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe("export (FK-7)", () => {
   it("writes Markdown and lossless JSON", async () => {
     const { chat } = setup(vi.fn().mockResolvedValue(answer("Hello there.")));

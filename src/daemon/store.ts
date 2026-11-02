@@ -245,11 +245,11 @@ export class DaemonStore {
   latestConversation(source: string): ConversationRow | undefined {
     return this.db.prepare("SELECT * FROM conversation WHERE source = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1").get(source) as ConversationRow | undefined;
   }
-  listConversations(limit = 50, before?: string): ConversationSummary[] {
+  listConversations(limit = 50, before?: string, agentId?: string): ConversationSummary[] {
     return this.db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM message m WHERE m.conversation_id = c.id) AS message_count,
         (SELECT substr(m.content, 1, 200) FROM message m WHERE m.conversation_id = c.id ORDER BY m.at DESC, m.rowid DESC LIMIT 1) AS last_message
-        FROM conversation c WHERE (? IS NULL OR c.updated_at < ?) ORDER BY c.updated_at DESC, c.rowid DESC LIMIT ?`)
-      .all(before ?? null, before ?? null, limit) as unknown as ConversationSummary[];
+        FROM conversation c WHERE (? IS NULL OR c.updated_at < ?) AND (? IS NULL OR c.agent_id = ?) ORDER BY c.updated_at DESC, c.rowid DESC LIMIT ?`)
+      .all(before ?? null, before ?? null, agentId ?? null, agentId ?? null, limit) as unknown as ConversationSummary[];
   }
   updateConversation(id: string, patch: { title?: string; provider?: string; model?: string; effort?: string | null }): void {
     const cur = this.getConversation(id);
