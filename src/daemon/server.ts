@@ -10,6 +10,8 @@ import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
 import type { ApprovalCenter } from "./workers";
 import { ensureConsolidationRoutine } from "./compaction";
 import { newGoalId } from "./ledger";
+import { newTriggerId, TRIGGER_KINDS, watchableFolder, MIN_EVERY_MINUTES, MAX_TRIGGERS_PER_COMPANY, MAX_FOLDER_TRIGGERS, type TriggerEngine } from "./triggers";
+import { blockedReason } from "./browse";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { CompanyError, hire, panel, updateAgent } from "./company";
@@ -56,6 +58,8 @@ export interface DaemonOptions {
   memory?: CompanyMemory;
   /** Agent browser (plan 5.1): URL policy and read-only page fetches; browser routes answer 404 without it. */
   browser?: { policy(): BrowserPolicy; setPolicy(p: BrowserPolicy): void; read(url: string): Promise<Page> };
+  /** Event triggers (plan 5.4); trigger routes answer 404 without it. */
+  triggers?: TriggerEngine;
   /** Drives one goal through the manager's ledger (plan 4.5); goals are stored but never run without it. */
   runGoal?: (goalId: string) => Promise<{ status: string; note?: string }>;
   /** CLI employees' approval queue (plan 3.1); approval routes answer 404 without it. */
@@ -290,6 +294,69 @@ export class Daemon {
           store.activity({ companyId: id, actor: "user", verb: "hired-worker", objectType: "agent", objectId: agent.id, summary: `${agent.name} (${body.engine}) in ${body.workdir}` });
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, { agent: store.getAgent(agent.id) });
+        }
+        case "POST /companies/:id/triggers": {
+          const engine = this.triggerEngine();
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web or files");
+          const existing = store.listTriggers(id);
+          if (existing.length >= MAX_TRIGGERS_PER_COMPANY) throw new HttpError(409, `a company can have at most ${MAX_TRIGGERS_PER_COMPANY} triggers`);
+          if (body.kind === "files" && store.listAllTriggers().filter(t => t.kind === "files").length >= MAX_FOLDER_TRIGGERS) throw new HttpError(409, `at most ${MAX_FOLDER_TRIGGERS} folder watches on this computer`);
+          const agent = resolveAgent(store, id, String(body.agent ?? ""));
+          if (!agent) throw new HttpError(400, "agent must be an agent of this company (id or name)");
+          const every = body.everyMinutes === undefined ? 30 : Number(body.everyMinutes);
+          if (!Number.isInteger(every) || every < MIN_EVERY_MINUTES || every > 7 * 24 * 60) throw new HttpError(400, `everyMinutes must be ${MIN_EVERY_MINUTES}–10080`);
+          let config: Record<string, unknown>;
+          if (body.kind === "files") {
+            const problem = typeof body.path === "string" ? watchableFolder(body.path) : "path is required";
+            if (problem) throw new HttpError(400, problem);
+            config = { path: body.path, pattern: typeof body.pattern === "string" && body.pattern.trim() ? body.pattern.trim().slice(0, 200) : "*" };
+          } else {
+            const url = str(body.url, "url", 2000);
+            const policy = this.o.browser?.policy();
+            const problem = policy ? blockedReason(url, policy) : null;
+            if (problem) throw new HttpError(400, problem);
+            config = { url, everyMinutes: every };
+          }
+          const trigger = store.createTrigger({
+            id: newTriggerId(), companyId: id, agentId: agent.id, kind: body.kind, config,
+            name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : `${body.kind}: ${String(config.url ?? config.path).slice(0, 100)}`,
+            taskTitle: typeof body.title === "string" ? body.title.slice(0, 300) : undefined, taskBody: typeof body.body === "string" ? body.body.slice(0, 4_000) : undefined,
+          });
+          engine.arm(trigger);
+          store.activity({ companyId: id, actor: "user", verb: "trigger-added", objectType: "trigger", objectId: trigger.id, summary: trigger.name });
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 201, { trigger: { ...trigger, config, state: undefined } });
+        }
+        case "GET /companies/:id/triggers":
+          return this.json(res, 200, { triggers: store.listTriggers(id).map(t => ({ ...t, config: JSON.parse(t.config), state: undefined })) });
+        case "PATCH /triggers/:id": {
+          const engine = this.triggerEngine();
+          const t = store.getTrigger(id);
+          if (!t) throw new HttpError(404, "trigger not found");
+          const body = await readJson(req);
+          if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
+          store.updateTrigger(id, { enabled: body.enabled });
+          if (body.enabled) engine.arm(store.getTrigger(id)!); else engine.disarm(id);
+          this.emit({ type: "company.changed", companyId: t.company_id });
+          return this.json(res, 200, { trigger: { ...store.getTrigger(id)!, config: JSON.parse(t.config), state: undefined } });
+        }
+        case "DELETE /triggers/:id": {
+          const engine = this.triggerEngine();
+          const t = store.getTrigger(id);
+          if (!t) throw new HttpError(404, "trigger not found");
+          engine.disarm(id);
+          store.deleteTrigger(id);
+          this.emit({ type: "company.changed", companyId: t.company_id });
+          res.writeHead(204).end();
+          return;
+        }
+        case "POST /triggers/:id/check": {
+          const t = store.getTrigger(id);
+          if (!t) throw new HttpError(404, "trigger not found");
+          if (t.kind === "files") throw new HttpError(400, "folder triggers fire on changes; there is nothing to poll");
+          return this.json(res, 200, await this.triggerEngine().check(id));
         }
         case "POST /companies/:id/goals": {
           if (!store.getCompany(id)) throw new HttpError(404, "company not found");
@@ -585,6 +652,11 @@ export class Daemon {
   private browser(): NonNullable<DaemonOptions["browser"]> {
     if (!this.o.browser) throw new HttpError(404, "the agent browser is not enabled on this daemon");
     return this.o.browser;
+  }
+
+  private triggerEngine(): TriggerEngine {
+    if (!this.o.triggers) throw new HttpError(404, "triggers are not enabled on this daemon");
+    return this.o.triggers;
   }
 
   private skills(): SkillRegistry {

@@ -1548,7 +1548,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | goal add <title> [--body <text>] [--manager <agent>] [--run] | goal list | goal show|run <id> | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | goal add <title> [--body <text>] [--manager <agent>] [--run] | goal list | goal show|run <id> | trigger add rss|web <url> --agent <a> [--every 30m] | trigger add files <folder> --agent <a> [--pattern *.pdf] [--title <t>] [--body <b>] | trigger list | trigger check|on|off|rm <id> | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1684,6 +1684,37 @@ async function main(): Promise<void> {
           emit(flags, { id: g.id, running: true }, () => t("Goal started: {0}", g.title));
           return;
         }
+        usage(companyUsage);
+      }
+      if (sub === "trigger") {
+        // Plan 5.4: rss <url> | web <url> | files <folder> → a task for --agent when something new happens.
+        const action = positionals[1] ?? "list";
+        if (action === "add") {
+          const kind = positionals[2]; const target = positionals[3];
+          if (!kind || !target || !flag(flags, "agent")) usage(companyUsage);
+          const { resolve } = await import("node:path");
+          const every = flag(flags, "every");
+          const minutes = every ? (/^(\d+)h$/.exec(every) ? Number(/^(\d+)h$/.exec(every)![1]) * 60 : Number(every.replace(/m$/, ""))) : undefined;
+          const { trigger } = await call<{ trigger: any }>("POST", `/companies/${companyId}/triggers`, {
+            kind, agent: flag(flags, "agent"), name: flag(flags, "name"), title: flag(flags, "title"), body: flag(flags, "body"),
+            ...(kind === "files" ? { path: resolve(target!), pattern: flag(flags, "pattern") } : { url: target, ...(minutes ? { everyMinutes: minutes } : {}) }),
+          });
+          emit(flags, trigger, () => t("Trigger added: {0}", `${trigger.name}  ${trigger.id}`));
+          return;
+        }
+        if (action === "list") {
+          const { triggers } = await call<{ triggers: any[] }>("GET", `/companies/${companyId}/triggers`);
+          emit(flags, triggers, () => triggers.length ? triggers.map(x => `${x.id.slice(0, 11)}  ${x.kind.padEnd(5)} ${x.enabled ? "on " : "off"} ${String(x.name).slice(0, 70)}${x.last_fired_at ? ` · ${when(x.last_fired_at)}` : ""}${x.note ? ` · ${String(x.note).slice(0, 80)}` : ""}`).join("\n") : t("No triggers yet."));
+          return;
+        }
+        const ref = positionals[2];
+        if (!ref) usage(companyUsage);
+        const { triggers } = await call<{ triggers: any[] }>("GET", `/companies/${companyId}/triggers`);
+        const tr = triggers.find(x => x.id === ref || x.id.startsWith(ref!));
+        if (!tr) die(t("Agent or routine not found: {0}", ref!));
+        if (action === "check") { const r = await call<{ fired: number; note?: string }>("POST", `/triggers/${tr.id}/check`); emit(flags, r, () => `${tr.name}: ${r.fired}${r.note ? ` · ${r.note}` : ""}`); return; }
+        if (action === "on" || action === "off") { await call("PATCH", `/triggers/${tr.id}`, { enabled: action === "on" }); emit(flags, { id: tr.id, enabled: action === "on" }, () => `${tr.name}: ${action}`); return; }
+        if (action === "rm") { await call("DELETE", `/triggers/${tr.id}`); emit(flags, { id: tr.id, removed: true }, () => `${tr.name}: ✗`); return; }
         usage(companyUsage);
       }
       if (sub === "approvals") {
@@ -2148,12 +2179,16 @@ async function main(): Promise<void> {
           keys, memory, notify, runTask: runTaskNow, skills: id => store.agentSkills(id),
           onChange: id => { const g = store.getGoal(id); if (g) daemon?.emit({ type: "goal.changed", goalId: id, companyId: g.company_id }); },
         });
-        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, runGoal: goals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
+        // Plan 5.4: rss / web-change / folder triggers open tasks (staggered polls, folder watches).
+        const { TriggerEngine } = await import("./daemon/triggers");
+        const triggers = new TriggerEngine(store, { policy: browser.policy, notify, onTask: (taskId, companyId) => daemon?.emit({ type: "task.changed", taskId, companyId }) });
+        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, triggers, runGoal: goals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         // Plan 4.4: companies hired before consolidation existed get their nightly routine now.
         const { ensureConsolidationRoutine } = await import("./daemon/compaction");
         for (const company of store.listCompanies()) ensureConsolidationRoutine(store, company.id);
+        triggers.start();
         daemon.startTicking();
         console.log(t("Daemon running · pid {0} · port {1}", process.pid, port));
         // Opt-in phone chat over the cloud relay (docs/DAEMON-CHAT.md §4); outbound connections only.

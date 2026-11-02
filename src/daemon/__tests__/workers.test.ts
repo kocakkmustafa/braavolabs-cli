@@ -105,6 +105,17 @@ describe("CLI employee tasks over ACP", () => {
     expect(workdir).toBeTruthy();
   });
 
+  it("never auto-edits for a task a trigger opened (outside text), even under 'edits'", async () => {
+    const { store, co, worker } = setup("edits");
+    const task = store.createTask({ companyId: co.id, title: "New feed item", assigneeAgentId: worker.id, createdBy: "trigger:tg_1", origin: "trigger" });
+    const asked: string[] = [];
+    const approvals: ApprovalCenter = new ApprovalCenter(store, { timeoutMs: 200, onRequest: id => asked.push(store.getApproval(id)!.tool) });
+    await runTask(store, task.id, { keys: { get: () => undefined }, worker: deps(store, { approvals }) });
+    const edit = store.taskEvents(task.id).find(e => e.kind === "permission" && (e.data as { tool: string }).tool === "edit")!.data;
+    expect(edit).toMatchObject({ decision: "reject", by: "timeout" });
+    expect(asked[0]).toBe("edit");
+  });
+
   it("asks for edits under the default policy and applies the user's allow", async () => {
     const { store, co, worker } = setup("ask");
     const task = store.createTask({ companyId: co.id, title: "Edit", assigneeAgentId: worker.id, createdBy: "user" });

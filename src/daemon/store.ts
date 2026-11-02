@@ -120,6 +120,14 @@ const MIGRATIONS: string[] = [
      ledger TEXT, replans INTEGER NOT NULL DEFAULT 0, note TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
    CREATE INDEX goal_company ON goal(company_id, created_at);
    ALTER TABLE task ADD COLUMN goal_id TEXT;`,
+  // 11: event triggers (plan 5.4) — rss, web change and folder watches that open tasks.
+  `CREATE TABLE trigger (
+     id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+     agent_id TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE, name TEXT NOT NULL, kind TEXT NOT NULL,
+     config TEXT NOT NULL, task_title TEXT, task_body TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+     state TEXT NOT NULL DEFAULT '{}', note TEXT, last_fired_at TEXT, created_at TEXT NOT NULL);
+   CREATE INDEX trigger_company ON trigger(company_id);
+   CREATE INDEX task_created_by ON task(created_by, created_at);`,
 ];
 
 export interface TaskRow {
@@ -128,6 +136,11 @@ export interface TaskRow {
   started_at: string | null; ended_at: string | null; created_at: string; updated_at: string;
 }
 export const TASK_STATUSES = ["OPEN", "RUNNING", "DONE", "FAILED", "CANCELLED"] as const;
+
+export interface TriggerRow {
+  id: string; company_id: string; agent_id: string; name: string; kind: string; config: string; task_title: string | null;
+  task_body: string | null; enabled: number; state: string; note: string | null; last_fired_at: string | null; created_at: string;
+}
 
 export interface GoalRow {
   id: string; company_id: string; manager_agent_id: string; title: string; body: string; status: string;
@@ -233,6 +246,27 @@ export class DaemonStore {
         patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
         patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
+  // ─── Triggers (plan 5.4) ──────────────────────────────────────────────
+  createTrigger(t: { id: string; companyId: string; agentId: string; name: string; kind: string; config: unknown; taskTitle?: string; taskBody?: string }): TriggerRow {
+    this.db.prepare("INSERT INTO trigger(id, company_id, agent_id, name, kind, config, task_title, task_body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(t.id, t.companyId, t.agentId, t.name, t.kind, JSON.stringify(t.config), t.taskTitle ?? null, t.taskBody ?? null, this.now());
+    return this.getTrigger(t.id)!;
+  }
+  getTrigger(id: string): TriggerRow | undefined { return this.db.prepare("SELECT * FROM trigger WHERE id = ?").get(id) as TriggerRow | undefined; }
+  listTriggers(companyId: string): TriggerRow[] { return this.db.prepare("SELECT * FROM trigger WHERE company_id = ? ORDER BY created_at").all(companyId) as unknown as TriggerRow[]; }
+  listAllTriggers(): TriggerRow[] { return this.db.prepare("SELECT * FROM trigger ORDER BY created_at").all() as unknown as TriggerRow[]; }
+  updateTrigger(id: string, patch: { state?: string; note?: string | null; lastFiredAt?: string; enabled?: boolean }): void {
+    const cur = this.getTrigger(id);
+    if (!cur) return;
+    this.db.prepare("UPDATE trigger SET state = ?, note = ?, last_fired_at = ?, enabled = ? WHERE id = ?").run(
+      patch.state ?? cur.state, patch.note === undefined ? cur.note : patch.note, patch.lastFiredAt ?? cur.last_fired_at,
+      patch.enabled === undefined ? cur.enabled : patch.enabled ? 1 : 0, id);
+  }
+  deleteTrigger(id: string): boolean { return Number(this.db.prepare("DELETE FROM trigger WHERE id = ?").run(id).changes) > 0; }
+  triggerTasksSince(triggerId: string, sinceIso: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM task WHERE created_by = ? AND created_at >= ?").get(`trigger:${triggerId}`, sinceIso) as { n: number }).n;
+  }
+
   // ─── Goals (plan 4.5) ─────────────────────────────────────────────────
   createGoal(input: { id: string; companyId: string; managerAgentId: string; title: string; body?: string }): GoalRow {
     const now = this.now();

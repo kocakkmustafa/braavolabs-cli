@@ -170,7 +170,12 @@ export const pinnedRequest: PinnedTransport = ({ url, address, headers, signal, 
 const defaultLookup = async (host: string) => (await dnsLookup(host, { all: true, verbatim: true })).map(a => a.address);
 
 /** Fetch one page as text under the policy, re-checking every redirect hop and its DNS answer. */
-export async function readPage(raw: string, policy: BrowserPolicy, deps: BrowseDeps = {}): Promise<Page> {
+/**
+ * One checked GET: policy and private-address checks, DNS answers checked and pinned, redirects
+ * followed by hand (each hop checked again), body capped. `accept` lists the content types the
+ * caller can use (any type when empty).
+ */
+export async function fetchChecked(raw: string, policy: BrowserPolicy, deps: BrowseDeps & { accept?: RegExp; acceptHeader?: string } = {}): Promise<{ url: string; type: string; body: string }> {
   const transport = deps.transport ?? pinnedRequest;
   const lookup = deps.lookup ?? defaultLookup;
   const signal = AbortSignal.timeout(deps.timeoutMs ?? 20_000);
@@ -191,7 +196,7 @@ export async function readPage(raw: string, policy: BrowserPolicy, deps: BrowseD
     try {
       res = await transport({
         url, address, signal, maxBytes: MAX_BYTES,
-        headers: { "User-Agent": "braavo-agent-browser/1.0 (+https://braavolabs.com)", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
+        headers: { "User-Agent": "braavo-agent-browser/1.0 (+https://braavolabs.com)", Accept: deps.acceptHeader ?? "text/html,text/plain;q=0.9,*/*;q=0.1" },
       });
     } catch (error) {
       if (error instanceof BrowseError) throw error;
@@ -205,16 +210,21 @@ export async function readPage(raw: string, policy: BrowserPolicy, deps: BrowseD
     }
     if (res.status < 200 || res.status >= 300) throw new BrowseError(502, `the page answered ${res.status}`);
     const type = res.headers["content-type"] ?? "";
-    if (type && !/text\/html|text\/plain|application\/xhtml/i.test(type)) throw new BrowseError(415, `not a text page (${type.split(";")[0]})`);
+    if (type && deps.accept && !deps.accept.test(type)) throw new BrowseError(415, `not a text page (${type.split(";")[0]})`);
     if (Number(res.headers["content-length"] ?? 0) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
-    const body = res.body;
-    if (Buffer.byteLength(body) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
-    const html = /html/i.test(type) || /<html|<body|<p[\s>]/i.test(body.slice(0, 2000));
-    const title = html ? (/<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "";
-    const text = html ? htmlToText(visibleOnly(stripNoise(body))) : body;
-    return { url: current, title: htmlToText(title), text: text.slice(0, MAX_PAGE_TEXT), truncated: text.length > MAX_PAGE_TEXT };
+    if (Buffer.byteLength(res.body) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
+    return { url: current, type, body: res.body };
   }
   throw new BrowseError(508, "too many redirects");
+}
+
+/** Fetch one page as text under the policy (see fetchChecked). */
+export async function readPage(raw: string, policy: BrowserPolicy, deps: BrowseDeps = {}): Promise<Page> {
+  const { url, type, body } = await fetchChecked(raw, policy, { ...deps, accept: /text\/html|text\/plain|application\/xhtml/i });
+  const html = /html/i.test(type) || /<html|<body|<p[\s>]/i.test(body.slice(0, 2000));
+  const title = html ? (/<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "";
+  const text = html ? htmlToText(visibleOnly(stripNoise(body))) : body;
+  return { url, title: htmlToText(title), text: text.slice(0, MAX_PAGE_TEXT), truncated: text.length > MAX_PAGE_TEXT };
 }
 
 /** Text a reader cannot see is a classic injection carrier: drop hidden, aria-hidden and display:none elements, and the title. */
