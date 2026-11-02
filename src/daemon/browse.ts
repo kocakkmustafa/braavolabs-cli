@@ -1,5 +1,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { findElements, htmlToText, stripNoise } from "../forge/monitor";
@@ -17,9 +19,9 @@ import { findElements, htmlToText, stripNoise } from "../forge/monitor";
  *   every redirect hop, which is followed by hand.
  * - Text only: scripts/styles/hidden blocks dropped (monitor's extractor), size-capped.
  *
- * Known gap: fetch resolves the name again after our lookup, so a resolver that answers
- * differently within that window (DNS rebinding) is narrowed, not closed; pinning the
- * address in the connection is a follow-up.
+ * DNS rebinding: the name is resolved once per hop, every answer is checked, and the
+ * connection goes to that checked address (`lookup` pinned on the socket) while the Host
+ * header and TLS SNI/certificate stay the name. Nothing resolves the name a second time.
  */
 
 export interface BrowserPolicy { allow: string[]; deny: string[] }
@@ -93,45 +95,93 @@ export function blockedReason(raw: string, policy: BrowserPolicy): string | null
 
 export interface Page { url: string; title: string; text: string; truncated: boolean }
 
+/** One GET to `url`, connected to `address` (already checked) — never a fresh DNS lookup. */
+export type PinnedTransport = (req: {
+  url: URL; address: string; headers: Record<string, string>; signal: AbortSignal; maxBytes: number;
+}) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+
 export interface BrowseDeps {
-  fetchImpl?: typeof fetch;
+  transport?: PinnedTransport;
   /** DNS lookup (all addresses); injectable for tests. */
   lookup?: (host: string) => Promise<string[]>;
   timeoutMs?: number;
 }
 
+const flat = (h: IncomingHttpHeaders): Record<string, string> =>
+  Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v.join(", ") : String(v ?? "")]));
+
+/**
+ * node:http(s) with the socket's name lookup answered by the pinned address: the request
+ * line, Host header, SNI and certificate check all use the URL's name, the TCP connection
+ * goes only to `address`. The body is read up to `maxBytes`, then the request is dropped.
+ */
+export const pinnedRequest: PinnedTransport = ({ url, address, headers, signal, maxBytes }) => new Promise((resolve, reject) => {
+  const family = isIP(address) === 6 ? 6 : 4;
+  const lookup = (_host: string, opts: { all?: boolean } | ((...a: unknown[]) => void), cb?: (...a: unknown[]) => void) => {
+    const done = (typeof opts === "function" ? opts : cb)!;
+    if (typeof opts === "object" && opts?.all) done(null, [{ address, family }]);
+    else done(null, address, family);
+  };
+  const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const req = send({
+    protocol: url.protocol, host: hostname, port: url.port || undefined, path: `${url.pathname}${url.search}`, method: "GET",
+    headers, signal, lookup: lookup as never, ...(url.protocol === "https:" && !isIP(hostname) ? { servername: hostname } : {}),
+  }, res => {
+    const chunks: Buffer[] = []; let size = 0;
+    res.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > maxBytes) { req.destroy(); reject(new BrowseError(413, "the page is larger than 2 MB")); return; }
+      chunks.push(c);
+    });
+    res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: flat(res.headers), body: Buffer.concat(chunks).toString("utf8") }));
+    res.on("error", reject);
+  });
+  req.on("error", reject);
+  req.end();
+});
+
 const defaultLookup = async (host: string) => (await dnsLookup(host, { all: true, verbatim: true })).map(a => a.address);
 
 /** Fetch one page as text under the policy, re-checking every redirect hop and its DNS answer. */
 export async function readPage(raw: string, policy: BrowserPolicy, deps: BrowseDeps = {}): Promise<Page> {
-  const fetchImpl = deps.fetchImpl ?? fetch;
+  const transport = deps.transport ?? pinnedRequest;
   const lookup = deps.lookup ?? defaultLookup;
   const signal = AbortSignal.timeout(deps.timeoutMs ?? 20_000);
   let current = raw;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const reason = blockedReason(current, policy);
     if (reason) throw new BrowseError(403, `${reason}: ${current.slice(0, 200)}`);
-    const host = new URL(current).hostname.replace(/^\[|\]$/g, "");
+    const url = new URL(current);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    let address = host;
     if (!isIP(host)) {
       let addresses: string[];
       try { addresses = await lookup(host); } catch { throw new BrowseError(502, `could not resolve ${host}`); }
       if (!addresses.length || addresses.some(isPrivateAddress)) throw new BrowseError(403, `${host} resolves to a private address`);
+      address = addresses[0];
     }
-    const res = await fetchImpl(current, {
-      redirect: "manual", signal,
-      headers: { "User-Agent": "braavo-agent-browser/1.0 (+https://braavolabs.com)", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
-    });
+    let res: Awaited<ReturnType<PinnedTransport>>;
+    try {
+      res = await transport({
+        url, address, signal, maxBytes: MAX_BYTES,
+        headers: { "User-Agent": "braavo-agent-browser/1.0 (+https://braavolabs.com)", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
+      });
+    } catch (error) {
+      if (error instanceof BrowseError) throw error;
+      throw new BrowseError(502, `could not load the page: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`);
+    }
     if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
+      const location = res.headers.location;
       if (!location) throw new BrowseError(502, `redirect without a location from ${current.slice(0, 200)}`);
       current = new URL(location, current).toString();
       continue;
     }
-    if (!res.ok) throw new BrowseError(502, `the page answered ${res.status}`);
-    const type = res.headers.get("content-type") ?? "";
+    if (res.status < 200 || res.status >= 300) throw new BrowseError(502, `the page answered ${res.status}`);
+    const type = res.headers["content-type"] ?? "";
     if (type && !/text\/html|text\/plain|application\/xhtml/i.test(type)) throw new BrowseError(415, `not a text page (${type.split(";")[0]})`);
-    if (Number(res.headers.get("content-length") ?? 0) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
-    const body = await res.text();
+    if (Number(res.headers["content-length"] ?? 0) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
+    const body = res.body;
     if (Buffer.byteLength(body) > MAX_BYTES) throw new BrowseError(413, "the page is larger than 2 MB");
     const html = /html/i.test(type) || /<html|<body|<p[\s>]/i.test(body.slice(0, 2000));
     const title = html ? (/<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "";
