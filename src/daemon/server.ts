@@ -5,6 +5,7 @@ import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } fro
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
 import { MemoryError, type CompanyMemory } from "./memory";
 import { isSkillName, SkillError, type SkillRegistry } from "./skills";
+import { BrowseError, type BrowserPolicy, type Page } from "./browse";
 import { CompanyError, hire, panel, updateAgent } from "./company";
 import { AGENT_TEMPLATES } from "../core/templates";
 /**
@@ -47,6 +48,8 @@ export interface DaemonOptions {
   runTask?: (taskId: string) => Promise<{ outcome: string; note?: string }>;
   /** Company memory (plan 4.1–4.3); memory routes answer 404 without it. */
   memory?: CompanyMemory;
+  /** Agent browser (plan 5.1): URL policy and read-only page fetches; browser routes answer 404 without it. */
+  browser?: { policy(): BrowserPolicy; setPolicy(p: BrowserPolicy): void; read(url: string): Promise<Page> };
   /** Skills (plan 5.3); skill routes answer 404 without it. */
   skills?: SkillRegistry;
 }
@@ -340,6 +343,26 @@ export class Daemon {
             this.taskBusy = false;
           }
         }
+        case "GET /browser/:id": {
+          if (parts[2] !== "policy") throw new HttpError(404, "not found");
+          return this.json(res, 200, { policy: this.browser().policy() });
+        }
+        case "PUT /browser/:id": {
+          if (parts[2] !== "policy") throw new HttpError(404, "not found");
+          const body = await readJson(req);
+          const list = (v: unknown, field: string) => {
+            if (!Array.isArray(v) || v.length > 500 || !v.every(p => typeof p === "string" && /^(\*|(\*\.)?[a-z0-9.-]{1,253})$/i.test(p))) throw new HttpError(400, `${field} must be a list of host patterns (example.com, *.gov, *)`);
+            return (v as string[]).map(p => p.toLowerCase());
+          };
+          const policy = { allow: list(body.allow, "allow"), deny: list(body.deny, "deny") };
+          this.browser().setPolicy(policy);
+          return this.json(res, 200, { policy });
+        }
+        case "POST /browser/:id": {
+          if (parts[2] !== "read") throw new HttpError(404, "not found");
+          const body = await readJson(req);
+          return this.json(res, 200, { page: await this.browser().read(str(body.url, "url", 2000)) });
+        }
         case "GET /skills":
           return this.json(res, 200, { skills: this.skills().list(), projects: this.skills().config().projects });
         case "GET /skills/:id": {
@@ -454,7 +477,7 @@ export class Daemon {
           throw new HttpError(404, "not found");
       }
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError || error instanceof MemoryError || error instanceof SkillError;
+      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError || error instanceof MemoryError || error instanceof SkillError || error instanceof BrowseError;
       const status = known ? error.status : 500;
       const code = error instanceof ChatError ? error.code : error instanceof HttpError ? error.code : undefined;
       this.json(res, status, { error: known ? error.message : "internal error", ...(code ? { code } : {}) });
@@ -464,6 +487,11 @@ export class Daemon {
   private chat(): ChatService {
     if (!this.o.chat) throw new HttpError(404, "chat is not enabled on this daemon");
     return this.o.chat;
+  }
+
+  private browser(): NonNullable<DaemonOptions["browser"]> {
+    if (!this.o.browser) throw new HttpError(404, "the agent browser is not enabled on this daemon");
+    return this.o.browser;
   }
 
   private skills(): SkillRegistry {

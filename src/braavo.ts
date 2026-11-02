@@ -1991,6 +1991,13 @@ async function main(): Promise<void> {
         const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store);
         const { SkillRegistry } = await import("./daemon/skills");
         const skills = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
+        const browse = await import("./daemon/browse");
+        const policyFile = `${CONFIG_DIR}/browser.json`;
+        const browser = {
+          policy: () => browse.loadPolicy(policyFile),
+          setPolicy: (p: { allow: string[]; deny: string[] }) => browse.savePolicy(policyFile, p),
+          read: (url: string) => browse.readPage(url, browse.loadPolicy(policyFile)),
+        };
         let daemon: InstanceType<typeof Daemon> | undefined;
         const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider), memory, skills },
           conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
@@ -2006,7 +2013,7 @@ async function main(): Promise<void> {
         const { runTask } = await import("./daemon/tasks");
         const { loadPriceOverrides } = await import("./daemon/pricing");
         store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
-        daemon = new Daemon({ store, token, version, chat, memory, skills, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills }) });
+        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

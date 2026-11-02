@@ -54,13 +54,13 @@ async function harness() {
 }
 
 describe("braavo mcp serve (5.2)", () => {
-  it("negotiates the protocol and lists eleven tools with schemas and hints", async () => {
+  it("negotiates the protocol and lists twelve tools with schemas and hints", async () => {
     const { rpc, input, served } = await harness();
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
     expect(init.result).toMatchObject({ protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "braavo", version: "1.1.0" } });
     expect((await rpc("initialize", { protocolVersion: "1999-01-01" })).result.protocolVersion).toBe(MCP_SERVER_PROTOCOLS[0]);
     const { tools } = (await rpc("tools/list")).result;
-    expect(tools.map((t: { name: string }) => t.name)).toEqual(["list_companies", "company_panel", "list_tasks", "create_task", "run_task", "get_task", "ask_agent", "list_skills", "search_memory", "read_memory", "write_memory"]);
+    expect(tools.map((t: { name: string }) => t.name)).toEqual(["list_companies", "company_panel", "list_tasks", "create_task", "run_task", "get_task", "ask_agent", "read_page", "list_skills", "search_memory", "read_memory", "write_memory"]);
     for (const t of tools) { expect(t.inputSchema.type).toBe("object"); expect(t).not.toHaveProperty("run"); }
     expect(tools.find((t: { name: string }) => t.name === "write_memory").annotations).toMatchObject({ destructiveHint: true });
     expect((await rpc("ping")).result).toEqual({});

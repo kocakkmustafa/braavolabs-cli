@@ -6,6 +6,7 @@ import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
 import { prepareCall, redact } from "./provider";
 import type { RunnerDeps } from "./runner";
 import { withMemory } from "./memory";
+import { UNTRUSTED_NOTE, untrusted, urlsIn } from "./browse";
 
 /**
  * Tasks (plan 2.3): one-off work for one agent, outside routines and pipelines.
@@ -41,8 +42,17 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
   const runId = `tr_${randomUUID()}`;
   if (!store.claimTask(task.id, runId)) return { outcome: "skipped", note: "already claimed" };
   store.setAgentStatus(agent.id, "running");
-  const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
+  let prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
   try {
+    // Plan 5.1: pages the task links to are read under the browser policy and fenced as untrusted.
+    if (deps.browser) {
+      const pages: string[] = [];
+      for (const url of urlsIn(prompt)) {
+        try { pages.push(untrusted(await deps.browser.read(url))); }
+        catch (error) { pages.push(`(not read: ${url} — ${(error instanceof Error ? error.message : String(error)).slice(0, 200)})`); }
+      }
+      if (pages.length) prompt = `${prompt}\n\n${UNTRUSTED_NOTE}\n\n${pages.join("\n\n")}`;
+    }
     let snapshot = ""; let related: ReturnType<NonNullable<RunnerDeps["memory"]>["search"]> = []; let skills = "";
     try { skills = deps.skills?.promptFor(store.agentSkills(agent.id)) ?? ""; } catch { /* a broken skill folder must not fail the task */ }
     try {

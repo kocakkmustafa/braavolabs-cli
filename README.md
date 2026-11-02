@@ -456,6 +456,7 @@ braavo company memory search "launch checklist"
 - Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.
 - Watch routines check pages model-free; the model is called only when a price, plan, promotion or release changed. Findings are appended to `~/.braavo/memory/<company>/findings/<role>.md` and shown as a macOS notification (and on the phone with `daemon run --relay`).
 - Calendar routines (e.g. Monday 09:00) run in the time zone you give; after sleep the latest missed run happens once.
+- **Agent browser:** a task that links to pages gets their text, read under the URL policy in `~/.braavo/browser.json` (`allow`, `deny` host patterns such as `example.com` or `*.gov`; banking, payment and government sites are denied by default; local and private addresses are never read) and fenced as untrusted content the agent must not take instructions from.
 - **Company memory** lives in `~/.braavo/memory/<company>/` as plain Markdown (open it in Obsidian or any editor): `company.md`, `departments/<name>.md`, `agents/<agent>/core.md` (≤2000 characters) and `agents/<agent>/notes.md`. An agent reads its company, department and core notes as a snapshot taken when a conversation starts; a task also gets the notes that match it, and a finished task is added to the agent's `notes.md`. Every change is committed to a git repository in that folder (when git is installed) and indexed for full-text search.
 
 ### chat
@@ -629,7 +630,7 @@ braavo mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 
 #### Your company as an MCP server
 
-`braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `list_skills`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
+`braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `read_page`, `list_skills`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
 
 ```bash
 claude mcp add braavo -- braavo mcp serve      # Claude Code
