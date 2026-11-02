@@ -25,6 +25,10 @@ export const TRIGGER_KINDS = ["rss", "web", "files"] as const;
 export type TriggerKind = (typeof TRIGGER_KINDS)[number];
 export const MAX_TASKS_PER_DAY = 20;
 export const MIN_EVERY_MINUTES = 5;
+export const MAX_TRIGGERS_PER_COMPANY = 50;
+export const MAX_FOLDER_TRIGGERS = 10;
+const MAX_PENDING_FILES = 1_000;
+const MAX_FEED_SCAN = 1_000_000;
 const MAX_SEEN = 500;
 const FILE_DEBOUNCE_MS = 2_000;
 
@@ -45,9 +49,28 @@ const tag = (xml: string, name: string) => {
 /** Feeds often carry entity-escaped HTML ("&lt;p&gt;"): decode, then strip the tags it revealed. */
 const clean = (s: string, n: number) => htmlToText(htmlToText(s)).replace(/\s+/g, " ").trim().slice(0, n);
 
-/** RSS 2.0 <item> and Atom <entry>, tolerant of namespaces and CDATA; newest first as the feed lists them. */
+/**
+ * RSS 2.0 <item> and Atom <entry>, tolerant of namespaces and CDATA; newest first as the feed lists them.
+ * A linear scan (indexOf) over at most 1 MB and 100 items: a feed of unclosed tags cannot make it quadratic.
+ */
 export function parseFeed(xml: string): FeedItem[] {
-  const blocks = [...xml.matchAll(/<(item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi)].slice(0, 100);
+  const src = xml.slice(0, MAX_FEED_SCAN);
+  const lower = src.toLowerCase();
+  const blocks: Array<[string, string, string]> = [];
+  let pos = 0;
+  while (blocks.length < 100) {
+    const i = lower.indexOf("<item", pos); const e = lower.indexOf("<entry", pos);
+    const start = i < 0 ? e : e < 0 ? i : Math.min(i, e);
+    if (start < 0) break;
+    const kind = start === i ? "item" : "entry";
+    const after = lower[start + kind.length + 1];
+    if (after !== ">" && after !== " " && after !== "\t" && after !== "\n" && after !== "\r") { pos = start + 1; continue; } // <items>, <entryLink>
+    const open = lower.indexOf(">", start);
+    const close = lower.indexOf(`</${kind}>`, open);
+    if (open < 0 || close < 0) break;
+    blocks.push(["", kind, src.slice(open + 1, close)]);
+    pos = close + kind.length + 3;
+  }
   return blocks.map(([, kind, body]) => {
     const atomLink = /<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/i.exec(body)?.[1] ?? "";
     const link = (kind.toLowerCase() === "entry" ? atomLink : tag(body, "link")) || atomLink;
@@ -186,6 +209,8 @@ export class TriggerEngine {
   private onFile(id: string, file: string): void {
     // Editors write in bursts: wait until the file has been quiet for a moment.
     const key = `${id}\u0000${file}`;
+    // A folder in a write storm cannot grow the debounce table without bound: extra paths wait for the next event.
+    if (!this.pending.has(key) && this.pending.size >= MAX_PENDING_FILES) return;
     clearTimeout(this.pending.get(key));
     const timer = setTimeout(() => {
       this.pending.delete(key);

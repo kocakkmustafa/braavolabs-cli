@@ -31,6 +31,16 @@ describe("trigger helpers (5.4)", () => {
     const atom = `<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>urn:x:1</id><title>Release 2.0</title><link rel="alternate" href="https://r.example/2"/><summary>New API</summary></entry></feed>`;
     expect(parseFeed(atom)).toEqual([{ id: "urn:x:1", title: "Release 2.0", link: "https://r.example/2", summary: "New API" }]);
     expect(parseFeed("<html>not a feed</html>")).toEqual([]);
+    expect(parseFeed("<rss><items>x</items><item><guid>g</guid><title>T</title></item></rss>").map(i => i.id)).toEqual(["g"]);
+  });
+
+  it("stays linear on hostile feeds (many unclosed tags) and caps items", () => {
+    const hostile = "<rss>" + "<item>".repeat(150_000) + "</rss>";
+    const t0 = Date.now();
+    expect(parseFeed(hostile)).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    const many = rss(Array.from({ length: 300 }, (_, i) => [`id${i}`, `P${i}`] as [string, string]));
+    expect(parseFeed(many)).toHaveLength(100);
   });
 
   it("matches file patterns and refuses folders too wide to watch", () => {
@@ -160,5 +170,7 @@ describe("triggers over the loopback API", () => {
     expect((await call("PATCH", `/v1/triggers/${added.body.trigger.id}`, { enabled: false })).body.trigger.enabled).toBe(0);
     expect((await call("DELETE", `/v1/triggers/${added.body.trigger.id}`)).status).toBe(204);
     expect((await call("GET", base)).body.triggers).toHaveLength(1);
+    for (let i = 0; i < 9; i++) store.createTrigger({ id: newTriggerId(), companyId: co.id, agentId: store.listAgents(co.id)[0].id, name: `f${i}`, kind: "files", config: { path: "/tmp" } });
+    expect((await call("POST", base, { kind: "files", agent: "Analyst", path: mkdtempSync(join(tmpdir(), "braavo-api2-")) })).body.error).toMatch(/at most 10 folder watches/);
   });
 });

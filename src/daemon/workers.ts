@@ -88,7 +88,9 @@ export async function runWorkerTask(store: DaemonStore, task: TaskRow, agent: Ag
   try {
     const result = await (deps.turn ?? runWorkerTurn)({
       command: adapter.command, args: adapter.args, authMethod: adapter.authMethod, cwd: agent.workdir, prompt, onEvent: record,
-      policy: (agent.approval_policy as ApprovalPolicy) || "ask",
+      // Plan 5.4: a task opened by a trigger carries outside text (a feed item, a page change); it never
+      // gets automatic edits, whatever the employee's policy — "edits" is lowered to "ask".
+      policy: task.origin === "trigger" && agent.approval_policy === "edits" ? "ask" : (agent.approval_policy as ApprovalPolicy) || "ask",
       ask: req => deps.approvals.ask(agent, task.id, req),
       timeoutMs: deps.timeoutMs,
     } satisfies WorkerTurn);

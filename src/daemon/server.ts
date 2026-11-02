@@ -10,7 +10,7 @@ import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
 import type { ApprovalCenter } from "./workers";
 import { ensureConsolidationRoutine } from "./compaction";
 import { newGoalId } from "./ledger";
-import { newTriggerId, TRIGGER_KINDS, watchableFolder, MIN_EVERY_MINUTES, type TriggerEngine } from "./triggers";
+import { newTriggerId, TRIGGER_KINDS, watchableFolder, MIN_EVERY_MINUTES, MAX_TRIGGERS_PER_COMPANY, MAX_FOLDER_TRIGGERS, type TriggerEngine } from "./triggers";
 import { blockedReason } from "./browse";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -300,6 +300,9 @@ export class Daemon {
           if (!store.getCompany(id)) throw new HttpError(404, "company not found");
           const body = await readJson(req);
           if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web or files");
+          const existing = store.listTriggers(id);
+          if (existing.length >= MAX_TRIGGERS_PER_COMPANY) throw new HttpError(409, `a company can have at most ${MAX_TRIGGERS_PER_COMPANY} triggers`);
+          if (body.kind === "files" && store.listAllTriggers().filter(t => t.kind === "files").length >= MAX_FOLDER_TRIGGERS) throw new HttpError(409, `at most ${MAX_FOLDER_TRIGGERS} folder watches on this computer`);
           const agent = resolveAgent(store, id, String(body.agent ?? ""));
           if (!agent) throw new HttpError(400, "agent must be an agent of this company (id or name)");
           const every = body.everyMinutes === undefined ? 30 : Number(body.everyMinutes);
