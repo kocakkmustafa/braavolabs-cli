@@ -399,4 +399,11 @@ export const extraRows = [
 ["No goals yet.","Ancora nessun obiettivo.","Belum ada sasaran.","아직 목표가 없습니다.","Brak celów.","अभी कोई लक्ष्य नहीं है।","暂无目标。"],
 ["Trigger added: {0}","Trigger aggiunto: {0}","Pemicu ditambahkan: {0}","트리거를 추가했습니다: {0}","Dodano wyzwalacz: {0}","ट्रिगर जोड़ा गया: {0}","已添加触发器：{0}"],
 ["No triggers yet.","Ancora nessun trigger.","Belum ada pemicu.","아직 트리거가 없습니다.","Brak wyzwalaczy.","अभी कोई ट्रिगर नहीं है।","暂无触发器。"],
+["Connect GitHub for repository triggers","Collega GitHub per i trigger dei repository","Hubungkan GitHub untuk pemicu repositori","저장소 트리거용 GitHub 연결","Połącz GitHub dla wyzwalaczy repozytoriów","रिपॉज़िटरी ट्रिगर के लिए GitHub जोड़ें","连接 GitHub 以使用仓库触发器"],
+["Open {0} and enter the code: {1}","Apri {0} e inserisci il codice: {1}","Buka {0} lalu masukkan kode: {1}","{0}을(를) 열고 코드를 입력하세요: {1}","Otwórz {0} i wpisz kod: {1}","{0} खोलें और कोड डालें: {1}","打开 {0} 并输入代码：{1}"],
+["Signed in to GitHub as {0}","Accesso a GitHub come {0}","Masuk ke GitHub sebagai {0}","GitHub에 {0}(으)로 로그인했습니다","Zalogowano do GitHub jako {0}","GitHub में {0} के रूप में साइन इन हुआ","已以 {0} 身份登录 GitHub"],
+["Signed out of GitHub.","Disconnesso da GitHub.","Sudah keluar dari GitHub.","GitHub에서 로그아웃했습니다.","Wylogowano z GitHub.","GitHub से साइन आउट हो गया।","已退出 GitHub。"],
+["Not signed in to GitHub. Run: braavo github login","Accesso a GitHub non effettuato. Esegui: braavo github login","Belum masuk ke GitHub. Jalankan: braavo github login","GitHub에 로그인하지 않았습니다. 실행: braavo github login","Nie zalogowano do GitHub. Uruchom: braavo github login","GitHub में साइन इन नहीं है। चलाएँ: braavo github login","尚未登录 GitHub。运行：braavo github login"],
+["Webhook address on this computer: {0}","Indirizzo webhook su questo computer: {0}","Alamat webhook di komputer ini: {0}","이 컴퓨터의 웹훅 주소: {0}","Adres webhooka na tym komputerze: {0}","इस कंप्यूटर पर webhook पता: {0}","本机的 Webhook 地址：{0}"],
+["Webhook secret (shown once): {0}","Segreto del webhook (mostrato una sola volta): {0}","Rahasia webhook (ditampilkan sekali): {0}","웹훅 시크릿(한 번만 표시): {0}","Sekret webhooka (pokazywany raz): {0}","Webhook सीक्रेट (केवल एक बार दिखाया जाता है): {0}","Webhook 密钥（仅显示一次）：{0}"],
 ] as const;

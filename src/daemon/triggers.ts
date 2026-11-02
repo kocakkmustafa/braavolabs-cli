@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DaemonStore, TriggerRow } from "./store";
 import { fetchChecked, readPage, type BrowserPolicy, type BrowseDeps } from "./browse";
 import { htmlToText, normalizeForDiff, diffLines } from "../forge/monitor";
+import { newWebhookSecret, pollRepo, rememberDelivery, toEvent, verifySignature, type FetchLike, type GithubEventName, type GithubMode, type GithubState } from "./github";
 
 /**
  * Event triggers (plan 5.4, local part): something happens → a task for an agent.
@@ -13,15 +14,17 @@ import { htmlToText, normalizeForDiff, diffLines } from "../forge/monitor";
  * - web: a page's visible text changes (read through the agent browser: URL policy,
  *   private addresses refused, DNS pinned).
  * - files: a file matching a pattern appears or changes in a watched folder.
+ * - github: repository events (issues, pull requests, releases, failed runs…), polled or
+ *   pushed by webhook (github.ts).
  *
  * The first check of a feed or page only records what is there (no flood of old items).
  * Feed items and page changes come from outside, so they go into the task fenced as
  * untrusted content. Each trigger opens at most MAX_TASKS_PER_DAY tasks a day; a quiet
  * feed costs one small request per interval and no model call.
- * Gmail, Slack and GitHub need OAuth apps — a founder decision, not part of this.
+ * Slack and Gmail come later.
  */
 
-export const TRIGGER_KINDS = ["rss", "web", "files"] as const;
+export const TRIGGER_KINDS = ["rss", "web", "files", "github"] as const;
 export type TriggerKind = (typeof TRIGGER_KINDS)[number];
 export const MAX_TASKS_PER_DAY = 20;
 export const MIN_EVERY_MINUTES = 5;
@@ -32,8 +35,8 @@ const MAX_FEED_SCAN = 1_000_000;
 const MAX_SEEN = 500;
 const FILE_DEBOUNCE_MS = 2_000;
 
-export interface TriggerConfig { url?: string; path?: string; pattern?: string; everyMinutes?: number }
-export interface TriggerState { seen?: string[]; hash?: string; text?: string; files?: Record<string, number> }
+export interface TriggerConfig { url?: string; path?: string; pattern?: string; everyMinutes?: number; repo?: string; events?: GithubEventName[]; mode?: GithubMode }
+export interface TriggerState extends GithubState { seen?: string[]; hash?: string; text?: string; files?: Record<string, number> }
 
 // ── feeds ────────────────────────────────────────────────────────────────────
 
@@ -118,7 +121,17 @@ export interface TriggerDeps {
   now?: () => Date;
   /** Injected in tests; default node:fs watch (recursive). */
   watchImpl?: (path: string, onChange: (file: string) => void) => { close(): void };
+  /** GitHub triggers: the signed-in user's token (refreshed), each trigger's webhook secret, and fetch. */
+  github?: {
+    token(): Promise<string | undefined>;
+    secret(triggerId: string): string | undefined;
+    saveSecret(triggerId: string, secret: string): void;
+    removeSecret(triggerId: string): void;
+    fetch?: FetchLike;
+  };
 }
+
+export interface WebhookDelivery { event?: string; delivery?: string; signature?: string; raw: Buffer }
 
 const fence = (source: string, text: string) =>
   `<untrusted_web_content url="${source.replace(/[<>"&\n\r]/g, " ")}">\n${text.replace(/<\/?\s*untrusted_web_content/gi, "[untrusted_web_content]")}\n</untrusted_web_content>`;
@@ -149,6 +162,7 @@ export class TriggerEngine {
   arm(t: TriggerRow, firstDelayMs = 0): void {
     this.disarm(t.id);
     const cfg = JSON.parse(t.config) as TriggerConfig;
+    if (t.kind === "github" && cfg.mode === "webhook") return; // GitHub calls us
     if (t.kind === "files") {
       const watcher = (this.deps.watchImpl ?? defaultWatch)(cfg.path!, file => this.onFile(t.id, file));
       this.watchers.set(t.id, watcher);
@@ -172,12 +186,19 @@ export class TriggerEngine {
   async check(id: string): Promise<{ fired: number; note?: string }> {
     const t = this.store.getTrigger(id);
     if (!t || !t.enabled || t.kind === "files" || this.running.has(id)) return { fired: 0 };
+    if (t.kind === "github" && (JSON.parse(t.config) as TriggerConfig).mode === "webhook") return { fired: 0, note: "webhook trigger: GitHub sends events as they happen" };
     this.running.add(id);
     try {
       const cfg = JSON.parse(t.config) as TriggerConfig;
       const state = JSON.parse(t.state || "{}") as TriggerState;
       const events: TriggerEvent[] = [];
-      if (t.kind === "rss") {
+      if (t.kind === "github") {
+        const gh = this.deps.github;
+        const token = await gh?.token();
+        const polled = await pollRepo(cfg.repo!, cfg.events ?? [], state, token, gh?.fetch ?? (fetch as unknown as FetchLike));
+        Object.assign(state, polled.state);
+        for (const e of polled.events) events.push({ key: e.key, title: e.title, body: `${e.url}\n\n${fence(e.url || `https://github.com/${cfg.repo}`, e.text)}` });
+      } else if (t.kind === "rss") {
         const feed = await fetchChecked(cfg.url!, this.deps.policy(), { ...this.deps.browse, acceptHeader: "application/rss+xml,application/atom+xml,application/xml;q=0.9,text/xml;q=0.9,*/*;q=0.1", accept: /xml|rss|atom|text\/plain/i });
         const items = parseFeed(feed.body);
         const seen = new Set(state.seen ?? []);
@@ -204,6 +225,44 @@ export class TriggerEngine {
     } finally {
       this.running.delete(id);
     }
+  }
+
+  /** A new webhook secret for a GitHub trigger, kept in the keychain; shown to the user once. */
+  createWebhookSecret(id: string): string {
+    if (!this.deps.github) throw new Error("GitHub triggers are not enabled on this daemon");
+    const secret = newWebhookSecret();
+    this.deps.github.saveSecret(id, secret);
+    return secret;
+  }
+
+  /** Forget a trigger: stop it and drop its webhook secret. */
+  forget(t: TriggerRow): void {
+    this.disarm(t.id);
+    if (t.kind === "github") try { this.deps.github?.removeSecret(t.id); } catch { /* not there */ }
+  }
+
+  /**
+   * A GitHub webhook delivery for one trigger. The signature is checked on the raw body
+   * before it is parsed; redeliveries and other repositories' events are ignored.
+   */
+  ingestGithub(id: string, d: WebhookDelivery): { status: number; fired: number; note?: string } {
+    const t = this.store.getTrigger(id);
+    const cfg = t ? (JSON.parse(t.config) as TriggerConfig) : undefined;
+    const secret = t && t.kind === "github" && cfg?.mode === "webhook" ? this.deps.github?.secret(id) : undefined;
+    if (!t || !secret) return { status: 404, fired: 0 };
+    if (!verifySignature(secret, d.raw, d.signature)) return { status: 401, fired: 0, note: "bad signature" };
+    if (d.event === "ping") return { status: 200, fired: 0, note: "pong" };
+    if (!t.enabled) return { status: 202, fired: 0, note: "trigger is off" };
+    let payload: any;
+    try { payload = JSON.parse(d.raw.toString("utf8")); } catch { return { status: 400, fired: 0, note: "invalid JSON" }; }
+    if (String(payload?.repository?.full_name ?? "").toLowerCase() !== cfg!.repo!.toLowerCase()) return { status: 202, fired: 0, note: "other repository" };
+    const state = JSON.parse(t.state || "{}") as TriggerState;
+    if (d.delivery && !rememberDelivery(state, d.delivery.slice(0, 100))) return { status: 200, fired: 0, note: "already delivered" };
+    this.store.updateTrigger(id, { state: JSON.stringify(state), note: null });
+    const wanted = (cfg!.events ?? []) as string[];
+    const e = wanted.includes(d.event ?? "") ? toEvent(d.event!, payload, cfg!.repo!) : null;
+    if (!e) return { status: 202, fired: 0, note: "event not watched" };
+    return { status: 200, fired: this.fire(t, [{ key: e.key, title: e.title, body: `${e.url}\n\n${fence(e.url || `https://github.com/${cfg!.repo}`, e.text)}` }]) };
   }
 
   private onFile(id: string, file: string): void {

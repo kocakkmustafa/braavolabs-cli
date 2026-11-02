@@ -10,6 +10,7 @@ export const COMMAND_HELP = [
 ["cancel", "braavo cancel <researchId> --yes [--json]", "Cancel a research session"],
 ["cascade", "braavo cascade <question> [--threshold <0-1>] [--second-opinion] [--budget <usd>]", "Try models from lowest cost upward"],
 ["savings", "braavo savings [--days <1-90>]", "Show measured routing savings"],
+["github", "braavo github login | logout | status", "Connect GitHub for repository triggers"],
 ["keys", "braavo keys add <provider> [--key <secret>] | list | rm <provider>", "Manage local BYOK keys"],
 ["media-key", "braavo media-key add <provider> <secret> | list | rm <provider>", "Manage server-side media keys"],
 ["image", "braavo image <prompt> [--model <id>] [--n <1-4>] [--size <WxH>] [--yes]", "Preview or generate an image"],
