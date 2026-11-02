@@ -10,6 +10,7 @@ import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
 import type { ApprovalCenter } from "./workers";
 import { ensureConsolidationRoutine } from "./compaction";
 import { newGoalId } from "./ledger";
+import { MAX_WEBHOOK_BYTES, parseEvents, parseRepo } from "./github";
 import { newTriggerId, TRIGGER_KINDS, watchableFolder, MIN_EVERY_MINUTES, MAX_TRIGGERS_PER_COMPANY, MAX_FOLDER_TRIGGERS, type TriggerEngine } from "./triggers";
 import { blockedReason } from "./browse";
 import { existsSync } from "node:fs";
@@ -215,6 +216,10 @@ export class Daemon {
       if (req.headers.origin) throw new HttpError(403, "cross-origin requests are not allowed");
       const host = (req.headers.host ?? "").replace(/:\d+$/, "");
       if (host !== "127.0.0.1" && host !== "localhost") throw new HttpError(403, "unexpected host");
+      // GitHub webhooks (through the user's forwarder) carry no daemon token: the trigger's own
+      // HMAC secret authenticates them instead, checked before the body is parsed.
+      const hook = /^\/v1\/hooks\/github\/(tg_[0-9a-f-]{36})$/.exec((req.url ?? "").split("?")[0]);
+      if (hook && req.method === "POST") return await this.githubHook(hook[1], req, res);
       if (!tokenMatches(req.headers.authorization, this.o.token)) throw new HttpError(401, "unauthorized");
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const parts = url.pathname.split("/").filter(Boolean);
@@ -299,7 +304,7 @@ export class Daemon {
           const engine = this.triggerEngine();
           if (!store.getCompany(id)) throw new HttpError(404, "company not found");
           const body = await readJson(req);
-          if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web or files");
+          if (!(TRIGGER_KINDS as readonly unknown[]).includes(body.kind)) throw new HttpError(400, "kind must be rss, web, files or github");
           const existing = store.listTriggers(id);
           if (existing.length >= MAX_TRIGGERS_PER_COMPANY) throw new HttpError(409, `a company can have at most ${MAX_TRIGGERS_PER_COMPANY} triggers`);
           if (body.kind === "files" && store.listAllTriggers().filter(t => t.kind === "files").length >= MAX_FOLDER_TRIGGERS) throw new HttpError(409, `at most ${MAX_FOLDER_TRIGGERS} folder watches on this computer`);
@@ -308,7 +313,15 @@ export class Daemon {
           const every = body.everyMinutes === undefined ? 30 : Number(body.everyMinutes);
           if (!Number.isInteger(every) || every < MIN_EVERY_MINUTES || every > 7 * 24 * 60) throw new HttpError(400, `everyMinutes must be ${MIN_EVERY_MINUTES}–10080`);
           let config: Record<string, unknown>;
-          if (body.kind === "files") {
+          if (body.kind === "github") {
+            const repo = typeof body.repo === "string" ? parseRepo(body.repo) : null;
+            if (!repo) throw new HttpError(400, "repo must look like owner/name");
+            const events = parseEvents(body.events);
+            if (!events) throw new HttpError(400, "events must be some of issues, issue_comment, pull_request, pull_request_review, release, workflow_run, discussion");
+            const mode = body.mode === undefined ? "poll" : body.mode;
+            if (mode !== "poll" && mode !== "webhook") throw new HttpError(400, "mode must be poll or webhook");
+            config = { repo, events, mode, ...(mode === "poll" ? { everyMinutes: every } : {}) };
+          } else if (body.kind === "files") {
             const problem = typeof body.path === "string" ? watchableFolder(body.path) : "path is required";
             if (problem) throw new HttpError(400, problem);
             config = { path: body.path, pattern: typeof body.pattern === "string" && body.pattern.trim() ? body.pattern.trim().slice(0, 200) : "*" };
@@ -321,13 +334,19 @@ export class Daemon {
           }
           const trigger = store.createTrigger({
             id: newTriggerId(), companyId: id, agentId: agent.id, kind: body.kind, config,
-            name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : `${body.kind}: ${String(config.url ?? config.path).slice(0, 100)}`,
+            name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : `${body.kind}: ${String(config.url ?? config.path ?? config.repo).slice(0, 100)}`,
             taskTitle: typeof body.title === "string" ? body.title.slice(0, 300) : undefined, taskBody: typeof body.body === "string" ? body.body.slice(0, 4_000) : undefined,
           });
+          // The webhook secret is shown once, here; afterwards it lives only in the keychain.
+          let webhook: { path: string; secret: string } | undefined;
+          if (config.mode === "webhook") {
+            try { webhook = { path: `/v1/hooks/github/${trigger.id}`, secret: engine.createWebhookSecret(trigger.id) }; }
+            catch (error) { store.deleteTrigger(trigger.id); throw new HttpError(500, error instanceof Error ? error.message : "could not store the webhook secret"); }
+          }
           engine.arm(trigger);
           store.activity({ companyId: id, actor: "user", verb: "trigger-added", objectType: "trigger", objectId: trigger.id, summary: trigger.name });
           this.emit({ type: "company.changed", companyId: id });
-          return this.json(res, 201, { trigger: { ...trigger, config, state: undefined } });
+          return this.json(res, 201, { trigger: { ...trigger, config, state: undefined }, ...(webhook ? { webhook } : {}) });
         }
         case "GET /companies/:id/triggers":
           return this.json(res, 200, { triggers: store.listTriggers(id).map(t => ({ ...t, config: JSON.parse(t.config), state: undefined })) });
@@ -346,7 +365,7 @@ export class Daemon {
           const engine = this.triggerEngine();
           const t = store.getTrigger(id);
           if (!t) throw new HttpError(404, "trigger not found");
-          engine.disarm(id);
+          engine.forget(t);
           store.deleteTrigger(id);
           this.emit({ type: "company.changed", companyId: t.company_id });
           res.writeHead(204).end();
@@ -652,6 +671,23 @@ export class Daemon {
   private browser(): NonNullable<DaemonOptions["browser"]> {
     if (!this.o.browser) throw new HttpError(404, "the agent browser is not enabled on this daemon");
     return this.o.browser;
+  }
+
+  /** POST /v1/hooks/github/:id — a GitHub delivery, authenticated by the trigger's HMAC secret. */
+  private async githubHook(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const engine = this.triggerEngine();
+    let size = 0; const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > MAX_WEBHOOK_BYTES) throw new HttpError(413, "body too large");
+      chunks.push(chunk as Buffer);
+    }
+    const one = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h);
+    const r = engine.ingestGithub(id, { event: one(req.headers["x-github-event"]), delivery: one(req.headers["x-github-delivery"]), signature: one(req.headers["x-hub-signature-256"]), raw: Buffer.concat(chunks) });
+    if (r.status === 404) throw new HttpError(404, "not found");
+    if (r.status === 401) throw new HttpError(401, "bad signature");
+    if (r.fired) this.emit({ type: "company.changed", companyId: this.o.store.getTrigger(id)!.company_id });
+    return this.json(res, r.status, { fired: r.fired, ...(r.note ? { note: r.note } : {}) });
   }
 
   private triggerEngine(): TriggerEngine {
