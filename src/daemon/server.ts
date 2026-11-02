@@ -405,8 +405,11 @@ export class Daemon {
           const memory = this.memory();
           const body = await readJson(req);
           if (typeof body.path !== "string" || typeof body.content !== "string") throw new HttpError(400, "path and content are required");
-          const doc = memory.write(id, body.path, body.content, "user");
-          store.activity({ companyId: id, actor: "user", verb: "memory-edited", objectType: "memory", objectId: body.path, summary: body.path });
+          // Provenance only (same token either way): an edit made through `braavo mcp serve` is labelled so the
+          // user can see in activity and git history what an outside agent wrote into an agent's memory.
+          const author = req.headers["x-braavo-client"] === "mcp" ? "mcp" : "user";
+          const doc = memory.write(id, body.path, body.content, author);
+          store.activity({ companyId: id, actor: author, verb: "memory-edited", objectType: "memory", objectId: body.path, summary: body.path });
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 200, { doc });
         }

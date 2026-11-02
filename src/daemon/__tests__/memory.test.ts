@@ -192,7 +192,13 @@ describe("memory over the loopback API", () => {
     expect((await call("PATCH", `/v1/agents/${writer.id}`, { department: "Bad Name" })).status).toBe(400);
     expect((await call("PATCH", `/v1/agents/${writer.id}`, { department: "marketing" })).body.agent.department).toBe("marketing");
     expect(memory.agentPaths(store.getAgent(writer.id)!).department).toBe("departments/marketing.md");
-    expect(store.recentActivity(co.id, 5).some(a => a.verb === "memory-edited")).toBe(true);
+    expect(store.recentActivity(co.id, 5).some(a => a.verb === "memory-edited" && a.actor === "user")).toBe(true);
+    const viaMcp = await new Promise<number>((resolve, reject) => {
+      const req = request({ host: "127.0.0.1", port, method: "PUT", path: base, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Braavo-Client": "mcp" } }, r => { r.resume(); resolve(r.statusCode!); });
+      req.on("error", reject); req.end(JSON.stringify({ path: "notes/from-mcp.md", content: "hi" }));
+    });
+    expect(viaMcp).toBe(200);
+    expect(store.recentActivity(co.id, 5).find(a => a.summary === "notes/from-mcp.md")).toMatchObject({ actor: "mcp" });
 
     const bare = new Daemon({ store, token, version: "test" });
     const barePort = await bare.listen(0);

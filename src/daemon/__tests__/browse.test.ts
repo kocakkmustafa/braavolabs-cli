@@ -40,6 +40,9 @@ describe("URL policy (5.1)", () => {
   it("knows private, loopback, link-local, CGNAT and mapped addresses", () => {
     for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "::", "fd00::1", "fe80::1", "::ffff:127.0.0.1"]) expect(isPrivateAddress(ip), ip).toBe(true);
     for (const ip of ["93.184.216.34", "8.8.8.8", "2606:4700::1111", "172.32.0.1"]) expect(isPrivateAddress(ip), ip).toBe(false);
+    // IPv4 inside IPv6, in the hex form the URL parser prints: all private.
+    for (const ip of ["::ffff:7f00:1", "::ffff:a9fe:a9fe", "::7f00:1", "64:ff9b::7f00:1", "64:ff9b::a00:1", "2002:7f00:1::", "2002:c0a8:101::1", "fe80::1%en0", "fd12::1"]) expect(isPrivateAddress(ip), ip).toBe(true);
+    for (const ip of ["::ffff:5db8:d822", "64:ff9b::808:808", "2002:808:808::1"]) expect(isPrivateAddress(ip), ip).toBe(false);
   });
 
   it("refuses local, private, credentialed and non-http URLs, the deny list, and anything off a set allow list", () => {
@@ -50,6 +53,9 @@ describe("URL policy (5.1)", () => {
     expect(blockedReason("http://intranet", DEFAULT_POLICY)).toMatch(/local/);
     expect(blockedReason("http://169.254.169.254/latest/meta-data", DEFAULT_POLICY)).toMatch(/private/);
     expect(blockedReason("http://[::1]/", DEFAULT_POLICY)).toMatch(/local|private/);
+    for (const u of ["http://[::ffff:127.0.0.1]:8080/", "http://[::ffff:169.254.169.254]/latest", "http://[64:ff9b::10.0.0.1]/", "http://[2002:7f00:1::]/", "http://2130706433/", "http://0x7f.1/"]) {
+      expect(blockedReason(u, DEFAULT_POLICY), u).toMatch(/private|local/);
+    }
     expect(blockedReason("https://user:pw@example.com", DEFAULT_POLICY)).toMatch(/credentials/);
     expect(blockedReason("https://www.paypal.com/x", DEFAULT_POLICY)).toMatch(/deny list \(paypal\.com\)/);
     expect(blockedReason("https://www.turkiye.gov.tr", DEFAULT_POLICY)).toMatch(/deny list/);

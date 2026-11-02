@@ -1050,7 +1050,9 @@ async function main(): Promise<void> {
             daemon: () => {
               const live = runningDaemon(paths);
               if (!live) throw new Error("The Braavolabs daemon is not running. Start it: braavo daemon start");
-              return new DaemonClient({ port: live.port, token: ensureToken(paths) });
+              // The header labels memory edits made through MCP (provenance, not access control).
+              const tagged: typeof fetch = (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), "X-Braavo-Client": "mcp" } });
+              return new DaemonClient({ port: live.port, token: ensureToken(paths) }, tagged);
             },
           });
           return;

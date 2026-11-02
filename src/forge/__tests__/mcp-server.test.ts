@@ -120,6 +120,17 @@ describe("braavo mcp serve (5.2)", () => {
     expect(msgs[1]).toMatchObject({ id: 7, result: { isError: true, content: [{ text: expect.stringContaining("braavo daemon start") }] } });
   });
 
+  it("refuses oversized JSON-RPC batches", async () => {
+    const out: string[] = [];
+    const input = new PassThrough(); const output = new PassThrough();
+    output.on("data", (c: Buffer) => out.push(...c.toString().split("\n").filter(Boolean)));
+    const served = serveMcp(input, output, { version: "x", daemon: () => { throw new Error("unused"); } });
+    input.write(`${JSON.stringify(Array.from({ length: 21 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })))}\n`);
+    input.end();
+    await served;
+    expect(out.map(l => JSON.parse(l))).toEqual([{ jsonrpc: "2.0", id: null, error: { code: -32600, message: "batch is limited to 20 messages" } }]);
+  });
+
   it("keeps every tool's schema closed and its name MCP-safe", async () => {
     for (const t of TOOLS) {
       expect(t.name).toMatch(/^[a-z_]{1,64}$/);

@@ -60,21 +60,47 @@ export function hostMatches(host: string, pattern: string): boolean {
   return h === p || h.endsWith(`.${p}`);
 }
 
-/** IPv4/IPv6 literals that must never be fetched: loopback, private, link-local, CGNAT, multicast, unspecified. */
+/** "::ffff:7f00:1" → 16 bytes; null when it is not an IPv6 literal. */
+export function ipv6Bytes(ip: string): number[] | null {
+  let s = ip.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
+  if (isIP(s) !== 6) return null;
+  // A trailing dotted IPv4 ("::ffff:1.2.3.4") becomes two hex groups.
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number);
+    s = `${s.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = s.includes("::") ? s.split("::") : [s, null];
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = tail === null ? h : [...h, ...Array(8 - h.length - t.length).fill("0"), ...t];
+  if (groups.length !== 8) return null;
+  return groups.flatMap(g => { const n = parseInt(g || "0", 16); return [n >> 8, n & 0xff]; });
+}
+
+/**
+ * Addresses that must never be fetched: loopback, private, link-local, CGNAT, multicast,
+ * unspecified — including IPv4 hidden inside IPv6 (mapped ::ffff:, compatible ::, NAT64
+ * 64:ff9b::/96 and 64:ff9b:1::/48, 6to4 2002::/16), which the URL parser prints in hex.
+ */
 export function isPrivateAddress(ip: string): boolean {
-  const v = isIP(ip);
-  if (v === 4) {
+  if (isIP(ip) === 4) {
     const [a, b] = ip.split(".").map(Number);
     return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
       || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
   }
-  if (v === 6) {
-    const s = ip.toLowerCase().replace(/^\[|\]$/g, "");
-    if (s === "::" || s === "::1") return true;
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(s);
-    if (mapped) return isPrivateAddress(mapped[1]);
-    return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(s);
-  }
+  const by = ipv6Bytes(ip);
+  if (!by) return false;
+  const v4 = (o: number) => isPrivateAddress(by.slice(o, o + 4).join("."));
+  const zero = (from: number, to: number) => by.slice(from, to).every(x => x === 0);
+  if (zero(0, 16) || (zero(0, 15) && by[15] === 1)) return true;                 // :: and ::1
+  if (zero(0, 10) && by[10] === 0xff && by[11] === 0xff) return v4(12);           // ::ffff:a.b.c.d
+  if (zero(0, 12)) return v4(12);                                                 // ::a.b.c.d (deprecated compatible form)
+  if (by[0] === 0x00 && by[1] === 0x64 && by[2] === 0xff && by[3] === 0x9b) return zero(4, 12) ? v4(12) : by[4] === 0 && by[5] === 1; // NAT64
+  if (by[0] === 0x20 && by[1] === 0x02) return v4(2);                             // 6to4
+  if ((by[0] & 0xfe) === 0xfc) return true;                                       // fc00::/7 unique local
+  if (by[0] === 0xfe && (by[1] & 0xc0) === 0x80) return true;                     // fe80::/10 link-local
+  if (by[0] === 0xff) return true;                                                // multicast
   return false;
 }
 

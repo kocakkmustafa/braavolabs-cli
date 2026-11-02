@@ -16,6 +16,7 @@ import type { ChatStreamEvent } from "./daemon-client";
 export const MCP_SERVER_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_TOOL_TEXT = 60_000;
+const MAX_BATCH = 20;
 
 /** What the tools need from the daemon; DaemonClient fits. */
 export interface McpDaemon {
@@ -271,6 +272,8 @@ export async function serveMcp(input: NodeJS.ReadableStream, output: NodeJS.Writ
     if (!line.trim()) return;
     let msg: Message;
     try { msg = JSON.parse(line); } catch { send(fail(null, -32700, "parse error")); return; }
+    // JSON-RPC batches are bounded so one line cannot start hundreds of daemon calls.
+    if (Array.isArray(msg) && msg.length > MAX_BATCH) { send(fail(null, -32600, `batch is limited to ${MAX_BATCH} messages`)); return; }
     const batch = Array.isArray(msg) ? msg as Message[] : [msg];
     for (const m of batch) {
       const p = handleMcpMessage(m, o).then(r => { if (r) send(r); }, e => send(fail(m?.id ?? null, -32603, String(e instanceof Error ? e.message : e).slice(0, 300))));
