@@ -411,7 +411,22 @@ const rows = [
 ["No usable model yet. Add a key or pull a local model: {0}","Henüz kullanılabilir model yok. Anahtar ekle ya da yerel model indir: {0}","Aún no hay un modelo utilizable. Agrega una clave o descarga un modelo local: {0}","Ainda não há modelo utilizável. Adicione uma chave ou baixe um modelo local: {0}","Noch kein nutzbares Modell. Füge einen Schlüssel hinzu oder lade ein lokales Modell: {0}","Aucun modèle utilisable. Ajoutez une clé ou téléchargez un modèle local : {0}","まだ使えるモデルがありません。キーを追加するかローカルモデルを取得してください: {0}","لا يوجد نموذج قابل للاستخدام بعد. أضف مفتاحًا أو نزّل نموذجًا محليًا: {0}"],
 ["Pulling {0}…","{0} indiriliyor…","Descargando {0}…","Baixando {0}…","Lade {0}…","Téléchargement de {0}…","{0} を取得中…","جارٍ تنزيل {0}…"],
 ["Pulled {0}","{0} indirildi","{0} descargado","{0} baixado","{0} geladen","{0} téléchargé","{0} を取得しました","تم تنزيل {0}"],
-["Check the daemon, your keys and local models","Daemon'u, anahtarlarını ve yerel modelleri kontrol et","Revisa el daemon, tus claves y modelos locales","Verifique o daemon, suas chaves e modelos locais","Daemon, Schlüssel und lokale Modelle prüfen","Vérifiez le démon, vos clés et vos modèles locaux","デーモン、キー、ローカルモデルを確認","تحقق من الخدمة الخلفية ومفاتيحك والنماذج المحلية"]
+["Check the daemon, your keys and local models","Daemon'u, anahtarlarını ve yerel modelleri kontrol et","Revisa el daemon, tus claves y modelos locales","Verifique o daemon, suas chaves e modelos locais","Daemon, Schlüssel und lokale Modelle prüfen","Vérifiez le démon, vos clés et vos modèles locaux","デーモン、キー、ローカルモデルを確認","تحقق من الخدمة الخلفية ومفاتيحك والنماذج المحلية"],
+["DONE","BİTTİ","HECHO","CONCLUÍDO","ERLEDIGT","TERMINÉ","完了","منجز"],
+["paused","duraklatıldı","en pausa","pausado","pausiert","en pause","一時停止中","متوقف مؤقتًا"],
+["error","kurulum gerekiyor","requiere configuración","precisa de configuração","Einrichtung nötig","configuration requise","設定が必要","يحتاج إلى إعداد"],
+["This view needs an interactive terminal.","Bu görünüm etkileşimli bir terminal ister.","Esta vista requiere una terminal interactiva.","Esta visualização precisa de um terminal interativo.","Diese Ansicht braucht ein interaktives Terminal.","Cette vue nécessite un terminal interactif.","この表示には対話型ターミナルが必要です。","تتطلب هذه الواجهة طرفية تفاعلية."],
+["Working…","Çalışıyor…","Procesando…","Processando…","Wird ausgeführt…","Traitement…","処理中…","جارٍ التنفيذ…"],
+["Enter an amount like 25 or 25.50.","25 ya da 25.50 gibi bir tutar girin.","Escribe un monto como 25 o 25.50.","Digite um valor como 25 ou 25.50.","Gib einen Betrag wie 25 oder 25.50 ein.","Saisissez un montant comme 25 ou 25.50.","25 や 25.50 のように金額を入力してください。","أدخل مبلغًا مثل 25 أو 25.50."],
+["no budget","bütçe yok","sin presupuesto","sem orçamento","kein Budget","aucun budget","予算なし","بلا ميزانية"],
+["Budget: {0}","Bütçe: {0}","Presupuesto: {0}","Orçamento: {0}","Budget: {0}","Budget : {0}","予算: {0}","الميزانية: {0}"],
+["Unassigned","Atanmamış","Sin asignar","Sem responsável","Nicht zugewiesen","Non attribuée","未割り当て","غير مُسندة"],
+["Task title for {0}:","{0} için görev başlığı:","Título de la tarea para {0}:","Título da tarefa para {0}:","Aufgabentitel für {0}:","Titre de la tâche pour {0} :","{0} のタスク名:","عنوان المهمة لـ {0}:"],
+["Monthly budget for {0} in USD (empty = none):","{0} için aylık bütçe, USD (boş = yok):","Presupuesto mensual de {0} en USD (vacío = ninguno):","Orçamento mensal de {0} em USD (vazio = nenhum):","Monatsbudget für {0} in USD (leer = keins):","Budget mensuel de {0} en USD (vide = aucun) :","{0} の月間予算（USD、空欄 = なし）:","الميزانية الشهرية لـ {0} بالدولار (فارغ = بلا ميزانية):"],
+["Enter saves · Esc cancels","Enter kaydeder · Esc vazgeçer","Enter guarda · Esc cancela","Enter salva · Esc cancela","Enter speichert · Esc bricht ab","Entrée enregistre · Échap annule","Enter で保存 · Esc でキャンセル","Enter للحفظ · Esc للإلغاء"],
+["↑↓ move · Tab agents/tasks · p pause · b budget · B company budget · t task · r run · c cancel · o reopen · R refresh · q quit","↑↓ gez · Tab ajanlar/görevler · p duraklat · b bütçe · B şirket bütçesi · t görev · r çalıştır · c iptal · o yeniden aç · R yenile · q çık","↑↓ mover · Tab agentes/tareas · p pausar · b presupuesto · B presupuesto de la empresa · t tarea · r ejecutar · c cancelar · o reabrir · R actualizar · q salir","↑↓ mover · Tab agentes/tarefas · p pausar · b orçamento · B orçamento da empresa · t tarefa · r executar · c cancelar · o reabrir · R atualizar · q sair","↑↓ bewegen · Tab Agenten/Aufgaben · p pausieren · b Budget · B Firmenbudget · t Aufgabe · r ausführen · c abbrechen · o wieder öffnen · R aktualisieren · q beenden","↑↓ déplacer · Tab agents/tâches · p pause · b budget · B budget de l’entreprise · t tâche · r lancer · c annuler · o rouvrir · R actualiser · q quitter","↑↓ 移動 · Tab エージェント/タスク · p 一時停止 · b 予算 · B 会社の予算 · t タスク · r 実行 · c キャンセル · o 再開 · R 更新 · q 終了","↑↓ تنقل · Tab الوكلاء/المهام · p إيقاف مؤقت · b الميزانية · B ميزانية الشركة · t مهمة · r تشغيل · c إلغاء · o إعادة فتح · R تحديث · q خروج"],
+["Agents","Ajanlar","Agentes","Agentes","Agenten","Agents","エージェント","الوكلاء"],
+["No agents yet.","Henüz ajan yok.","Aún no hay agentes.","Ainda não há agentes.","Noch keine Agenten.","Aucun agent pour l’instant.","まだエージェントはいません。","لا يوجد وكلاء بعد."],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;
@@ -467,5 +482,5 @@ export function imageCountText(value: number): string {
 }
 
 /** Human-only labels; raw status values in machine output remain unchanged. */
-const STATUS_KEYS = new Set(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "STOPPED", "PAUSED", "APPROVED", "REJECTED", "OPEN", "active", "running", "idle", "ended", "connected", "disconnected"]);
+const STATUS_KEYS = new Set(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "STOPPED", "PAUSED", "APPROVED", "REJECTED", "OPEN", "DONE", "active", "running", "idle", "paused", "error", "ended", "connected", "disconnected"]);
 export function statusText(value: unknown): string { const raw = String(value ?? ""); return STATUS_KEYS.has(raw) ? t(raw) : raw; }

@@ -1494,7 +1494,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1538,6 +1538,47 @@ async function main(): Promise<void> {
         return;
       }
       const companyId = await pickCompany();
+      if (sub === "tui") {
+        // The company panel in the terminal: agents, budgets and tasks, refreshed every few seconds.
+        if (!process.stdin.isTTY || !process.stdout.isTTY) die(t("This view needs an interactive terminal."));
+        const { runCompanyTui } = await import("./forge/company-tui");
+        const money = (v: number | null) => (v === null ? "—" : `$${v.toFixed(2)}/month`);
+        await runCompanyTui({
+          input: process.stdin, output: process.stdout,
+          load: async () => ({
+            panel: await client.json<any>("GET", `/companies/${companyId}/panel`),
+            tasks: (await client.json<{ tasks: any[] }>("GET", `/companies/${companyId}/tasks`)).tasks,
+          }),
+          act: async (action) => {
+            switch (action.type) {
+              case "pause": case "resume": {
+                const { agent } = await client.json<{ agent: { name: string } }>("PATCH", `/agents/${action.agentId}`, { status: action.type === "pause" ? "paused" : "idle" });
+                return t("Agent updated: {0}", agent.name);
+              }
+              case "agent-budget":
+                await client.json("PATCH", `/agents/${action.agentId}`, { budgetUsdMonthly: action.usd });
+                return t("Budget set: {0}", money(action.usd));
+              case "company-budget":
+                await client.json("PATCH", `/companies/${companyId}`, { monthlyBudgetUsd: action.usd });
+                return t("Budget set: {0}", money(action.usd));
+              case "task-add": {
+                const { task } = await client.json<{ task: { title: string } }>("POST", `/companies/${companyId}/tasks`, { title: action.title, assignee: action.agentId });
+                return t("Task added: {0}", task.title);
+              }
+              case "task-run": {
+                const { task } = await client.json<{ task: { title: string; status: string; note: string | null } }>("POST", `/tasks/${action.taskId}/run`);
+                return `${task.title}: ${statusText(task.status)}${task.note ? ` · ${task.note}` : ""}`;
+              }
+              case "task-cancel": case "task-reopen": {
+                const { task } = await client.json<{ task: { title: string; status: string } }>("PATCH", `/tasks/${action.taskId}`, { status: action.type === "task-cancel" ? "CANCELLED" : "OPEN" });
+                return `${task.title}: ${statusText(task.status)}`;
+              }
+              default: return "";
+            }
+          },
+        });
+        return;
+      }
       if (sub === "hire") {
         const result = await call<any>("POST", `/companies/${companyId}/hire`, await hireBody());
         emit(flags, result, () => reportHire(result));
