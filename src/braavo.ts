@@ -807,7 +807,44 @@ async function main(): Promise<void> {
       const { SkillRegistry, SkillError } = await import("./daemon/skills");
       const registry = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
       const action = positionals[0] ?? "list";
-      const skillsUsage = "usage: braavo skills [list] | show <name> | add-dir <path> | rm-dir <path> [--json]";
+      const skillsUsage = "usage: braavo skills [list] | show <name> | add-dir <path> | rm-dir <path> | search <words> | info <name> | install <name>[@version] [--yes] | update [<name>] [--yes] | remove <name> --yes | report <name> --reason <text> [--high] [--version <v>] | check [--json]";
+      // Community skills: the registry on the platform; packages are signature-checked before anything is written.
+      const market = await import("./daemon/skill-market");
+      const skillsDir = `${CONFIG_DIR}/skills`;
+      const pub = (path: string) => apiFetch(path, { cfg, auth: false });
+      const freshRevocations = async () => {
+        // Installing wants a list at most an hour old; otherwise fetch and verify a new one.
+        const cached = market.cachedRevocations(skillsDir, 60 * 60_000);
+        if (cached) return cached.entries;
+        const list = await pub("/skills/revocations") as import("./daemon/skill-market").RevocationList;
+        const entries = market.verifyRevocations(list);
+        market.saveRevocations(skillsDir, list);
+        return entries;
+      };
+      const confirmed = async (question: string) => {
+        if (has(flags, "yes")) return true;
+        if (!process.stdin.isTTY) die(t("Confirmation needed: run in a terminal or pass --yes."));
+        return /^(y|yes|e|evet)$/i.test(await prompt(`${question} [y/N] `));
+      };
+      const installFromRegistry = async (name: string, version?: string, previous?: string) => {
+        const info = await pub(`/skills/${encodeURIComponent(name)}`);
+        const v = version ?? info.latest?.version;
+        if (!v) die(t("No such skill: {0}", name));
+        if (!has(flags, "json")) {
+          console.log([`${info.name}@${v} · ${info.trust} · ${info.publisher?.handle ?? "?"} · ${t("downloads: {0}", String(info.downloads))} · ${t("open reports: {0}", String(info.openReports))}`,
+            `files: ${(info.latest?.files ?? []).map((f: { path: string }) => f.path).join(", ")}`, "", info.latest?.skillMd ?? ""].join("\n"));
+          if (previous !== undefined) {
+            const { diffLines } = await import("./forge/monitor");
+            const d = diffLines(previous, info.latest?.skillMd ?? "");
+            console.log(["", t("Changes in SKILL.md:"), ...d.removed.map(l => `- ${l}`), ...d.added.map(l => `+ ${l}`)].join("\n"));
+          }
+        }
+        if (!(await confirmed(t("Install {0}? Its instructions go into the prompts of agents you give it to.", `${name}@${v}`)))) die(t("Not installed."));
+        const pkg = await pub(`/skills/${encodeURIComponent(name)}/versions/${encodeURIComponent(v)}`);
+        const verified = market.verifyPackage(pkg, { name, version: v });
+        if (market.isRevoked(await freshRevocations(), verified.manifest)) die(t("{0} was revoked by the registry; not installed.", `${name}@${v}`));
+        return { dir: market.installPackage(skillsDir, verified, pkg), version: v };
+      };
       try {
         if (action === "list") {
           const skills = registry.list([process.cwd()]);
@@ -822,6 +859,63 @@ async function main(): Promise<void> {
           emit(flags, skill, () => [`${skill!.name} · ${skill!.source} · ${skill!.dir}`, skill!.description, ...(skill!.files.length ? [`files: ${skill!.files.join(", ")}`] : []), "", skill!.body].join("\n"));
           return;
         }
+        if (action === "search") {
+          const { skills } = await pub(`/skills?q=${encodeURIComponent(positionals.slice(1).join(" "))}`) as { skills: Array<{ name: string; trust: string; latest: string; downloads: number; description: string }> };
+          emit(flags, skills, () => skills.length ? skills.map(s => `${`${s.name}@${s.latest}`.padEnd(32)} ${s.trust.padEnd(10)} ${s.description.replace(/\s+/g, " ").slice(0, 90)}`).join("\n") : t("No community skills found."));
+          return;
+        }
+        if (action === "info") {
+          if (!positionals[1]) usage(skillsUsage);
+          const info = await pub(`/skills/${encodeURIComponent(positionals[1])}`);
+          emit(flags, info, () => [`${info.name} · ${info.trust} · ${info.publisher?.handle ?? "?"} · ${t("downloads: {0}", String(info.downloads))} · ${t("open reports: {0}", String(info.openReports))}`, info.description,
+            `versions: ${info.versions.map((v: { version: string }) => v.version).join(", ")}`, `files: ${(info.latest?.files ?? []).map((f: { path: string }) => f.path).join(", ")}`, "", info.latest?.skillMd ?? ""].join("\n"));
+          return;
+        }
+        if (action === "install") {
+          const [name, version] = (positionals[1] ?? "").split("@");
+          if (!name) usage(skillsUsage);
+          const done = await installFromRegistry(name, version || undefined);
+          emit(flags, done, () => t("Installed {0} in {1}. Give it to an agent: braavo company set <agent> --skills {2}", `${name}@${done.version}`, done.dir, name));
+          return;
+        }
+        if (action === "update") {
+          const locks = [...market.installed(skillsDir).values()].filter(l => !l.revoked && (!positionals[1] || l.name === positionals[1]));
+          const updated: string[] = [];
+          for (const lock of locks) {
+            const info = await pub(`/skills/${encodeURIComponent(lock.name)}`);
+            if (!info.latest || info.latest.version === lock.version) continue;
+            const { readFileSync } = await import("node:fs");
+            const before = readFileSync(`${skillsDir}/${lock.name}/SKILL.md`, "utf8");
+            const done = await installFromRegistry(lock.name, info.latest.version, before);
+            updated.push(`${lock.name}@${done.version}`);
+          }
+          emit(flags, { updated }, () => updated.length ? t("Updated: {0}", updated.join(", ")) : t("All community skills are up to date."));
+          return;
+        }
+        if (action === "remove") {
+          const name = positionals[1];
+          if (!name || !market.installed(skillsDir).has(name)) die(t("No such skill: {0}", name ?? ""));
+          if (!(await confirmed(t("Remove {0} and its files?", name!)))) die(t("Not removed."));
+          const { rmSync } = await import("node:fs");
+          rmSync(`${skillsDir}/${name}`, { recursive: true, force: true });
+          emit(flags, { removed: name }, () => t("Removed {0}.", name!));
+          return;
+        }
+        if (action === "report") {
+          const name = positionals[1]; const reason = flag(flags, "reason");
+          if (!name || !reason) usage(skillsUsage);
+          const r = await apiFetch(`/skills/${encodeURIComponent(name!)}/report`, { cfg, method: "POST", body: { reason, severity: has(flags, "high") ? "HIGH" : "LOW", ...(flag(flags, "version") ? { version: flag(flags, "version") } : {}) } });
+          emit(flags, r, () => t("Report sent. Thank you."));
+          return;
+        }
+        if (action === "check") {
+          const list = await pub("/skills/revocations") as import("./daemon/skill-market").RevocationList;
+          const entries = market.verifyRevocations(list);
+          market.saveRevocations(skillsDir, list);
+          const revoked = market.applyRevocations(skillsDir, entries);
+          emit(flags, { revoked }, () => revoked.length ? t("Revoked and switched off: {0}", revoked.join(", ")) : t("No installed skill is revoked."));
+          return;
+        }
         if (action === "add-dir" || action === "rm-dir") {
           if (!positionals[1]) usage(skillsUsage);
           const cfg = action === "add-dir" ? registry.addProject(positionals[1]) : registry.removeProject(positionals[1]);
@@ -829,7 +923,7 @@ async function main(): Promise<void> {
           return;
         }
       } catch (error) {
-        if (error instanceof SkillError) die(error.message);
+        if (error instanceof SkillError || error instanceof market.MarketError) die(error.message);
         throw error;
       }
       usage(skillsUsage);
@@ -2189,6 +2283,14 @@ async function main(): Promise<void> {
         const { ensureConsolidationRoutine } = await import("./daemon/compaction");
         for (const company of store.listCompanies()) ensureConsolidationRoutine(store, company.id);
         triggers.start();
+        // Community skills: check the registry's signed revocation list a minute after start, then daily.
+        const skillMarket = await import("./daemon/skill-market");
+        const checkSkillRevocations = () => void skillMarket.refreshRevocations({
+          skillsDir: `${CONFIG_DIR}/skills`, store, notify,
+          fetchList: () => apiFetch("/skills/revocations", { cfg, auth: false }),
+        }).catch(() => undefined);
+        setTimeout(checkSkillRevocations, 60_000).unref();
+        setInterval(checkSkillRevocations, skillMarket.REVOCATIONS_MAX_AGE_MS).unref();
         daemon.startTicking();
         console.log(t("Daemon running · pid {0} · port {1}", process.pid, port));
         // Opt-in phone chat over the cloud relay (docs/DAEMON-CHAT.md §4); outbound connections only.

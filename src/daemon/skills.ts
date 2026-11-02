@@ -14,6 +14,8 @@ import { dirname, join, resolve } from "node:path";
  * instructions in its system prompt (conversations freeze them with the memory snapshot).
  * Nothing in a skill folder is executed: scripts next to SKILL.md are listed, never run.
  * On a name clash the project skill wins over the user skill, as in Claude Code.
+ * A community skill the registry revoked (its `.braavo-skill.json` lock is marked
+ * `revoked`, skill-market.ts) is skipped everywhere: no listing, no prompt.
  */
 
 export const SKILL_BODY_MAX = 12_000;
@@ -102,6 +104,7 @@ export class SkillRegistry {
         const dir = join(root, entry);
         const file = join(dir, "SKILL.md");
         try { if (!statSync(dir).isDirectory() || !existsSync(file)) continue; } catch { continue; }
+        if (isRevokedInstall(dir)) continue;
         const parsed = parseSkillFile(readFileSync(file, "utf8").slice(0, 200_000));
         const name = parsed?.meta.name ?? "";
         if (!parsed || !NAME.test(name)) continue;
@@ -146,6 +149,11 @@ export class SkillRegistry {
     }
     return parts.join("\n\n");
   }
+}
+
+/** A registry install whose lock the revocation check marked; never loaded. */
+function isRevokedInstall(dir: string): boolean {
+  try { return !!(JSON.parse(readFileSync(join(dir, ".braavo-skill.json"), "utf8")) as { revoked?: unknown }).revoked; } catch { return false; }
 }
 
 export const isSkillName = (v: unknown): v is string => typeof v === "string" && NAME.test(v);
