@@ -1,5 +1,7 @@
 import type { DaemonStore } from "./store";
 import type { CompanyMemory } from "./memory";
+import type { AgentRow } from "./store";
+import { consolidateMemory } from "./compaction";
 import { budgetBlock, checkBudgets } from "./budget";
 import { collectStream } from "../core/stream";
 import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
@@ -67,6 +69,25 @@ export function appendFinding(root: string, companyId: string, role: string, ent
 
 export interface RunResult { outcome: string; note?: string }
 
+/**
+ * Plan 4.4: the nightly memory consolidation. Archiving needs no model; the summary uses
+ * the routine's agent only when it has a usable model within budget.
+ */
+async function runConsolidation(store: DaemonStore, routine: { company_id: string }, agent: AgentRow, deps: RunnerDeps, noModel: string | null): Promise<RunResult> {
+  if (!deps.memory) return { outcome: "skipped-preflight-unsupported", note: "company memory is not enabled" };
+  const call = noModel ? null : prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
+  const summarize = call?.ok ? async (_owner: AgentRow, text: string) => {
+    const r = await collectStream(call.stream({ system: CONSOLIDATE_SYSTEM, messages: [{ role: "user", content: text.slice(-60_000) }] }, AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)));
+    store.recordCost({ companyId: routine.company_id, agentId: agent.id, provider: agent.provider, model: agent.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens });
+    return r.text;
+  } : undefined;
+  const report = await consolidateMemory(store, deps.memory, routine.company_id, { summarize });
+  const how = summarize ? `${report.summarized} summarised` : `archived only${noModel ? ` (${noModel.split(":")[0]})` : call && !call.ok ? " (no usable model)" : ""}`;
+  return { outcome: report.agents ? "consolidated" : "no-change", note: `${report.agents} journals, ${report.archived} entries archived, ${how}` };
+}
+
+const CONSOLIDATE_SYSTEM = "You keep an agent's work journal short. Summarise the journal entries you are given into at most 12 bullets: what was done, decisions, facts worth keeping, open threads. Same language as the entries.";
+
 export async function runRoutine(store: DaemonStore, routineId: string, deps: RunnerDeps): Promise<RunResult> {
   const routine = store.getRoutine(routineId);
   if (!routine) return { outcome: "failed", note: "routine not found" };
@@ -81,6 +102,7 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   let preflight: { type?: unknown };
   try { preflight = JSON.parse(routine.preflight); } catch { preflight = {}; }
   if (preflight.type === "web") return runWebRoutine(store, routine, agent, preflight as { urls?: unknown; notify?: unknown }, deps, blocked);
+  if (preflight.type === "consolidate") return runConsolidation(store, routine, agent, deps, blocked ?? (setupNeeded ? SETUP_NOTE : null));
   if (blocked) return { outcome: "skipped-budget", note: blocked };
   if (setupNeeded) return { outcome: "failed", note: SETUP_NOTE };
   if (preflight.type !== "none") return { outcome: "skipped-preflight-unsupported", note: `preflight ${String(preflight.type)} not implemented` };

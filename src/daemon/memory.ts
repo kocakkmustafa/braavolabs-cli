@@ -13,6 +13,7 @@ import { dot, fromBlob, hashText, rrf, toBlob, type Embedder } from "./vectors";
  *     departments/<department>.md     department scope
  *     agents/<slug>/core.md           the agent's core note (≤ CORE_MAX chars)
  *     agents/<slug>/notes.md          the agent's journal: finished tasks are appended here
+ *     agents/<slug>/archive/<yyyy-mm>.md  older journal entries moved by the nightly consolidation
  *     findings/<role>.md              watch-routine findings (written by the runner)
  *     notes/<name>.md                 anything else at company scope
  *
@@ -62,6 +63,8 @@ export function scopeOf(path: string): Scope | null {
   let m = /^departments\/([a-z0-9-]{1,60})\.md$/.exec(path);
   if (m) return `department:${m[1]}`;
   m = /^agents\/([a-z0-9-]{1,80})\/(core|notes)\.md$/.exec(path);
+  if (m) return `agent:${m[1]}`;
+  m = /^agents\/([a-z0-9-]{1,80})\/archive\/\d{4}-\d{2}\.md$/.exec(path);
   if (m) return `agent:${m[1]}`;
   m = /^findings\/([a-z0-9-]{1,60})\.md$/.exec(path);
   if (m) return `agent:${m[1]}`;
@@ -140,7 +143,7 @@ export class CompanyMemory {
   private walk(dir: string): string[] {
     const out: string[] = [];
     const visit = (d: string, depth: number) => {
-      if (depth > 2 || out.length >= MAX_FILES || !existsSync(d)) return;
+      if (depth > 3 || out.length >= MAX_FILES || !existsSync(d)) return;
       for (const entry of readdirSync(d, { withFileTypes: true })) {
         if (entry.name.startsWith(".")) continue;
         const full = join(d, entry.name);

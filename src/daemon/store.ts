@@ -110,6 +110,9 @@ const MIGRATIONS: string[] = [
      title TEXT NOT NULL, tool TEXT NOT NULL, paths TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL,
      created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT);
    CREATE INDEX approval_status ON approval(company_id, status, created_at);`,
+  // 9: compaction (plan 4.4) — a running summary per conversation and the last message it covers.
+  `ALTER TABLE conversation ADD COLUMN summary TEXT;
+   ALTER TABLE conversation ADD COLUMN summary_upto TEXT;`,
 ];
 
 export interface TaskRow {
@@ -144,6 +147,8 @@ export interface ConversationRow {
   effort: string | null; source: string | null; external_id: string | null; created_at: string; updated_at: string;
   memory_snapshot: string | null;
   skills_snapshot: string | null;
+  summary: string | null;
+  summary_upto: string | null;
 }
 export interface ConversationSummary extends ConversationRow { message_count: number; last_message: string | null }
 export interface MessageRow { id: string; conversation_id: string; role: string; content: string; at: string; stop_reason: string | null }
@@ -216,6 +221,10 @@ export class DaemonStore {
         patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
         patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
+  setConversationSummary(id: string, summary: string, uptoMessageId: string): void {
+    this.db.prepare("UPDATE conversation SET summary = ?, summary_upto = ? WHERE id = ?").run(summary, uptoMessageId, id);
+  }
+
   // ─── CLI employees (plan 3.1) ─────────────────────────────────────────
   setWorker(agentId: string, w: { workdir?: string | null; approvalPolicy?: string }): void {
     const cur = this.getAgent(agentId);
