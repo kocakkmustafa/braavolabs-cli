@@ -18,6 +18,7 @@ export const COMMAND_HELP = [
 ["direct", "braavo direct <provider> <question> [--model <name>] [--repo]", "Ask a provider with your local key"],
 ["setup", "braavo setup [--host <url>] [--json]", "Check the daemon, your keys and local models"],
 ["models", "braavo models [--host <url>] | pull <name>", "List installed models and key providers"],
+["skills", "braavo skills [list] | show <name> | add-dir <path> | rm-dir <path> [--json]", "List SKILL.md skills you can give agents"],
 ["spawn", "braavo spawn <claude|codex> [args...] [--dir <path>] [--quiet] [--bridge] | --list", "Run your own authenticated vendor CLI"],
 ["fix", "braavo fix --cmd <test-command> [--via local|direct|ask] [--provider <p>] [--repo]", "Run a test command and suggest a fix"],
 ["mcp", "braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json <args>] | serve", "Manage and call local MCP servers"],

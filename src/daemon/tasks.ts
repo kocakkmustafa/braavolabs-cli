@@ -43,14 +43,15 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
   store.setAgentStatus(agent.id, "running");
   const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
   try {
-    let snapshot = ""; let related: ReturnType<NonNullable<RunnerDeps["memory"]>["search"]> = [];
+    let snapshot = ""; let related: ReturnType<NonNullable<RunnerDeps["memory"]>["search"]> = []; let skills = "";
+    try { skills = deps.skills?.promptFor(store.agentSkills(agent.id)) ?? ""; } catch { /* a broken skill folder must not fail the task */ }
     try {
       snapshot = deps.memory?.snapshot(agent.id) ?? "";
       related = deps.memory?.search(task.company_id, `${task.title} ${task.body}`.slice(0, 500), { limit: 3, any: true }) ?? [];
     } catch { /* memory is context, never a reason to fail the task */ }
     const signal = AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS);
-    const result = await collectStream(call.stream({ system: withMemory(agent.system_prompt, snapshot, related), messages: [{ role: "user", content: prompt }] }, signal));
-    const conversationId = store.createConversation({ companyId: task.company_id, agentId: agent.id, title: task.title.slice(0, 120), provider: agent.provider, model: agent.model, memorySnapshot: snapshot });
+    const result = await collectStream(call.stream({ system: withMemory(agent.system_prompt, snapshot, related, skills), messages: [{ role: "user", content: prompt }] }, signal));
+    const conversationId = store.createConversation({ companyId: task.company_id, agentId: agent.id, title: task.title.slice(0, 120), provider: agent.provider, model: agent.model, memorySnapshot: snapshot, skillsSnapshot: skills });
     store.addMessage(conversationId, "user", prompt);
     if (result.text) store.addMessage(conversationId, "assistant", result.text, { stopReason: result.stopReason });
     store.recordCost({ companyId: task.company_id, agentId: agent.id, runId, provider: agent.provider, model: agent.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens });

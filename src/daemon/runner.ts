@@ -32,6 +32,8 @@ export interface RunnerDeps extends ProviderDeps {
   memoryRoot?: string;
   /** Company memory (plan 4.1–4.3): snapshots, related notes, the task journal and git commits. */
   memory?: CompanyMemory;
+  /** Skills (plan 5.3): an agent's task runs with its skills' instructions. */
+  skills?: { promptFor(names: string[]): string };
   /** Desktop/phone notification for a finding; failures are ignored. */
   notify?: (title: string, body: string) => void;
 }

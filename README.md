@@ -629,7 +629,7 @@ braavo mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 
 #### Your company as an MCP server
 
-`braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
+`braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `list_skills`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
 
 ```bash
 claude mcp add braavo -- braavo mcp serve      # Claude Code

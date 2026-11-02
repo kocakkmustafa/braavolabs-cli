@@ -152,6 +152,13 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "list_skills", title: "List skills",
+    description: "SKILL.md skills installed for Braavolabs agents (user folder and registered projects). The company panel shows which agent has which skill.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async (_a, d) => d.json("GET", "/skills"),
+  },
+  {
     name: "search_memory", title: "Search company memory",
     description: "Full-text search over the company's notes: company.md, department notes, agents' core notes and journals, watch findings. Words match by prefix; all words must match.",
     inputSchema: {

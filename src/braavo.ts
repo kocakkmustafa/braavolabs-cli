@@ -801,6 +801,41 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "skills": {
+      // Plan 5.3: SKILL.md skills for agents. Reads the folders directly (no daemon needed);
+      // the working directory counts as a project for this call.
+      const { SkillRegistry, SkillError } = await import("./daemon/skills");
+      const registry = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
+      const action = positionals[0] ?? "list";
+      const skillsUsage = "usage: braavo skills [list] | show <name> | add-dir <path> | rm-dir <path> [--json]";
+      try {
+        if (action === "list") {
+          const skills = registry.list([process.cwd()]);
+          emit(flags, { skills, projects: registry.config().projects }, () => skills.length
+            ? skills.map(s => `${s.name.padEnd(28)} ${s.source.padEnd(8)} ${s.description.replace(/\s+/g, " ").slice(0, 100)}`).join("\n")
+            : t("No skills yet. Put a folder with SKILL.md in {0}, or run: braavo skills add-dir <project>", `${CONFIG_DIR}/skills`));
+          return;
+        }
+        if (action === "show") {
+          const skill = positionals[1] ? registry.get(positionals[1], [process.cwd()]) : null;
+          if (!skill) die(t("No such skill: {0}", positionals[1] ?? ""));
+          emit(flags, skill, () => [`${skill!.name} · ${skill!.source} · ${skill!.dir}`, skill!.description, ...(skill!.files.length ? [`files: ${skill!.files.join(", ")}`] : []), "", skill!.body].join("\n"));
+          return;
+        }
+        if (action === "add-dir" || action === "rm-dir") {
+          if (!positionals[1]) usage(skillsUsage);
+          const cfg = action === "add-dir" ? registry.addProject(positionals[1]) : registry.removeProject(positionals[1]);
+          emit(flags, cfg, () => t("Skill folders: {0}", cfg.projects.join(", ") || "—"));
+          return;
+        }
+      } catch (error) {
+        if (error instanceof SkillError) die(error.message);
+        throw error;
+      }
+      usage(skillsUsage);
+      return;
+    }
+
     case "models": {
       if (positionals[0] === "pull") {
         // Pull a model into the local Ollama (POST /api/pull, streamed progress). Local only; no account.
@@ -1511,7 +1546,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1646,6 +1681,16 @@ async function main(): Promise<void> {
         if (effort) body.effort = effort === "default" ? null : effort;
         if (has(flags, "pause")) body.status = "paused";
         if (has(flags, "resume")) body.status = "idle";
+        const skillList = flag(flags, "skills");
+        if (skillList !== undefined) {
+          // Plan 5.3: replace the agent's skills (comma list, or none).
+          const names = skillList === "none" ? [] : skillList.split(",").map(x => x.trim()).filter(Boolean);
+          const { skills } = await call<{ skills: string[] }>("PUT", `/agents/${agent.id}/skills`, { skills: names });
+          if (!Object.keys(body).length && flag(flags, "budget") === undefined) {
+            emit(flags, { agent: agent.id, skills }, () => t("Agent updated: {0}", `${agent.name} · skills: ${skills.join(", ") || "—"}`));
+            return;
+          }
+        }
         const agentBudget = flag(flags, "budget");
         if (agentBudget !== undefined) {
           const v = agentBudget === "none" ? null : Number(agentBudget);
@@ -1944,8 +1989,10 @@ async function main(): Promise<void> {
         const { ChatService } = await import("./daemon/chat");
         const { CompanyMemory } = await import("./daemon/memory");
         const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store);
+        const { SkillRegistry } = await import("./daemon/skills");
+        const skills = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
         let daemon: InstanceType<typeof Daemon> | undefined;
-        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider), memory },
+        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider), memory, skills },
           conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
         // Findings reach the user as a macOS notification (osascript, argv only — no shell) and over the relay.
         let relayAudit: ((text: string) => void) | undefined;
@@ -1959,7 +2006,7 @@ async function main(): Promise<void> {
         const { runTask } = await import("./daemon/tasks");
         const { loadPriceOverrides } = await import("./daemon/pricing");
         store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
-        daemon = new Daemon({ store, token, version, chat, memory, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory }), runTask: taskId => runTask(store, taskId, { keys, notify, memory }) });
+        daemon = new Daemon({ store, token, version, chat, memory, skills, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

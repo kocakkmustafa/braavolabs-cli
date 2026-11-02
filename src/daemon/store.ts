@@ -89,6 +89,11 @@ const MIGRATIONS: string[] = [
      mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (company_id, path));
    CREATE VIRTUAL TABLE memory_fts USING fts5(company_id UNINDEXED, path UNINDEXED, scope UNINDEXED, heading, content, folded,
      tokenize = 'unicode61 remove_diacritics 2');`,
+  // 6: skills (plan 5.3) — which SKILL.md skills an agent uses, frozen per conversation like memory.
+  `CREATE TABLE agent_skill (
+     agent_id TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE, skill TEXT NOT NULL, position INTEGER NOT NULL,
+     PRIMARY KEY (agent_id, skill));
+   ALTER TABLE conversation ADD COLUMN skills_snapshot TEXT;`,
 ];
 
 export interface TaskRow {
@@ -115,6 +120,7 @@ export interface ConversationRow {
   id: string; company_id: string | null; agent_id: string | null; title: string; provider: string | null; model: string | null;
   effort: string | null; source: string | null; external_id: string | null; created_at: string; updated_at: string;
   memory_snapshot: string | null;
+  skills_snapshot: string | null;
 }
 export interface ConversationSummary extends ConversationRow { message_count: number; last_message: string | null }
 export interface MessageRow { id: string; conversation_id: string; role: string; content: string; at: string; stop_reason: string | null }
@@ -187,6 +193,19 @@ export class DaemonStore {
         patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
         patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
+  /** The agent's skills in the order the user gave them (plan 5.3). */
+  agentSkills(agentId: string): string[] {
+    return (this.db.prepare("SELECT skill FROM agent_skill WHERE agent_id = ? ORDER BY position").all(agentId) as Array<{ skill: string }>).map(r => r.skill);
+  }
+  setAgentSkills(agentId: string, skills: string[]): void {
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM agent_skill WHERE agent_id = ?").run(agentId);
+      const ins = this.db.prepare("INSERT INTO agent_skill(agent_id, skill, position) VALUES (?, ?, ?)");
+      [...new Set(skills)].forEach((s, i) => ins.run(agentId, s, i));
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   /** Token totals per agent since `sinceIso` (cost_event rows). */
   agentCosts(companyId: string, sinceIso: string): Array<{ agent_id: string | null; input_tokens: number; output_tokens: number; usd: number; runs: number }> {
     return this.db.prepare(`SELECT agent_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(usd) AS usd, COUNT(*) AS runs
@@ -239,13 +258,13 @@ export class DaemonStore {
   // ─── Conversations ─────────────────────────────────────────────────────
   createConversation(input: {
     companyId?: string; agentId?: string; title?: string; provider?: string; model?: string; effort?: string | null;
-    source?: string; externalId?: string; createdAt?: string; memorySnapshot?: string;
+    source?: string; externalId?: string; createdAt?: string; memorySnapshot?: string; skillsSnapshot?: string;
   }): string {
     const at = input.createdAt ?? this.now(); const id = `cv_${randomUUID()}`;
-    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, memory_snapshot, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, memory_snapshot, skills_snapshot, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, input.companyId ?? null, input.agentId ?? null, input.title ?? "", input.provider ?? null, input.model ?? null, input.effort ?? null,
-        input.source ?? null, input.externalId ?? null, input.memorySnapshot || null, at, at);
+        input.source ?? null, input.externalId ?? null, input.memorySnapshot || null, input.skillsSnapshot || null, at, at);
     return id;
   }
   getConversation(id: string): ConversationRow | undefined { return this.db.prepare("SELECT * FROM conversation WHERE id = ?").get(id) as ConversationRow | undefined; }

@@ -37,6 +37,8 @@ export interface ChatDeps extends ProviderDeps {
   lmStudioHost?: string;
   /** Company memory (plan 4.1): an agent conversation starts with a frozen snapshot of it. */
   memory?: { snapshot(agentId: string): string };
+  /** Skills (plan 5.3): an agent conversation freezes its skills' instructions at the start. */
+  skills?: { promptFor(names: string[]): string };
 }
 
 export interface ConversationDto {
@@ -133,7 +135,10 @@ export class ChatService {
     const title = typeof input.title === "string" ? input.title.trim().slice(0, 200) : "";
     const id = this.store.createConversation({
       title, provider: m.provider, model: m.model, effort: m.effort, source: input.source,
-      ...(agent ? { agentId: agent.id, companyId: agent.company_id, memorySnapshot: this.deps.memory?.snapshot(agent.id) } : {}),
+      ...(agent ? {
+        agentId: agent.id, companyId: agent.company_id, memorySnapshot: this.deps.memory?.snapshot(agent.id),
+        skillsSnapshot: this.deps.skills?.promptFor(this.store.agentSkills(agent.id)),
+      } : {}),
     });
     this.onChange(id);
     return toDto(this.store.getConversation(id)!);
@@ -223,7 +228,7 @@ export class ChatService {
       let text = ""; let inputTokens = 0; let outputTokens = 0; let stopReason = "other"; let failed: string | undefined;
       try {
         const turnSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)]);
-        for await (const ev of call.stream({ system: agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "") : undefined, messages: history }, turnSignal)) {
+        for await (const ev of call.stream({ system: agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "", [], c.skills_snapshot ?? "") : undefined, messages: history }, turnSignal)) {
           if (ev.type === "text") { text += ev.text; emit({ type: "delta", text: ev.text }); }
           else if (ev.type === "reasoning") emit({ type: "reasoning", text: ev.text });
           else if (ev.type === "usage") { inputTokens = ev.inputTokens; outputTokens = ev.outputTokens; }

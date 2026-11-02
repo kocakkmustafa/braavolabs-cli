@@ -78,7 +78,7 @@ export function hire(store: DaemonStore, companyId: string, req: HireRequest, mo
 
 export interface PanelAgent {
   id: string; name: string; role: string; title: string | null; provider: string; model: string; effort: string | null; status: string;
-  reportsToAgentId: string | null; budgetUsdMonthly: number | null; department: string; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
+  reportsToAgentId: string | null; budgetUsdMonthly: number | null; department: string; skills: string[]; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
   /** Share of the agent's monthly budget used (null when it has no budget). */
   budgetRatio: number | null;
 }
@@ -93,7 +93,7 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
     const c = costs.get(a.id);
     return {
       id: a.id, name: a.name, role: a.role, title: a.title, provider: a.provider, model: a.model, effort: a.effort, status: a.status,
-      reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly, department: departmentOf(a),
+      reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly, department: departmentOf(a), skills: store.agentSkills(a.id),
       month: { inputTokens: c?.input_tokens ?? 0, outputTokens: c?.output_tokens ?? 0, usd: c?.usd ?? 0, runs: c?.runs ?? 0 },
       budgetRatio: a.budget_usd_monthly && a.budget_usd_monthly > 0 ? (c?.usd ?? 0) / a.budget_usd_monthly : a.budget_usd_monthly === 0 ? 1 : null,
     };

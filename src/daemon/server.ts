@@ -4,6 +4,7 @@ import { DaemonStore, TASK_STATUSES } from "./store";
 import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
 import { MemoryError, type CompanyMemory } from "./memory";
+import { isSkillName, SkillError, type SkillRegistry } from "./skills";
 import { CompanyError, hire, panel, updateAgent } from "./company";
 import { AGENT_TEMPLATES } from "../core/templates";
 /**
@@ -46,6 +47,8 @@ export interface DaemonOptions {
   runTask?: (taskId: string) => Promise<{ outcome: string; note?: string }>;
   /** Company memory (plan 4.1–4.3); memory routes answer 404 without it. */
   memory?: CompanyMemory;
+  /** Skills (plan 5.3); skill routes answer 404 without it. */
+  skills?: SkillRegistry;
 }
 
 export type DaemonEvent =
@@ -337,6 +340,30 @@ export class Daemon {
             this.taskBusy = false;
           }
         }
+        case "GET /skills":
+          return this.json(res, 200, { skills: this.skills().list(), projects: this.skills().config().projects });
+        case "GET /skills/:id": {
+          const skill = isSkillName(parts[2]) ? this.skills().get(parts[2]) : null;
+          if (!skill) throw new HttpError(404, "skill not found");
+          return this.json(res, 200, { skill });
+        }
+        case "GET /agents/:id/skills": {
+          if (!store.getAgent(id)) throw new HttpError(404, "agent not found");
+          return this.json(res, 200, { skills: store.agentSkills(id) });
+        }
+        case "PUT /agents/:id/skills": {
+          const agent = store.getAgent(id);
+          if (!agent) throw new HttpError(404, "agent not found");
+          const body = await readJson(req);
+          if (!Array.isArray(body.skills) || body.skills.length > 20 || !body.skills.every(isSkillName)) throw new HttpError(400, "skills must be a list of at most 20 skill names");
+          const known = new Set(this.skills().list().map(s => s.name));
+          const missing = (body.skills as string[]).filter(s => !known.has(s));
+          if (missing.length) throw new HttpError(400, `unknown skills: ${missing.join(", ")}`);
+          store.setAgentSkills(id, body.skills);
+          store.activity({ companyId: agent.company_id, actor: "user", verb: "skills-set", objectType: "agent", objectId: id, summary: `${agent.name}: ${(body.skills as string[]).join(", ") || "none"}` });
+          this.emit({ type: "company.changed", companyId: agent.company_id });
+          return this.json(res, 200, { skills: store.agentSkills(id) });
+        }
         case "GET /companies/:id/memory": {
           // ?q= searches (optionally ?scope=), ?path= reads one note, otherwise the list of notes.
           const memory = this.memory();
@@ -427,7 +454,7 @@ export class Daemon {
           throw new HttpError(404, "not found");
       }
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError || error instanceof MemoryError;
+      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError || error instanceof MemoryError || error instanceof SkillError;
       const status = known ? error.status : 500;
       const code = error instanceof ChatError ? error.code : error instanceof HttpError ? error.code : undefined;
       this.json(res, status, { error: known ? error.message : "internal error", ...(code ? { code } : {}) });
@@ -437,6 +464,11 @@ export class Daemon {
   private chat(): ChatService {
     if (!this.o.chat) throw new HttpError(404, "chat is not enabled on this daemon");
     return this.o.chat;
+  }
+
+  private skills(): SkillRegistry {
+    if (!this.o.skills) throw new HttpError(404, "skills are not enabled on this daemon");
+    return this.o.skills;
   }
 
   private memory(): CompanyMemory {
