@@ -99,6 +99,17 @@ const MIGRATIONS: string[] = [
      company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, path TEXT NOT NULL, chunk INTEGER NOT NULL,
      model TEXT NOT NULL, hash TEXT NOT NULL, scope TEXT NOT NULL, heading TEXT NOT NULL, excerpt TEXT NOT NULL, vector BLOB NOT NULL,
      PRIMARY KEY (company_id, path, chunk, model));`,
+  // 8: CLI employees (plan 3.1) — working folder, approval policy, structured task events, approval queue.
+  `ALTER TABLE agent ADD COLUMN workdir TEXT;
+   ALTER TABLE agent ADD COLUMN approval_policy TEXT NOT NULL DEFAULT 'ask';
+   CREATE TABLE task_event (
+     task_id TEXT NOT NULL REFERENCES task(id) ON DELETE CASCADE, seq INTEGER NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL,
+     PRIMARY KEY (task_id, seq));
+   CREATE TABLE approval (
+     id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, agent_id TEXT, task_id TEXT,
+     title TEXT NOT NULL, tool TEXT NOT NULL, paths TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL,
+     created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT);
+   CREATE INDEX approval_status ON approval(company_id, status, created_at);`,
 ];
 
 export interface TaskRow {
@@ -108,12 +119,19 @@ export interface TaskRow {
 }
 export const TASK_STATUSES = ["OPEN", "RUNNING", "DONE", "FAILED", "CANCELLED"] as const;
 
+export interface ApprovalRow {
+  id: string; company_id: string; agent_id: string | null; task_id: string | null; title: string; tool: string; paths: string;
+  status: string; created_at: string; decided_at: string | null; decided_by: string | null;
+}
+
 export interface CompanyRow { id: string; name: string; mission: string; status: string; monthly_budget_usd: number | null; created_at: string; updated_at: string }
 export interface AgentRow {
   id: string; company_id: string; name: string; role: string; title: string | null; system_prompt: string; autonomy: string;
   reports_to_agent_id: string | null; provider: string; model: string; effort: string | null; effort_rounding: string;
   status: string; budget_usd_monthly: number | null; heartbeat_rrule: string | null; engine: string; created_at: string; updated_at: string;
   department: string | null;
+  workdir: string | null;
+  approval_policy: string;
 }
 export interface RoutineRow {
   id: string; company_id: string; agent_id: string; name: string; prompt: string; rrule: string; timezone: string; enabled: number;
@@ -198,6 +216,36 @@ export class DaemonStore {
         patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
         patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
+  // ─── CLI employees (plan 3.1) ─────────────────────────────────────────
+  setWorker(agentId: string, w: { workdir?: string | null; approvalPolicy?: string }): void {
+    const cur = this.getAgent(agentId);
+    if (!cur) return;
+    this.db.prepare("UPDATE agent SET workdir = ?, approval_policy = ?, updated_at = ? WHERE id = ?")
+      .run(w.workdir === undefined ? cur.workdir : w.workdir, w.approvalPolicy ?? cur.approval_policy, this.now(), agentId);
+  }
+  addTaskEvent(taskId: string, kind: string, data: unknown): void {
+    const next = (this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM task_event WHERE task_id = ?").get(taskId) as { n: number }).n;
+    if (next > 2_000) return; // a runaway agent cannot fill the disk
+    this.db.prepare("INSERT INTO task_event(task_id, seq, at, kind, data) VALUES (?, ?, ?, ?, ?)").run(taskId, next, this.now(), kind, JSON.stringify(data).slice(0, 20_000));
+  }
+  taskEvents(taskId: string, afterSeq = 0): Array<{ seq: number; at: string; kind: string; data: unknown }> {
+    return (this.db.prepare("SELECT seq, at, kind, data FROM task_event WHERE task_id = ? AND seq > ? ORDER BY seq").all(taskId, afterSeq) as Array<{ seq: number; at: string; kind: string; data: string }>)
+      .map(r => ({ seq: r.seq, at: r.at, kind: r.kind, data: JSON.parse(r.data) }));
+  }
+  createApproval(a: { companyId: string; agentId: string; taskId: string | null; title: string; tool: string; paths: string[] }): string {
+    const id = `ap_${randomUUID()}`;
+    this.db.prepare("INSERT INTO approval(id, company_id, agent_id, task_id, title, tool, paths, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .run(id, a.companyId, a.agentId, a.taskId, a.title.slice(0, 300), a.tool.slice(0, 40), JSON.stringify(a.paths.slice(0, 20)), this.now());
+    return id;
+  }
+  decideApproval(id: string, status: "allowed" | "rejected" | "expired", by: string): boolean {
+    return Number(this.db.prepare("UPDATE approval SET status = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'").run(status, this.now(), by, id).changes) > 0;
+  }
+  getApproval(id: string): ApprovalRow | undefined { return this.db.prepare("SELECT * FROM approval WHERE id = ?").get(id) as ApprovalRow | undefined; }
+  listApprovals(companyId: string, status?: string): ApprovalRow[] {
+    return this.db.prepare("SELECT * FROM approval WHERE company_id = ? AND (? IS NULL OR status = ?) ORDER BY created_at DESC LIMIT 100").all(companyId, status ?? null, status ?? null) as unknown as ApprovalRow[];
+  }
+
   /** The agent's skills in the order the user gave them (plan 5.3). */
   agentSkills(agentId: string): string[] {
     return (this.db.prepare("SELECT skill FROM agent_skill WHERE agent_id = ? ORDER BY position").all(agentId) as Array<{ skill: string }>).map(r => r.skill);
