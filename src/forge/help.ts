@@ -20,7 +20,7 @@ export const COMMAND_HELP = [
 ["models", "braavo models [--host <url>] | pull <name>", "List installed models and key providers"],
 ["spawn", "braavo spawn <claude|codex> [args...] [--dir <path>] [--quiet] [--bridge] | --list", "Run your own authenticated vendor CLI"],
 ["fix", "braavo fix --cmd <test-command> [--via local|direct|ask] [--provider <p>] [--repo]", "Run a test command and suggest a fix"],
-["mcp", "braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json <args>]", "Manage and call local MCP servers"],
+["mcp", "braavo mcp add <name> -- <command> [args...] | list | rm <name> | tools <name> | call <name> <tool> [--json <args>] | serve", "Manage and call local MCP servers"],
 ["whoami", "braavo whoami", "Show the current account"],
 ["runs", "braavo runs", "List recent runs"],
 ["run", "braavo run <pipelineId> --yes [--json]", "Start a pipeline run"],

@@ -1003,6 +1003,23 @@ async function main(): Promise<void> {
           ui.ok(t("Removed MCP server {0}.", name));
           return;
         }
+        case "serve": {
+          // Plan 5.2: this computer's company as an MCP server (stdio) for Claude Code, Codex, Cursor.
+          // stdout carries JSON-RPC only; the daemon is looked up per call, so it may start later.
+          const { serveMcp } = await import("./forge/mcp-server");
+          const { DaemonClient } = await import("./forge/daemon-client");
+          const paths = daemonPaths();
+          const version = (require("../package.json") as { version: string }).version;
+          await serveMcp(process.stdin, process.stdout, {
+            version,
+            daemon: () => {
+              const live = runningDaemon(paths);
+              if (!live) throw new Error("The Braavolabs daemon is not running. Start it: braavo daemon start");
+              return new DaemonClient({ port: live.port, token: ensureToken(paths) });
+            },
+          });
+          return;
+        }
         case "tools": {
           const name = positionals[1];
           if (!name) usage("usage: braavo mcp tools <name>");
