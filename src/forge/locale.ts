@@ -441,6 +441,9 @@ const rows = [
 ["CLI employee hired: {0}","CLI çalışanı işe alındı: {0}","Empleado CLI contratado: {0}","Funcionário CLI contratado: {0}","CLI-Mitarbeiter eingestellt: {0}","Employé CLI recruté : {0}","CLI の社員を採用しました: {0}","تم توظيف موظف CLI: {0}"],
 ["No approvals waiting.","Bekleyen onay yok.","No hay aprobaciones pendientes.","Nenhuma aprovação pendente.","Keine offenen Freigaben.","Aucune approbation en attente.","承認待ちはありません。","لا توجد موافقات معلقة."],
 ["Approval {0}: {1}","Onay {0}: {1}","Aprobación {0}: {1}","Aprovação {0}: {1}","Freigabe {0}: {1}","Approbation {0} : {1}","承認 {0}: {1}","الموافقة {0}: {1}"],
+["Goal added: {0}","Hedef eklendi: {0}","Objetivo agregado: {0}","Objetivo adicionado: {0}","Ziel hinzugefügt: {0}","Objectif ajouté : {0}","目標を追加しました: {0}","تمت إضافة الهدف: {0}"],
+["Goal started: {0}","Hedef başladı: {0}","Objetivo iniciado: {0}","Objetivo iniciado: {0}","Ziel gestartet: {0}","Objectif lancé : {0}","目標を開始しました: {0}","بدأ الهدف: {0}"],
+["No goals yet.","Henüz hedef yok.","Aún no hay objetivos.","Ainda não há objetivos.","Noch keine Ziele.","Aucun objectif pour l’instant.","まだ目標はありません。","لا توجد أهداف بعد."],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

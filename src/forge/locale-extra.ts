@@ -394,4 +394,7 @@ export const extraRows = [
 ["CLI employee hired: {0}","Dipendente CLI assunto: {0}","Karyawan CLI direkrut: {0}","CLI 직원을 채용했습니다: {0}","Zatrudniono pracownika CLI: {0}","CLI कर्मचारी नियुक्त: {0}","已雇用 CLI 员工：{0}"],
 ["No approvals waiting.","Nessuna approvazione in attesa.","Tidak ada persetujuan yang menunggu.","대기 중인 승인이 없습니다.","Brak oczekujących zgód.","कोई मंज़ूरी बाकी नहीं है।","没有待处理的审批。"],
 ["Approval {0}: {1}","Approvazione {0}: {1}","Persetujuan {0}: {1}","승인 {0}: {1}","Zgoda {0}: {1}","मंज़ूरी {0}: {1}","审批 {0}：{1}"],
+["Goal added: {0}","Obiettivo aggiunto: {0}","Sasaran ditambahkan: {0}","목표를 추가했습니다: {0}","Dodano cel: {0}","लक्ष्य जोड़ा गया: {0}","已添加目标：{0}"],
+["Goal started: {0}","Obiettivo avviato: {0}","Sasaran dimulai: {0}","목표를 시작했습니다: {0}","Rozpoczęto cel: {0}","लक्ष्य शुरू हुआ: {0}","目标已开始：{0}"],
+["No goals yet.","Ancora nessun obiettivo.","Belum ada sasaran.","아직 목표가 없습니다.","Brak celów.","अभी कोई लक्ष्य नहीं है।","暂无目标。"],
 ] as const;

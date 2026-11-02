@@ -9,6 +9,7 @@ import { BrowseError, type BrowserPolicy, type Page } from "./browse";
 import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
 import type { ApprovalCenter } from "./workers";
 import { ensureConsolidationRoutine } from "./compaction";
+import { newGoalId } from "./ledger";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { CompanyError, hire, panel, updateAgent } from "./company";
@@ -55,6 +56,8 @@ export interface DaemonOptions {
   memory?: CompanyMemory;
   /** Agent browser (plan 5.1): URL policy and read-only page fetches; browser routes answer 404 without it. */
   browser?: { policy(): BrowserPolicy; setPolicy(p: BrowserPolicy): void; read(url: string): Promise<Page> };
+  /** Drives one goal through the manager's ledger (plan 4.5); goals are stored but never run without it. */
+  runGoal?: (goalId: string) => Promise<{ status: string; note?: string }>;
   /** CLI employees' approval queue (plan 3.1); approval routes answer 404 without it. */
   approvals?: ApprovalCenter;
   /** Skills (plan 5.3); skill routes answer 404 without it. */
@@ -69,6 +72,7 @@ export type DaemonEvent =
   | { type: "task.changed"; taskId: string; companyId: string }
   | { type: "task.event"; taskId: string; kind: string }
   | { type: "approval.requested"; approvalId: string; companyId: string }
+  | { type: "goal.changed"; goalId: string; companyId: string }
   | { type: "approval.decided"; approvalId: string; companyId: string; status: string };
 
 class HttpError extends Error { constructor(readonly status: number, message: string, readonly code?: string) { super(message); } }
@@ -155,6 +159,7 @@ export class Daemon {
   }
 
   private taskBusy = false;
+  private goalBusy = false;
   /** Runs at most one task per pass; tasks whose agent cannot run yet are noted and passed over. */
   async runTasks(): Promise<{ taskId: string; outcome: string } | null> {
     if (!this.o.runTask || this.taskBusy) return null;
@@ -285,6 +290,35 @@ export class Daemon {
           store.activity({ companyId: id, actor: "user", verb: "hired-worker", objectType: "agent", objectId: agent.id, summary: `${agent.name} (${body.engine}) in ${body.workdir}` });
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, { agent: store.getAgent(agent.id) });
+        }
+        case "POST /companies/:id/goals": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          const agents = store.listAgents(id);
+          const manager = body.manager !== undefined ? resolveAgent(store, id, String(body.manager)) : agents.find(a => a.role === "ceo") ?? agents.find(a => !a.reports_to_agent_id);
+          if (!manager) throw new HttpError(400, "the company needs a manager (hire the General Manager, or pass manager)");
+          const goal = store.createGoal({ id: newGoalId(), companyId: id, managerAgentId: manager.id, title: str(body.title, "title", 300), body: typeof body.body === "string" ? body.body.slice(0, 20_000) : undefined });
+          store.activity({ companyId: id, actor: "user", verb: "goal-created", objectType: "goal", objectId: goal.id, summary: goal.title.slice(0, 120) });
+          this.emit({ type: "goal.changed", goalId: goal.id, companyId: id });
+          return this.json(res, 201, { goal });
+        }
+        case "GET /companies/:id/goals":
+          return this.json(res, 200, { goals: store.listGoals(id).map(g => ({ ...g, ledger: g.ledger ? JSON.parse(g.ledger) : null })) });
+        case "GET /goals/:id": {
+          const goal = store.getGoal(id);
+          if (!goal) throw new HttpError(404, "goal not found");
+          return this.json(res, 200, { goal: { ...goal, ledger: goal.ledger ? JSON.parse(goal.ledger) : null }, tasks: store.goalTasks(id) });
+        }
+        case "POST /goals/:id/run": {
+          const goal = store.getGoal(id);
+          if (!goal) throw new HttpError(404, "goal not found");
+          if (!this.o.runGoal) throw new HttpError(404, "goals are not enabled on this daemon");
+          if (this.goalBusy) throw new HttpError(409, "another goal is running; try again when it finishes");
+          if (goal.status === "DONE" || goal.status === "RUNNING") throw new HttpError(409, `goal is ${goal.status}`);
+          // A goal takes many steps: it runs in the background and reports through goal.changed events.
+          this.goalBusy = true;
+          void this.o.runGoal(id).catch(() => undefined).finally(() => { this.goalBusy = false; this.emit({ type: "goal.changed", goalId: id, companyId: goal.company_id }); });
+          return this.json(res, 202, { goal: { ...store.getGoal(id)!, ledger: undefined }, running: true });
         }
         case "GET /tasks/:id/events": {
           if (!store.getTask(id)) throw new HttpError(404, "task not found");
