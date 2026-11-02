@@ -801,6 +801,41 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "skills": {
+      // Plan 5.3: SKILL.md skills for agents. Reads the folders directly (no daemon needed);
+      // the working directory counts as a project for this call.
+      const { SkillRegistry, SkillError } = await import("./daemon/skills");
+      const registry = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
+      const action = positionals[0] ?? "list";
+      const skillsUsage = "usage: braavo skills [list] | show <name> | add-dir <path> | rm-dir <path> [--json]";
+      try {
+        if (action === "list") {
+          const skills = registry.list([process.cwd()]);
+          emit(flags, { skills, projects: registry.config().projects }, () => skills.length
+            ? skills.map(s => `${s.name.padEnd(28)} ${s.source.padEnd(8)} ${s.description.replace(/\s+/g, " ").slice(0, 100)}`).join("\n")
+            : t("No skills yet. Put a folder with SKILL.md in {0}, or run: braavo skills add-dir <project>", `${CONFIG_DIR}/skills`));
+          return;
+        }
+        if (action === "show") {
+          const skill = positionals[1] ? registry.get(positionals[1], [process.cwd()]) : null;
+          if (!skill) die(t("No such skill: {0}", positionals[1] ?? ""));
+          emit(flags, skill, () => [`${skill!.name} · ${skill!.source} · ${skill!.dir}`, skill!.description, ...(skill!.files.length ? [`files: ${skill!.files.join(", ")}`] : []), "", skill!.body].join("\n"));
+          return;
+        }
+        if (action === "add-dir" || action === "rm-dir") {
+          if (!positionals[1]) usage(skillsUsage);
+          const cfg = action === "add-dir" ? registry.addProject(positionals[1]) : registry.removeProject(positionals[1]);
+          emit(flags, cfg, () => t("Skill folders: {0}", cfg.projects.join(", ") || "—"));
+          return;
+        }
+      } catch (error) {
+        if (error instanceof SkillError) die(error.message);
+        throw error;
+      }
+      usage(skillsUsage);
+      return;
+    }
+
     case "models": {
       if (positionals[0] === "pull") {
         // Pull a model into the local Ollama (POST /api/pull, streamed progress). Local only; no account.
@@ -1001,6 +1036,25 @@ async function main(): Promise<void> {
           if (!conf[name]) die(t("No such MCP server: {0}", name));
           saveMcpConfig(removeMcpServer(conf, name));
           ui.ok(t("Removed MCP server {0}.", name));
+          return;
+        }
+        case "serve": {
+          // Plan 5.2: this computer's company as an MCP server (stdio) for Claude Code, Codex, Cursor.
+          // stdout carries JSON-RPC only; the daemon is looked up per call, so it may start later.
+          const { serveMcp } = await import("./forge/mcp-server");
+          const { DaemonClient } = await import("./forge/daemon-client");
+          const paths = daemonPaths();
+          const version = (require("../package.json") as { version: string }).version;
+          await serveMcp(process.stdin, process.stdout, {
+            version,
+            daemon: () => {
+              const live = runningDaemon(paths);
+              if (!live) throw new Error("The Braavolabs daemon is not running. Start it: braavo daemon start");
+              // The header labels memory edits made through MCP (provenance, not access control).
+              const tagged: typeof fetch = (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), "X-Braavo-Client": "mcp" } });
+              return new DaemonClient({ port: live.port, token: ensureToken(paths) }, tagged);
+            },
+          });
           return;
         }
         case "tools": {
@@ -1494,7 +1548,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1538,6 +1592,47 @@ async function main(): Promise<void> {
         return;
       }
       const companyId = await pickCompany();
+      if (sub === "tui") {
+        // The company panel in the terminal: agents, budgets and tasks, refreshed every few seconds.
+        if (!process.stdin.isTTY || !process.stdout.isTTY) die(t("This view needs an interactive terminal."));
+        const { runCompanyTui } = await import("./forge/company-tui");
+        const money = (v: number | null) => (v === null ? "—" : `$${v.toFixed(2)}/month`);
+        await runCompanyTui({
+          input: process.stdin, output: process.stdout,
+          load: async () => ({
+            panel: await client.json<any>("GET", `/companies/${companyId}/panel`),
+            tasks: (await client.json<{ tasks: any[] }>("GET", `/companies/${companyId}/tasks`)).tasks,
+          }),
+          act: async (action) => {
+            switch (action.type) {
+              case "pause": case "resume": {
+                const { agent } = await client.json<{ agent: { name: string } }>("PATCH", `/agents/${action.agentId}`, { status: action.type === "pause" ? "paused" : "idle" });
+                return t("Agent updated: {0}", agent.name);
+              }
+              case "agent-budget":
+                await client.json("PATCH", `/agents/${action.agentId}`, { budgetUsdMonthly: action.usd });
+                return t("Budget set: {0}", money(action.usd));
+              case "company-budget":
+                await client.json("PATCH", `/companies/${companyId}`, { monthlyBudgetUsd: action.usd });
+                return t("Budget set: {0}", money(action.usd));
+              case "task-add": {
+                const { task } = await client.json<{ task: { title: string } }>("POST", `/companies/${companyId}/tasks`, { title: action.title, assignee: action.agentId });
+                return t("Task added: {0}", task.title);
+              }
+              case "task-run": {
+                const { task } = await client.json<{ task: { title: string; status: string; note: string | null } }>("POST", `/tasks/${action.taskId}/run`);
+                return `${task.title}: ${statusText(task.status)}${task.note ? ` · ${task.note}` : ""}`;
+              }
+              case "task-cancel": case "task-reopen": {
+                const { task } = await client.json<{ task: { title: string; status: string } }>("PATCH", `/tasks/${action.taskId}`, { status: action.type === "task-cancel" ? "CANCELLED" : "OPEN" });
+                return `${task.title}: ${statusText(task.status)}`;
+              }
+              default: return "";
+            }
+          },
+        });
+        return;
+      }
       if (sub === "hire") {
         const result = await call<any>("POST", `/companies/${companyId}/hire`, await hireBody());
         emit(flags, result, () => reportHire(result));
@@ -1588,6 +1683,16 @@ async function main(): Promise<void> {
         if (effort) body.effort = effort === "default" ? null : effort;
         if (has(flags, "pause")) body.status = "paused";
         if (has(flags, "resume")) body.status = "idle";
+        const skillList = flag(flags, "skills");
+        if (skillList !== undefined) {
+          // Plan 5.3: replace the agent's skills (comma list, or none).
+          const names = skillList === "none" ? [] : skillList.split(",").map(x => x.trim()).filter(Boolean);
+          const { skills } = await call<{ skills: string[] }>("PUT", `/agents/${agent.id}/skills`, { skills: names });
+          if (!Object.keys(body).length && flag(flags, "budget") === undefined) {
+            emit(flags, { agent: agent.id, skills }, () => t("Agent updated: {0}", `${agent.name} · skills: ${skills.join(", ") || "—"}`));
+            return;
+          }
+        }
         const agentBudget = flag(flags, "budget");
         if (agentBudget !== undefined) {
           const v = agentBudget === "none" ? null : Number(agentBudget);
@@ -1699,6 +1804,63 @@ async function main(): Promise<void> {
         emit(flags, { file, text }, () => (text.trim() ? text.trim().split("\n").slice(-60).join("\n") : t("No findings yet.")));
         return;
       }
+      if (sub === "memory") {
+        // Plan 4.1–4.3: markdown notes under ~/.braavo/memory/<company> (git-versioned, searchable).
+        const action = positionals[1] ?? "list";
+        const base = `/companies/${companyId}/memory`;
+        if (action === "list") {
+          const r = await call<{ docs: Array<{ path: string; scope: string; bytes: number; updatedAt: string }>; agents: Array<{ name: string; core: string }> }>("GET", base);
+          emit(flags, r, () => r.docs.length
+            ? [t("Memory: {0}", `${CONFIG_DIR}/memory/${companyId}`), ...r.docs.map(d => `${d.path.padEnd(40)} ${d.scope.padEnd(24)} ${when(d.updatedAt)}`)].join("\n")
+            : t("No notes yet. Start with: braavo company memory edit company.md --text <text>|@file"));
+          return;
+        }
+        if (action === "embed") {
+          // embed <ollama-model> | off — optional meaning search; keyword search stays when off or unreachable.
+          const model = positionals[2];
+          if (!model) usage(companyUsage);
+          const { saveVectorSettings, loadVectorSettings } = await import("./daemon/vectors");
+          const file = `${CONFIG_DIR}/memory-settings.json`;
+          const settings = { ...loadVectorSettings(file), embedModel: model === "off" ? null : model! };
+          saveVectorSettings(file, settings);
+          emit(flags, settings, () => settings.embedModel ? t("Meaning search with {0}; keyword search is used while it is unavailable.", settings.embedModel) : t("Meaning search is off; memory search uses keywords."));
+          return;
+        }
+        if (action === "search") {
+          const q = positionals.slice(2).join(" ");
+          if (!q) usage(companyUsage);
+          const scope = flag(flags, "scope");
+          const r = await call<{ hits: Array<{ path: string; heading: string; snippet: string }>; mode: string; note?: string }>("GET", `${base}?${new URLSearchParams({ q, ...(scope ? { scope } : {}) })}`);
+          emit(flags, r, () => [...(r.hits.length ? r.hits.map(h => `${h.path}${h.heading ? ` · ${h.heading}` : ""}\n  ${h.snippet.replace(/\s+/g, " ")}`) : [t("No matches.")]), ...(r.note ? [r.note] : [])].join("\n"));
+          return;
+        }
+        if (action === "cat") {
+          const path = positionals[2];
+          if (!path) usage(companyUsage);
+          const r = await call<{ path: string; content: string }>("GET", `${base}?${new URLSearchParams({ path })}`);
+          emit(flags, r, () => r.content.trimEnd());
+          return;
+        }
+        if (action === "edit" || action === "core") {
+          // edit <path> --text <text>|@file · core <agent> --text <text>|@file (the agent's core note, ≤2000 chars)
+          let path = positionals[2];
+          if (!path) usage(companyUsage);
+          if (action === "core") {
+            const r = await call<{ agents: Array<{ id: string; name: string; core: string }> }>("GET", base);
+            const agent = r.agents.find(a => a.id === path || a.name.toLowerCase() === path!.toLowerCase() || a.core === `agents/${path}/core.md`);
+            if (!agent) die(t("Agent or routine not found: {0}", path));
+            path = agent!.core;
+          }
+          const raw = flag(flags, "text");
+          if (raw === undefined) usage(companyUsage);
+          let content = raw!;
+          if (content.startsWith("@")) { const { readFileSync } = await import("node:fs"); content = readFileSync(content.slice(1), "utf8"); }
+          const r = await call<{ doc: { path: string; bytes: number } }>("PUT", base, { path, content });
+          emit(flags, r, () => t("Saved {0} ({1} bytes)", r.doc.path, r.doc.bytes));
+          return;
+        }
+        usage(companyUsage);
+      }
       usage(companyUsage);
       return;
     }
@@ -1764,18 +1926,29 @@ async function main(): Promise<void> {
       };
       if (conversationId && (chosen || effort)) await client.json("PATCH", `/conversations/${encodeURIComponent(conversationId)}`, { ...(chosen ?? {}), ...(effort ? { effort } : {}) });
 
+      // Plan 5.9: --speak (or /speak in the prompt) reads each answer aloud with the system voice.
+      const { speak, speechCommand } = await import("./forge/speak");
+      let speaking = has(flags, "speak");
+      const voiceCommand = () => {
+        const c = speechCommand();
+        if (!c) { console.error(t("Speech is not available on this system (needs say, spd-say, espeak or PowerShell).")); speaking = false; }
+        return c;
+      };
+      if (speaking) voiceCommand();
       const send = async (content: string): Promise<void> => {
         conversationId ??= await newConversation();
         const controller = new AbortController();
         const onInt = () => controller.abort();
         process.once("SIGINT", onInt);
         let ended = false;
+        let answer = "";
         try {
           await client.turn(conversationId, content, ev => {
-            if (ev.type === "delta") process.stdout.write(ev.text);
+            if (ev.type === "delta") { answer += ev.text; process.stdout.write(ev.text); }
             else if (ev.type === "error") process.stderr.write(`\n${ev.error}\n`);
             else if (ev.type === "done") { ended = true; process.stdout.write(ev.stopReason === "aborted" ? ` ${t("(stopped)")}\n` : "\n"); }
           }, controller.signal);
+          if (speaking && answer.trim() && !controller.signal.aborted) await speak(answer, { command: speechCommand(), signal: controller.signal });
         } catch (error) {
           if (controller.signal.aborted) { if (!ended) process.stdout.write(` ${t("(stopped)")}\n`); return; }
           if (error instanceof DaemonRequestError) die(error.message);
@@ -1796,11 +1969,17 @@ async function main(): Promise<void> {
       }
       const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "› " });
       console.log(t("Chat on your computer · /new, /exit"));
+      console.log(t("/speak reads answers aloud; dictate with your system's dictation (macOS: press Fn twice)."));
       rl.prompt();
       for await (const line of rl) {
         const text = line.trim();
         if (text === "/exit") break;
         if (text === "/new") { conversationId = undefined; rl.prompt(); continue; }
+        if (text === "/speak" || text === "/speak on" || text === "/speak off") {
+          speaking = text !== "/speak off" && (text === "/speak on" || !speaking) && Boolean(voiceCommand());
+          console.error(speaking ? "/speak on" : "/speak off");
+          rl.prompt(); continue;
+        }
         // FK-4: the same slash commands the phone and desktop chat understand.
         const slashModel = /^\/model\s+(\S+)$/.exec(text);
         if (slashModel) {
@@ -1838,8 +2017,26 @@ async function main(): Promise<void> {
         // Due routines call their agent's model with the local BYOK key (never logged or stored).
         const keys = makeKeyStore();
         const { ChatService } = await import("./daemon/chat");
+        const { CompanyMemory } = await import("./daemon/memory");
+        const vectors = await import("./daemon/vectors");
+        // Plan 4.3: meaning search only when the user named an embedding model (memory-settings.json).
+        const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store, {
+          embedder: () => {
+            const s = vectors.loadVectorSettings(`${CONFIG_DIR}/memory-settings.json`);
+            return s.embedModel ? vectors.ollamaEmbedder(s.embedModel, { host: s.ollamaHost }) : null;
+          },
+        });
+        const { SkillRegistry } = await import("./daemon/skills");
+        const skills = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
+        const browse = await import("./daemon/browse");
+        const policyFile = `${CONFIG_DIR}/browser.json`;
+        const browser = {
+          policy: () => browse.loadPolicy(policyFile),
+          setPolicy: (p: { allow: string[]; deny: string[] }) => browse.savePolicy(policyFile, p),
+          read: (url: string) => browse.readPage(url, browse.loadPolicy(policyFile)),
+        };
         let daemon: InstanceType<typeof Daemon> | undefined;
-        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider) },
+        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider), memory, skills },
           conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
         // Findings reach the user as a macOS notification (osascript, argv only — no shell) and over the relay.
         let relayAudit: ((text: string) => void) | undefined;
@@ -1853,7 +2050,7 @@ async function main(): Promise<void> {
         const { runTask } = await import("./daemon/tasks");
         const { loadPriceOverrides } = await import("./daemon/pricing");
         store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
-        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys, notify }), runTask: taskId => runTask(store, taskId, { keys, notify }) });
+        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

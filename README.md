@@ -445,11 +445,19 @@ braavo company watch "Rivals of app X" --urls @app-x/KAYNAKLAR.md --every 6h
 braavo company run "Watch competitors"                    # run a routine now
 braavo company findings [--role market-analyst]
 braavo company prices [--url <page>]                     # competitor price history (from the watch routines)
+braavo company tui                                        # live panel: agents, budgets, tasks (keys at the bottom)
+braavo company budget 50                                  # company budget, USD/month (80% warns, 100% pauses)
+braavo company task add "Draft the launch post" --agent Writer
+braavo company memory edit company.md --text @about.md    # company memory (see below)
+braavo company memory core Writer --text "Sign posts as YULA Lab."
+braavo company memory search "launch checklist"
 ```
 
 - Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.
 - Watch routines check pages model-free; the model is called only when a price, plan, promotion or release changed. Findings are appended to `~/.braavo/memory/<company>/findings/<role>.md` and shown as a macOS notification (and on the phone with `daemon run --relay`).
 - Calendar routines (e.g. Monday 09:00) run in the time zone you give; after sleep the latest missed run happens once.
+- **Agent browser:** a task that links to pages gets their text, read under the URL policy in `~/.braavo/browser.json` (`allow`, `deny` host patterns such as `example.com` or `*.gov`; banking, payment and government sites are denied by default; local and private addresses are never read) and fenced as untrusted content the agent must not take instructions from.
+- **Company memory** lives in `~/.braavo/memory/<company>/` as plain Markdown (open it in Obsidian or any editor): `company.md`, `departments/<name>.md`, `agents/<agent>/core.md` (≤2000 characters) and `agents/<agent>/notes.md`. An agent reads its company, department and core notes as a snapshot taken when a conversation starts; a task also gets the notes that match it, and a finished task is added to the agent's `notes.md`. Every change is committed to a git repository in that folder (when git is installed) and indexed for full-text search. Optional meaning search: `braavo company memory embed nomic-embed-text` (any Ollama embedding model) adds local embeddings fused with the keyword results; while the model is off or unreachable, search stays keyword-only.
 
 ### chat
 
@@ -619,6 +627,15 @@ braavo mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 - **Timeout:** every request has a timeout (default **10s**, override with `--timeout <ms>`) so a wedged server can't hang the CLI.
 - **stderr** from the server is streamed through verbatim in steel for debugging, and is **never** parsed as JSON-RPC — only stdout carries protocol messages.
 - A tool result with `isError: true` is printed through the molten error line and braavo exits non-zero.
+
+#### Your company as an MCP server
+
+`braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `read_page`, `list_skills`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
+
+```bash
+claude mcp add braavo -- braavo mcp serve      # Claude Code
+codex mcp add braavo -- braavo mcp serve       # Codex
+```
 
 > **Scope note (deliberately narrow).** This P-C4 slice ships `--repo` context, `fix`, and an MCP stdio client. **Sandbox/isolation parity** for spawned commands and MCP servers (containerized execution, filesystem/network confinement) is **not** in this CLI slice — it is deferred to the **desktop app, Phase D**. Until then, `fix --cmd` and MCP servers run with your own user's privileges; run only commands and servers you trust.
 

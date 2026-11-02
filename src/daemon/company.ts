@@ -1,5 +1,6 @@
 import type { AgentRow, DaemonStore } from "./store";
 import { budgetLine } from "./budget";
+import { departmentOf } from "./memory";
 import { hireFromTemplates, TEMPLATE_IDS, type TemplateId, type UserModels } from "../core/templates";
 import { orgTree, validateOrg, type OrgNode } from "../core/company";
 import { AGENT_EFFORTS } from "../core/effort";
@@ -77,7 +78,7 @@ export function hire(store: DaemonStore, companyId: string, req: HireRequest, mo
 
 export interface PanelAgent {
   id: string; name: string; role: string; title: string | null; provider: string; model: string; effort: string | null; status: string;
-  reportsToAgentId: string | null; budgetUsdMonthly: number | null; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
+  reportsToAgentId: string | null; budgetUsdMonthly: number | null; department: string; skills: string[]; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
   /** Share of the agent's monthly budget used (null when it has no budget). */
   budgetRatio: number | null;
 }
@@ -92,7 +93,7 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
     const c = costs.get(a.id);
     return {
       id: a.id, name: a.name, role: a.role, title: a.title, provider: a.provider, model: a.model, effort: a.effort, status: a.status,
-      reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly,
+      reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly, department: departmentOf(a), skills: store.agentSkills(a.id),
       month: { inputTokens: c?.input_tokens ?? 0, outputTokens: c?.output_tokens ?? 0, usd: c?.usd ?? 0, runs: c?.runs ?? 0 },
       budgetRatio: a.budget_usd_monthly && a.budget_usd_monthly > 0 ? (c?.usd ?? 0) / a.budget_usd_monthly : a.budget_usd_monthly === 0 ? 1 : null,
     };
@@ -119,7 +120,7 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
   };
 }
 
-/** Change an agent's model, effort, budget, manager or pause state; keeps the org valid. */
+/** Change an agent's model, effort, budget, manager, department or pause state; keeps the org valid. */
 export function updateAgent(store: DaemonStore, agentId: string, body: Record<string, unknown>, canUse: (provider: string) => boolean): AgentRow {
   const agent = store.getAgent(agentId);
   if (!agent) throw new CompanyError(404, "agent not found");
@@ -137,6 +138,11 @@ export function updateAgent(store: DaemonStore, agentId: string, body: Record<st
   if (body.budgetUsdMonthly !== undefined) {
     if (body.budgetUsdMonthly !== null && (typeof body.budgetUsdMonthly !== "number" || body.budgetUsdMonthly < 0 || body.budgetUsdMonthly > 100_000)) throw new CompanyError(400, "budgetUsdMonthly must be 0–100000 or null");
     patch.budgetUsdMonthly = body.budgetUsdMonthly as number | null;
+  }
+  if (body.department !== undefined) {
+    // Scope tree (plan 4.1): which department note the agent reads; null = the role's default.
+    if (body.department !== null && (typeof body.department !== "string" || !/^[a-z0-9-]{1,60}$/.test(body.department))) throw new CompanyError(400, "department must be a short lower-case name (a-z, 0-9, -) or null");
+    patch.department = body.department as string | null;
   }
   if (body.reportsToAgentId !== undefined) {
     const manager = body.reportsToAgentId as string | null;

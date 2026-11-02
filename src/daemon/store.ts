@@ -81,6 +81,24 @@ const MIGRATIONS: string[] = [
    ALTER TABLE task ADD COLUMN ended_at TEXT;
    CREATE INDEX task_company ON task(company_id, status, priority);
    CREATE INDEX cost_event_company ON cost_event(company_id, at);`,
+  // 5: company memory (plan 4.1–4.3) — scope tree, frozen per-conversation snapshot, full-text index.
+  `ALTER TABLE agent ADD COLUMN department TEXT;
+   ALTER TABLE conversation ADD COLUMN memory_snapshot TEXT;
+   CREATE TABLE memory_doc (
+     company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, path TEXT NOT NULL, scope TEXT NOT NULL,
+     mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (company_id, path));
+   CREATE VIRTUAL TABLE memory_fts USING fts5(company_id UNINDEXED, path UNINDEXED, scope UNINDEXED, heading, content, folded,
+     tokenize = 'unicode61 remove_diacritics 2');`,
+  // 6: skills (plan 5.3) — which SKILL.md skills an agent uses, frozen per conversation like memory.
+  `CREATE TABLE agent_skill (
+     agent_id TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE, skill TEXT NOT NULL, position INTEGER NOT NULL,
+     PRIMARY KEY (agent_id, skill));
+   ALTER TABLE conversation ADD COLUMN skills_snapshot TEXT;`,
+  // 7: optional memory vectors (plan 4.3) — one normalised float32 embedding per chunk and model.
+  `CREATE TABLE memory_vec (
+     company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, path TEXT NOT NULL, chunk INTEGER NOT NULL,
+     model TEXT NOT NULL, hash TEXT NOT NULL, scope TEXT NOT NULL, heading TEXT NOT NULL, excerpt TEXT NOT NULL, vector BLOB NOT NULL,
+     PRIMARY KEY (company_id, path, chunk, model));`,
 ];
 
 export interface TaskRow {
@@ -95,6 +113,7 @@ export interface AgentRow {
   id: string; company_id: string; name: string; role: string; title: string | null; system_prompt: string; autonomy: string;
   reports_to_agent_id: string | null; provider: string; model: string; effort: string | null; effort_rounding: string;
   status: string; budget_usd_monthly: number | null; heartbeat_rrule: string | null; engine: string; created_at: string; updated_at: string;
+  department: string | null;
 }
 export interface RoutineRow {
   id: string; company_id: string; agent_id: string; name: string; prompt: string; rrule: string; timezone: string; enabled: number;
@@ -105,6 +124,8 @@ export interface RoutineRow {
 export interface ConversationRow {
   id: string; company_id: string | null; agent_id: string | null; title: string; provider: string | null; model: string | null;
   effort: string | null; source: string | null; external_id: string | null; created_at: string; updated_at: string;
+  memory_snapshot: string | null;
+  skills_snapshot: string | null;
 }
 export interface ConversationSummary extends ConversationRow { message_count: number; last_message: string | null }
 export interface MessageRow { id: string; conversation_id: string; role: string; content: string; at: string; stop_reason: string | null }
@@ -168,13 +189,27 @@ export class DaemonStore {
   }
   getAgent(id: string): AgentRow | undefined { return this.db.prepare("SELECT * FROM agent WHERE id = ?").get(id) as AgentRow | undefined; }
   listAgents(companyId: string): AgentRow[] { return this.db.prepare("SELECT * FROM agent WHERE company_id = ? ORDER BY created_at").all(companyId) as unknown as AgentRow[]; }
-  updateAgent(id: string, patch: { provider?: string; model?: string; effort?: string | null; status?: string; budgetUsdMonthly?: number | null; reportsToAgentId?: string | null }): void {
+  updateAgent(id: string, patch: { provider?: string; model?: string; effort?: string | null; status?: string; budgetUsdMonthly?: number | null; reportsToAgentId?: string | null; department?: string | null }): void {
     const cur = this.getAgent(id);
     if (!cur) return;
-    this.db.prepare("UPDATE agent SET provider = ?, model = ?, effort = ?, status = ?, budget_usd_monthly = ?, reports_to_agent_id = ?, updated_at = ? WHERE id = ?")
+    this.db.prepare("UPDATE agent SET provider = ?, model = ?, effort = ?, status = ?, budget_usd_monthly = ?, reports_to_agent_id = ?, department = ?, updated_at = ? WHERE id = ?")
       .run(patch.provider ?? cur.provider, patch.model ?? cur.model, patch.effort === undefined ? cur.effort : patch.effort, patch.status ?? cur.status,
         patch.budgetUsdMonthly === undefined ? cur.budget_usd_monthly : patch.budgetUsdMonthly,
-        patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId, this.now(), id);
+        patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
+        patch.department === undefined ? cur.department : patch.department, this.now(), id);
+  }
+  /** The agent's skills in the order the user gave them (plan 5.3). */
+  agentSkills(agentId: string): string[] {
+    return (this.db.prepare("SELECT skill FROM agent_skill WHERE agent_id = ? ORDER BY position").all(agentId) as Array<{ skill: string }>).map(r => r.skill);
+  }
+  setAgentSkills(agentId: string, skills: string[]): void {
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM agent_skill WHERE agent_id = ?").run(agentId);
+      const ins = this.db.prepare("INSERT INTO agent_skill(agent_id, skill, position) VALUES (?, ?, ?)");
+      [...new Set(skills)].forEach((s, i) => ins.run(agentId, s, i));
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Token totals per agent since `sinceIso` (cost_event rows). */
   agentCosts(companyId: string, sinceIso: string): Array<{ agent_id: string | null; input_tokens: number; output_tokens: number; usd: number; runs: number }> {
@@ -228,13 +263,13 @@ export class DaemonStore {
   // ─── Conversations ─────────────────────────────────────────────────────
   createConversation(input: {
     companyId?: string; agentId?: string; title?: string; provider?: string; model?: string; effort?: string | null;
-    source?: string; externalId?: string; createdAt?: string;
+    source?: string; externalId?: string; createdAt?: string; memorySnapshot?: string; skillsSnapshot?: string;
   }): string {
     const at = input.createdAt ?? this.now(); const id = `cv_${randomUUID()}`;
-    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, memory_snapshot, skills_snapshot, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, input.companyId ?? null, input.agentId ?? null, input.title ?? "", input.provider ?? null, input.model ?? null, input.effort ?? null,
-        input.source ?? null, input.externalId ?? null, at, at);
+        input.source ?? null, input.externalId ?? null, input.memorySnapshot || null, input.skillsSnapshot || null, at, at);
     return id;
   }
   getConversation(id: string): ConversationRow | undefined { return this.db.prepare("SELECT * FROM conversation WHERE id = ?").get(id) as ConversationRow | undefined; }
@@ -245,11 +280,11 @@ export class DaemonStore {
   latestConversation(source: string): ConversationRow | undefined {
     return this.db.prepare("SELECT * FROM conversation WHERE source = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1").get(source) as ConversationRow | undefined;
   }
-  listConversations(limit = 50, before?: string): ConversationSummary[] {
+  listConversations(limit = 50, before?: string, agentId?: string): ConversationSummary[] {
     return this.db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM message m WHERE m.conversation_id = c.id) AS message_count,
         (SELECT substr(m.content, 1, 200) FROM message m WHERE m.conversation_id = c.id ORDER BY m.at DESC, m.rowid DESC LIMIT 1) AS last_message
-        FROM conversation c WHERE (? IS NULL OR c.updated_at < ?) ORDER BY c.updated_at DESC, c.rowid DESC LIMIT ?`)
-      .all(before ?? null, before ?? null, limit) as unknown as ConversationSummary[];
+        FROM conversation c WHERE (? IS NULL OR c.updated_at < ?) AND (? IS NULL OR c.agent_id = ?) ORDER BY c.updated_at DESC, c.rowid DESC LIMIT ?`)
+      .all(before ?? null, before ?? null, agentId ?? null, agentId ?? null, limit) as unknown as ConversationSummary[];
   }
   updateConversation(id: string, patch: { title?: string; provider?: string; model?: string; effort?: string | null }): void {
     const cur = this.getConversation(id);

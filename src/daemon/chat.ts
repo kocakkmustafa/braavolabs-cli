@@ -1,5 +1,6 @@
 import type { ConversationRow, ConversationSummary, DaemonStore, MessageRow } from "./store";
-import { checkBudgets } from "./budget";
+import { budgetBlock, checkBudgets } from "./budget";
+import { withMemory } from "./memory";
 import { AI_PROVIDERS, isAIProvider, LOCAL_PROVIDERS, type AIProviderType, type ChatMessage } from "../core/providers";
 import { AGENT_EFFORTS } from "../core/effort";
 import { suggestModel, type ModelSuggestion, type ModelTier } from "../core/templates";
@@ -34,6 +35,10 @@ export interface ChatDeps extends ProviderDeps {
   timeoutMs?: number;
   ollamaHost?: string;
   lmStudioHost?: string;
+  /** Company memory (plan 4.1): an agent conversation starts with a frozen snapshot of it. */
+  memory?: { snapshot(agentId: string): string };
+  /** Skills (plan 5.3): an agent conversation freezes its skills' instructions at the start. */
+  skills?: { promptFor(names: string[]): string };
 }
 
 export interface ConversationDto {
@@ -110,14 +115,31 @@ export class ChatService {
     return LOCAL_PROVIDERS.has(provider) || this.deps.keyProviders().some(p => p.toUpperCase() === provider);
   }
 
-  list(limit = 50, before?: string): ConversationDto[] {
-    return this.store.listConversations(Math.min(Math.max(limit, 1), 200), before).map(toDto);
+  list(limit = 50, before?: string, agentId?: string): ConversationDto[] {
+    return this.store.listConversations(Math.min(Math.max(limit, 1), 200), before, agentId).map(toDto);
   }
 
-  create(input: { title?: unknown; provider?: unknown; model?: unknown; effort?: unknown; source?: string }): ConversationDto {
-    const m = checkModel(input.provider, input.model, input.effort);
+  /**
+   * A plain conversation, or one with an agent (`agentId`): the agent's model and
+   * effort unless the caller picks others, its system prompt on every turn, and
+   * its spend counted against the agent's and the company's budgets.
+   */
+  create(input: { title?: unknown; provider?: unknown; model?: unknown; effort?: unknown; source?: string; agentId?: unknown }): ConversationDto {
+    let agent: ReturnType<DaemonStore["getAgent"]>;
+    if (input.agentId !== undefined && input.agentId !== null) {
+      agent = typeof input.agentId === "string" ? this.store.getAgent(input.agentId) : undefined;
+      if (!agent) throw new ChatError(404, "not-found", "agent not found");
+      if (agent.status === "error" && input.provider === undefined) throw new ChatError(400, "model-required", `${agent.name} needs setup: add a key or pull a local model (braavo setup)`);
+    }
+    const m = checkModel(input.provider ?? agent?.provider, input.model ?? agent?.model, input.effort === undefined ? agent?.effort : input.effort);
     const title = typeof input.title === "string" ? input.title.trim().slice(0, 200) : "";
-    const id = this.store.createConversation({ title, provider: m.provider, model: m.model, effort: m.effort, source: input.source });
+    const id = this.store.createConversation({
+      title, provider: m.provider, model: m.model, effort: m.effort, source: input.source,
+      ...(agent ? {
+        agentId: agent.id, companyId: agent.company_id, memorySnapshot: this.deps.memory?.snapshot(agent.id),
+        skillsSnapshot: this.deps.skills?.promptFor(this.store.agentSkills(agent.id)),
+      } : {}),
+    });
     this.onChange(id);
     return toDto(this.store.getConversation(id)!);
   }
@@ -182,6 +204,11 @@ export class ChatService {
     if (content.length > MAX_CHAT_CONTENT) throw new ChatError(413, "too-large", `content is limited to ${MAX_CHAT_CONTENT} characters`);
     if (this.inflight.has(id)) throw new ChatError(409, "busy", "a reply is already streaming in this conversation");
     if (!c.provider || !c.model) throw new ChatError(400, "model-required", "pick a model for this conversation first");
+    const agent = c.agent_id ? this.store.getAgent(c.agent_id) : undefined;
+    if (agent && c.company_id) {
+      const blocked = budgetBlock(this.store, c.company_id, agent.id, new Date().toISOString());
+      if (blocked) throw new ChatError(402, "budget", `${blocked}; raise the budget to spend again`);
+    }
     const call = prepareCall({ provider: c.provider, model: c.model, effort: c.effort }, this.deps);
     if (!call.ok) throw new ChatError(400, call.code, call.message);
 
@@ -201,7 +228,7 @@ export class ChatService {
       let text = ""; let inputTokens = 0; let outputTokens = 0; let stopReason = "other"; let failed: string | undefined;
       try {
         const turnSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)]);
-        for await (const ev of call.stream({ messages: history }, turnSignal)) {
+        for await (const ev of call.stream({ system: agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "", [], c.skills_snapshot ?? "") : undefined, messages: history }, turnSignal)) {
           if (ev.type === "text") { text += ev.text; emit({ type: "delta", text: ev.text }); }
           else if (ev.type === "reasoning") emit({ type: "reasoning", text: ev.text });
           else if (ev.type === "usage") { inputTokens = ev.inputTokens; outputTokens = ev.outputTokens; }
