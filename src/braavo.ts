@@ -1546,7 +1546,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1813,12 +1813,23 @@ async function main(): Promise<void> {
             : t("No notes yet. Start with: braavo company memory edit company.md --text <text>|@file"));
           return;
         }
+        if (action === "embed") {
+          // embed <ollama-model> | off — optional meaning search; keyword search stays when off or unreachable.
+          const model = positionals[2];
+          if (!model) usage(companyUsage);
+          const { saveVectorSettings, loadVectorSettings } = await import("./daemon/vectors");
+          const file = `${CONFIG_DIR}/memory-settings.json`;
+          const settings = { ...loadVectorSettings(file), embedModel: model === "off" ? null : model! };
+          saveVectorSettings(file, settings);
+          emit(flags, settings, () => settings.embedModel ? t("Meaning search with {0}; keyword search is used while it is unavailable.", settings.embedModel) : t("Meaning search is off; memory search uses keywords."));
+          return;
+        }
         if (action === "search") {
           const q = positionals.slice(2).join(" ");
           if (!q) usage(companyUsage);
           const scope = flag(flags, "scope");
-          const r = await call<{ hits: Array<{ path: string; heading: string; snippet: string }> }>("GET", `${base}?${new URLSearchParams({ q, ...(scope ? { scope } : {}) })}`);
-          emit(flags, r, () => r.hits.length ? r.hits.map(h => `${h.path}${h.heading ? ` · ${h.heading}` : ""}\n  ${h.snippet.replace(/\s+/g, " ")}`).join("\n") : t("No matches."));
+          const r = await call<{ hits: Array<{ path: string; heading: string; snippet: string }>; mode: string; note?: string }>("GET", `${base}?${new URLSearchParams({ q, ...(scope ? { scope } : {}) })}`);
+          emit(flags, r, () => [...(r.hits.length ? r.hits.map(h => `${h.path}${h.heading ? ` · ${h.heading}` : ""}\n  ${h.snippet.replace(/\s+/g, " ")}`) : [t("No matches.")]), ...(r.note ? [r.note] : [])].join("\n"));
           return;
         }
         if (action === "cat") {
@@ -1988,7 +1999,14 @@ async function main(): Promise<void> {
         const keys = makeKeyStore();
         const { ChatService } = await import("./daemon/chat");
         const { CompanyMemory } = await import("./daemon/memory");
-        const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store);
+        const vectors = await import("./daemon/vectors");
+        // Plan 4.3: meaning search only when the user named an embedding model (memory-settings.json).
+        const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store, {
+          embedder: () => {
+            const s = vectors.loadVectorSettings(`${CONFIG_DIR}/memory-settings.json`);
+            return s.embedModel ? vectors.ollamaEmbedder(s.embedModel, { host: s.ollamaHost }) : null;
+          },
+        });
         const { SkillRegistry } = await import("./daemon/skills");
         const skills = new SkillRegistry(`${CONFIG_DIR}/skills`, `${CONFIG_DIR}/skills.json`);
         const browse = await import("./daemon/browse");

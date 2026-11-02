@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import type { AgentRow, DaemonStore } from "./store";
+import { dot, fromBlob, hashText, rrf, toBlob, type Embedder } from "./vectors";
 
 /**
  * Company memory (plan 4.1–4.3): markdown files the user can open in any editor or
@@ -75,7 +76,11 @@ export interface MemoryOptions {
   /** Commit every change to a git repository at the memory root (default: on when git is installed). */
   git?: boolean;
   now?: () => string;
+  /** Optional embeddings (plan 4.3), resolved per search; null = keyword search only. */
+  embedder?: () => Embedder | null;
 }
+
+export interface SearchResult { hits: MemoryHit[]; mode: "fts" | "hybrid"; note?: string }
 
 export class CompanyMemory {
   private gitReady: boolean | null = null;
@@ -228,6 +233,65 @@ export class CompanyMemory {
     return this.store.db.prepare(`SELECT path, scope, heading, snippet(memory_fts, 4, '', '', '…', 20) AS snippet FROM memory_fts
         WHERE memory_fts MATCH ? AND company_id = ? AND (? IS NULL OR scope = ?) ORDER BY bm25(memory_fts, 0, 0, 0, 2.0, 1.0, 0.5) LIMIT ?`)
       .all(match, companyId, opts.scope ?? null, opts.scope ?? null, limit) as unknown as MemoryHit[];
+  }
+
+  /**
+   * Embed chunks that have no vector for the current model yet (or whose text changed),
+   * at most `max` per call; vectors of removed notes or chunks are dropped.
+   */
+  async syncVectors(companyId: string, embedder: Embedder, max = 128): Promise<{ embedded: number; pending: number }> {
+    const dir = this.companyDir(companyId);
+    const db = this.store.db;
+    const have = new Map((db.prepare("SELECT path, chunk, hash FROM memory_vec WHERE company_id = ? AND model = ?").all(companyId, embedder.model) as Array<{ path: string; chunk: number; hash: string }>)
+      .map(r => [`${r.path}#${r.chunk}`, r.hash]));
+    const want = new Set<string>();
+    const queue: Array<{ path: string; chunk: number; hash: string; scope: string; heading: string; text: string }> = [];
+    for (const doc of this.list(companyId)) {
+      chunks(readFileSync(join(dir, ...doc.path.split("/")), "utf8")).forEach((c, i) => {
+        const key = `${doc.path}#${i}`; const text = `${c.heading}\n${c.content}`.trim(); const hash = hashText(text);
+        want.add(key);
+        if (text && have.get(key) !== hash) queue.push({ path: doc.path, chunk: i, hash, scope: doc.scope, heading: c.heading, text });
+      });
+    }
+    const drop = db.prepare("DELETE FROM memory_vec WHERE company_id = ? AND path = ? AND chunk = ? AND model = ?");
+    for (const key of have.keys()) if (!want.has(key)) { const at = key.lastIndexOf("#"); drop.run(companyId, key.slice(0, at), Number(key.slice(at + 1)), embedder.model); }
+    const put = db.prepare(`INSERT INTO memory_vec(company_id, path, chunk, model, hash, scope, heading, excerpt, vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(company_id, path, chunk, model) DO UPDATE SET hash = excluded.hash, scope = excluded.scope, heading = excluded.heading, excerpt = excluded.excerpt, vector = excluded.vector`);
+    const batch = queue.slice(0, max);
+    for (let i = 0; i < batch.length; i += 16) {
+      const part = batch.slice(i, i + 16);
+      const vectors = await embedder.embed(part.map(p => p.text.slice(0, 8_000)));
+      part.forEach((p, j) => put.run(companyId, p.path, p.chunk, embedder.model, p.hash, p.scope, p.heading, p.text.slice(0, 400), toBlob(vectors[j])));
+    }
+    return { embedded: batch.length, pending: queue.length - batch.length };
+  }
+
+  /**
+   * Keyword search, plus — when an embedding model is set and answers — meaning search
+   * over the same notes, fused by reciprocal rank. Any embedding failure falls back to
+   * the keyword results with a note, never to an error.
+   */
+  async searchHybrid(companyId: string, query: string, opts: { limit?: number; scope?: string; any?: boolean } = {}): Promise<SearchResult> {
+    const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
+    const fts = this.search(companyId, query, { ...opts, limit: Math.max(limit, 20) });
+    const embedder = this.opts.embedder?.() ?? null;
+    if (!embedder || !query.trim()) return { hits: fts.slice(0, limit), mode: "fts" };
+    try {
+      await this.syncVectors(companyId, embedder);
+      const [q] = await embedder.embed([query.slice(0, 2_000)]);
+      const qv = fromBlob(toBlob(q));
+      const rows = this.store.db.prepare("SELECT path, scope, heading, excerpt, vector FROM memory_vec WHERE company_id = ? AND model = ? AND (? IS NULL OR scope = ?)")
+        .all(companyId, embedder.model, opts.scope ?? null, opts.scope ?? null) as Array<{ path: string; scope: string; heading: string; excerpt: string; vector: Uint8Array }>;
+      const ranked = rows.map(r => ({ r, s: dot(qv, fromBlob(r.vector)) })).filter(x => x.s > 0.2).sort((a, b) => b.s - a.s).slice(0, 20);
+      const key = (h: { path: string; heading: string }) => `${h.path}\u0000${h.heading}`;
+      const byKey = new Map<string, MemoryHit>();
+      for (const h of fts) byKey.set(key(h), h);
+      for (const { r } of ranked) if (!byKey.has(key(r))) byKey.set(key(r), { path: r.path, scope: r.scope, heading: r.heading, snippet: r.excerpt.replace(/\s+/g, " ").slice(0, 240) });
+      const order = rrf([fts.map(key), ranked.map(x => key(x.r))]);
+      return { hits: order.slice(0, limit).map(k => byKey.get(k)!), mode: "hybrid" };
+    } catch (error) {
+      return { hits: fts.slice(0, limit), mode: "fts", note: `meaning search unavailable: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}` };
+    }
   }
 
   /** Commit the memory folder (4.2). Silent when git is missing or nothing changed. */

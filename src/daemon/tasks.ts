@@ -53,11 +53,11 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
       }
       if (pages.length) prompt = `${prompt}\n\n${UNTRUSTED_NOTE}\n\n${pages.join("\n\n")}`;
     }
-    let snapshot = ""; let related: ReturnType<NonNullable<RunnerDeps["memory"]>["search"]> = []; let skills = "";
+    let snapshot = ""; let related: Awaited<ReturnType<NonNullable<RunnerDeps["memory"]>["searchHybrid"]>>["hits"] = []; let skills = "";
     try { skills = deps.skills?.promptFor(store.agentSkills(agent.id)) ?? ""; } catch { /* a broken skill folder must not fail the task */ }
     try {
       snapshot = deps.memory?.snapshot(agent.id) ?? "";
-      related = deps.memory?.search(task.company_id, `${task.title} ${task.body}`.slice(0, 500), { limit: 3, any: true }) ?? [];
+      related = (await deps.memory?.searchHybrid(task.company_id, `${task.title} ${task.body}`.slice(0, 500), { limit: 3, any: true }))?.hits ?? [];
     } catch { /* memory is context, never a reason to fail the task */ }
     const signal = AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS);
     const result = await collectStream(call.stream({ system: withMemory(agent.system_prompt, snapshot, related, skills), messages: [{ role: "user", content: prompt }] }, signal));

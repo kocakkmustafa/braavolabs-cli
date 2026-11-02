@@ -391,7 +391,7 @@ export class Daemon {
           // ?q= searches (optionally ?scope=), ?path= reads one note, otherwise the list of notes.
           const memory = this.memory();
           const q = url.searchParams.get("q"); const path = url.searchParams.get("path");
-          if (q !== null) return this.json(res, 200, { hits: memory.search(id, q.slice(0, 500), { limit: Number(url.searchParams.get("limit") ?? 10) || 10, scope: url.searchParams.get("scope") ?? undefined }) });
+          if (q !== null) return this.json(res, 200, await memory.searchHybrid(id, q.slice(0, 500), { limit: Number(url.searchParams.get("limit") ?? 10) || 10, scope: url.searchParams.get("scope") ?? undefined }));
           if (path !== null) {
             const content = memory.read(id, path);
             if (content === null) throw new HttpError(404, "no such note yet");

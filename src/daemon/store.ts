@@ -94,6 +94,11 @@ const MIGRATIONS: string[] = [
      agent_id TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE, skill TEXT NOT NULL, position INTEGER NOT NULL,
      PRIMARY KEY (agent_id, skill));
    ALTER TABLE conversation ADD COLUMN skills_snapshot TEXT;`,
+  // 7: optional memory vectors (plan 4.3) — one normalised float32 embedding per chunk and model.
+  `CREATE TABLE memory_vec (
+     company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, path TEXT NOT NULL, chunk INTEGER NOT NULL,
+     model TEXT NOT NULL, hash TEXT NOT NULL, scope TEXT NOT NULL, heading TEXT NOT NULL, excerpt TEXT NOT NULL, vector BLOB NOT NULL,
+     PRIMARY KEY (company_id, path, chunk, model));`,
 ];
 
 export interface TaskRow {
