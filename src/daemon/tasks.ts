@@ -5,6 +5,7 @@ import { collectStream } from "../core/stream";
 import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
 import { prepareCall, redact } from "./provider";
 import type { RunnerDeps } from "./runner";
+import { withMemory } from "./memory";
 
 /**
  * Tasks (plan 2.3): one-off work for one agent, outside routines and pipelines.
@@ -13,6 +14,10 @@ import type { RunnerDeps } from "./runner";
  * DONE (result kept, conversation recorded) or FAILED (note says why). A task whose agent
  * cannot run yet — paused, in setup, over budget — stays OPEN with a note, so it runs once
  * the cause is fixed. The daemon tick runs at most one task at a time.
+ *
+ * With company memory (plan 4.1–4.3) the run sees a fresh snapshot of the agent's scope
+ * tree plus the notes that match the task, and a finished task is appended to the agent's
+ * journal so later runs can find it.
  */
 
 const MAX_RESULT = 20_000;
@@ -38,9 +43,14 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
   store.setAgentStatus(agent.id, "running");
   const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
   try {
+    let snapshot = ""; let related: ReturnType<NonNullable<RunnerDeps["memory"]>["search"]> = [];
+    try {
+      snapshot = deps.memory?.snapshot(agent.id) ?? "";
+      related = deps.memory?.search(task.company_id, `${task.title} ${task.body}`.slice(0, 500), { limit: 3, any: true }) ?? [];
+    } catch { /* memory is context, never a reason to fail the task */ }
     const signal = AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS);
-    const result = await collectStream(call.stream({ system: agent.system_prompt || undefined, messages: [{ role: "user", content: prompt }] }, signal));
-    const conversationId = store.createConversation({ companyId: task.company_id, agentId: agent.id, title: task.title.slice(0, 120), provider: agent.provider, model: agent.model });
+    const result = await collectStream(call.stream({ system: withMemory(agent.system_prompt, snapshot, related), messages: [{ role: "user", content: prompt }] }, signal));
+    const conversationId = store.createConversation({ companyId: task.company_id, agentId: agent.id, title: task.title.slice(0, 120), provider: agent.provider, model: agent.model, memorySnapshot: snapshot });
     store.addMessage(conversationId, "user", prompt);
     if (result.text) store.addMessage(conversationId, "assistant", result.text, { stopReason: result.stopReason });
     store.recordCost({ companyId: task.company_id, agentId: agent.id, runId, provider: agent.provider, model: agent.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
@@ -52,6 +62,7 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
       conversationId, endedAt: now(), lockedByRunId: null,
     });
     store.activity({ companyId: task.company_id, actor: agent.id, verb: done ? "task-done" : "task-failed", objectType: "task", objectId: task.id, summary: task.title.slice(0, 120) });
+    if (done) deps.memory?.journal(agent.id, task.title, text, now());
     try { if (done) deps.notify?.(`${agent.name}: task done`, task.title.slice(0, 120)); } catch { /* best effort */ }
     checkBudgets(store, task.company_id, agent.id, now(), deps.notify);
     return done ? { outcome: "done" } : { outcome: "failed", note: "empty answer" };

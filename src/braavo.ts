@@ -1494,7 +1494,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1740,6 +1740,52 @@ async function main(): Promise<void> {
         emit(flags, { file, text }, () => (text.trim() ? text.trim().split("\n").slice(-60).join("\n") : t("No findings yet.")));
         return;
       }
+      if (sub === "memory") {
+        // Plan 4.1–4.3: markdown notes under ~/.braavo/memory/<company> (git-versioned, searchable).
+        const action = positionals[1] ?? "list";
+        const base = `/companies/${companyId}/memory`;
+        if (action === "list") {
+          const r = await call<{ docs: Array<{ path: string; scope: string; bytes: number; updatedAt: string }>; agents: Array<{ name: string; core: string }> }>("GET", base);
+          emit(flags, r, () => r.docs.length
+            ? [t("Memory: {0}", `${CONFIG_DIR}/memory/${companyId}`), ...r.docs.map(d => `${d.path.padEnd(40)} ${d.scope.padEnd(24)} ${when(d.updatedAt)}`)].join("\n")
+            : t("No notes yet. Start with: braavo company memory edit company.md --text <text>|@file"));
+          return;
+        }
+        if (action === "search") {
+          const q = positionals.slice(2).join(" ");
+          if (!q) usage(companyUsage);
+          const scope = flag(flags, "scope");
+          const r = await call<{ hits: Array<{ path: string; heading: string; snippet: string }> }>("GET", `${base}?${new URLSearchParams({ q, ...(scope ? { scope } : {}) })}`);
+          emit(flags, r, () => r.hits.length ? r.hits.map(h => `${h.path}${h.heading ? ` · ${h.heading}` : ""}\n  ${h.snippet.replace(/\s+/g, " ")}`).join("\n") : t("No matches."));
+          return;
+        }
+        if (action === "cat") {
+          const path = positionals[2];
+          if (!path) usage(companyUsage);
+          const r = await call<{ path: string; content: string }>("GET", `${base}?${new URLSearchParams({ path })}`);
+          emit(flags, r, () => r.content.trimEnd());
+          return;
+        }
+        if (action === "edit" || action === "core") {
+          // edit <path> --text <text>|@file · core <agent> --text <text>|@file (the agent's core note, ≤2000 chars)
+          let path = positionals[2];
+          if (!path) usage(companyUsage);
+          if (action === "core") {
+            const r = await call<{ agents: Array<{ id: string; name: string; core: string }> }>("GET", base);
+            const agent = r.agents.find(a => a.id === path || a.name.toLowerCase() === path!.toLowerCase() || a.core === `agents/${path}/core.md`);
+            if (!agent) die(t("Agent or routine not found: {0}", path));
+            path = agent!.core;
+          }
+          const raw = flag(flags, "text");
+          if (raw === undefined) usage(companyUsage);
+          let content = raw!;
+          if (content.startsWith("@")) { const { readFileSync } = await import("node:fs"); content = readFileSync(content.slice(1), "utf8"); }
+          const r = await call<{ doc: { path: string; bytes: number } }>("PUT", base, { path, content });
+          emit(flags, r, () => t("Saved {0} ({1} bytes)", r.doc.path, r.doc.bytes));
+          return;
+        }
+        usage(companyUsage);
+      }
       usage(companyUsage);
       return;
     }
@@ -1879,8 +1925,10 @@ async function main(): Promise<void> {
         // Due routines call their agent's model with the local BYOK key (never logged or stored).
         const keys = makeKeyStore();
         const { ChatService } = await import("./daemon/chat");
+        const { CompanyMemory } = await import("./daemon/memory");
+        const memory = new CompanyMemory(`${CONFIG_DIR}/memory`, store);
         let daemon: InstanceType<typeof Daemon> | undefined;
-        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider) },
+        const chat = new ChatService(store, { keys, keyProviders: () => keys.list().map(e => e.provider), memory },
           conversationId => daemon?.emit({ type: "conversation.changed", conversationId }));
         // Findings reach the user as a macOS notification (osascript, argv only — no shell) and over the relay.
         let relayAudit: ((text: string) => void) | undefined;
@@ -1894,7 +1942,7 @@ async function main(): Promise<void> {
         const { runTask } = await import("./daemon/tasks");
         const { loadPriceOverrides } = await import("./daemon/pricing");
         store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
-        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys, notify }), runTask: taskId => runTask(store, taskId, { keys, notify }) });
+        daemon = new Daemon({ store, token, version, chat, memory, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory }), runTask: taskId => runTask(store, taskId, { keys, notify, memory }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

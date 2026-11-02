@@ -81,6 +81,14 @@ const MIGRATIONS: string[] = [
    ALTER TABLE task ADD COLUMN ended_at TEXT;
    CREATE INDEX task_company ON task(company_id, status, priority);
    CREATE INDEX cost_event_company ON cost_event(company_id, at);`,
+  // 5: company memory (plan 4.1–4.3) — scope tree, frozen per-conversation snapshot, full-text index.
+  `ALTER TABLE agent ADD COLUMN department TEXT;
+   ALTER TABLE conversation ADD COLUMN memory_snapshot TEXT;
+   CREATE TABLE memory_doc (
+     company_id TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE, path TEXT NOT NULL, scope TEXT NOT NULL,
+     mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (company_id, path));
+   CREATE VIRTUAL TABLE memory_fts USING fts5(company_id UNINDEXED, path UNINDEXED, scope UNINDEXED, heading, content, folded,
+     tokenize = 'unicode61 remove_diacritics 2');`,
 ];
 
 export interface TaskRow {
@@ -95,6 +103,7 @@ export interface AgentRow {
   id: string; company_id: string; name: string; role: string; title: string | null; system_prompt: string; autonomy: string;
   reports_to_agent_id: string | null; provider: string; model: string; effort: string | null; effort_rounding: string;
   status: string; budget_usd_monthly: number | null; heartbeat_rrule: string | null; engine: string; created_at: string; updated_at: string;
+  department: string | null;
 }
 export interface RoutineRow {
   id: string; company_id: string; agent_id: string; name: string; prompt: string; rrule: string; timezone: string; enabled: number;
@@ -105,6 +114,7 @@ export interface RoutineRow {
 export interface ConversationRow {
   id: string; company_id: string | null; agent_id: string | null; title: string; provider: string | null; model: string | null;
   effort: string | null; source: string | null; external_id: string | null; created_at: string; updated_at: string;
+  memory_snapshot: string | null;
 }
 export interface ConversationSummary extends ConversationRow { message_count: number; last_message: string | null }
 export interface MessageRow { id: string; conversation_id: string; role: string; content: string; at: string; stop_reason: string | null }
@@ -168,13 +178,14 @@ export class DaemonStore {
   }
   getAgent(id: string): AgentRow | undefined { return this.db.prepare("SELECT * FROM agent WHERE id = ?").get(id) as AgentRow | undefined; }
   listAgents(companyId: string): AgentRow[] { return this.db.prepare("SELECT * FROM agent WHERE company_id = ? ORDER BY created_at").all(companyId) as unknown as AgentRow[]; }
-  updateAgent(id: string, patch: { provider?: string; model?: string; effort?: string | null; status?: string; budgetUsdMonthly?: number | null; reportsToAgentId?: string | null }): void {
+  updateAgent(id: string, patch: { provider?: string; model?: string; effort?: string | null; status?: string; budgetUsdMonthly?: number | null; reportsToAgentId?: string | null; department?: string | null }): void {
     const cur = this.getAgent(id);
     if (!cur) return;
-    this.db.prepare("UPDATE agent SET provider = ?, model = ?, effort = ?, status = ?, budget_usd_monthly = ?, reports_to_agent_id = ?, updated_at = ? WHERE id = ?")
+    this.db.prepare("UPDATE agent SET provider = ?, model = ?, effort = ?, status = ?, budget_usd_monthly = ?, reports_to_agent_id = ?, department = ?, updated_at = ? WHERE id = ?")
       .run(patch.provider ?? cur.provider, patch.model ?? cur.model, patch.effort === undefined ? cur.effort : patch.effort, patch.status ?? cur.status,
         patch.budgetUsdMonthly === undefined ? cur.budget_usd_monthly : patch.budgetUsdMonthly,
-        patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId, this.now(), id);
+        patch.reportsToAgentId === undefined ? cur.reports_to_agent_id : patch.reportsToAgentId,
+        patch.department === undefined ? cur.department : patch.department, this.now(), id);
   }
   /** Token totals per agent since `sinceIso` (cost_event rows). */
   agentCosts(companyId: string, sinceIso: string): Array<{ agent_id: string | null; input_tokens: number; output_tokens: number; usd: number; runs: number }> {
@@ -228,13 +239,13 @@ export class DaemonStore {
   // ─── Conversations ─────────────────────────────────────────────────────
   createConversation(input: {
     companyId?: string; agentId?: string; title?: string; provider?: string; model?: string; effort?: string | null;
-    source?: string; externalId?: string; createdAt?: string;
+    source?: string; externalId?: string; createdAt?: string; memorySnapshot?: string;
   }): string {
     const at = input.createdAt ?? this.now(); const id = `cv_${randomUUID()}`;
-    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO conversation(id, company_id, agent_id, title, provider, model, effort, source, external_id, memory_snapshot, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, input.companyId ?? null, input.agentId ?? null, input.title ?? "", input.provider ?? null, input.model ?? null, input.effort ?? null,
-        input.source ?? null, input.externalId ?? null, at, at);
+        input.source ?? null, input.externalId ?? null, input.memorySnapshot || null, at, at);
     return id;
   }
   getConversation(id: string): ConversationRow | undefined { return this.db.prepare("SELECT * FROM conversation WHERE id = ?").get(id) as ConversationRow | undefined; }

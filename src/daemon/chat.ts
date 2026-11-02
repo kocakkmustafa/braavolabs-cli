@@ -1,5 +1,6 @@
 import type { ConversationRow, ConversationSummary, DaemonStore, MessageRow } from "./store";
 import { budgetBlock, checkBudgets } from "./budget";
+import { withMemory } from "./memory";
 import { AI_PROVIDERS, isAIProvider, LOCAL_PROVIDERS, type AIProviderType, type ChatMessage } from "../core/providers";
 import { AGENT_EFFORTS } from "../core/effort";
 import { suggestModel, type ModelSuggestion, type ModelTier } from "../core/templates";
@@ -34,6 +35,8 @@ export interface ChatDeps extends ProviderDeps {
   timeoutMs?: number;
   ollamaHost?: string;
   lmStudioHost?: string;
+  /** Company memory (plan 4.1): an agent conversation starts with a frozen snapshot of it. */
+  memory?: { snapshot(agentId: string): string };
 }
 
 export interface ConversationDto {
@@ -130,7 +133,7 @@ export class ChatService {
     const title = typeof input.title === "string" ? input.title.trim().slice(0, 200) : "";
     const id = this.store.createConversation({
       title, provider: m.provider, model: m.model, effort: m.effort, source: input.source,
-      ...(agent ? { agentId: agent.id, companyId: agent.company_id } : {}),
+      ...(agent ? { agentId: agent.id, companyId: agent.company_id, memorySnapshot: this.deps.memory?.snapshot(agent.id) } : {}),
     });
     this.onChange(id);
     return toDto(this.store.getConversation(id)!);
@@ -220,7 +223,7 @@ export class ChatService {
       let text = ""; let inputTokens = 0; let outputTokens = 0; let stopReason = "other"; let failed: string | undefined;
       try {
         const turnSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)]);
-        for await (const ev of call.stream({ system: agent?.system_prompt || undefined, messages: history }, turnSignal)) {
+        for await (const ev of call.stream({ system: agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "") : undefined, messages: history }, turnSignal)) {
           if (ev.type === "text") { text += ev.text; emit({ type: "delta", text: ev.text }); }
           else if (ev.type === "reasoning") emit({ type: "reasoning", text: ev.text });
           else if (ev.type === "usage") { inputTokens = ev.inputTokens; outputTokens = ev.outputTokens; }

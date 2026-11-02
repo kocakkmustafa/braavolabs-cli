@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { DaemonStore, TASK_STATUSES } from "./store";
 import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
+import { MemoryError, type CompanyMemory } from "./memory";
 import { CompanyError, hire, panel, updateAgent } from "./company";
 import { AGENT_TEMPLATES } from "../core/templates";
 /**
@@ -43,6 +44,8 @@ export interface DaemonOptions {
   chat?: ChatService;
   /** Runs one task (plan 2.3); without it tasks are stored but never run. */
   runTask?: (taskId: string) => Promise<{ outcome: string; note?: string }>;
+  /** Company memory (plan 4.1–4.3); memory routes answer 404 without it. */
+  memory?: CompanyMemory;
 }
 
 export type DaemonEvent =
@@ -334,6 +337,29 @@ export class Daemon {
             this.taskBusy = false;
           }
         }
+        case "GET /companies/:id/memory": {
+          // ?q= searches (optionally ?scope=), ?path= reads one note, otherwise the list of notes.
+          const memory = this.memory();
+          const q = url.searchParams.get("q"); const path = url.searchParams.get("path");
+          if (q !== null) return this.json(res, 200, { hits: memory.search(id, q.slice(0, 500), { limit: Number(url.searchParams.get("limit") ?? 10) || 10, scope: url.searchParams.get("scope") ?? undefined }) });
+          if (path !== null) {
+            const content = memory.read(id, path);
+            if (content === null) throw new HttpError(404, "no such note yet");
+            return this.json(res, 200, { path, content });
+          }
+          memory.reindex(id);
+          const agents = store.listAgents(id).map(a => ({ id: a.id, name: a.name, ...memory.agentPaths(a) }));
+          return this.json(res, 200, { docs: memory.list(id), agents });
+        }
+        case "PUT /companies/:id/memory": {
+          const memory = this.memory();
+          const body = await readJson(req);
+          if (typeof body.path !== "string" || typeof body.content !== "string") throw new HttpError(400, "path and content are required");
+          const doc = memory.write(id, body.path, body.content, "user");
+          store.activity({ companyId: id, actor: "user", verb: "memory-edited", objectType: "memory", objectId: body.path, summary: body.path });
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 200, { doc });
+        }
         case "GET /companies/:id/routines":
           return this.json(res, 200, { routines: store.listRoutines(id) });
         case "POST /companies/:id/routines": {
@@ -401,7 +427,7 @@ export class Daemon {
           throw new HttpError(404, "not found");
       }
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError;
+      const known = error instanceof HttpError || error instanceof ChatError || error instanceof CompanyError || error instanceof MemoryError;
       const status = known ? error.status : 500;
       const code = error instanceof ChatError ? error.code : error instanceof HttpError ? error.code : undefined;
       this.json(res, status, { error: known ? error.message : "internal error", ...(code ? { code } : {}) });
@@ -411,6 +437,11 @@ export class Daemon {
   private chat(): ChatService {
     if (!this.o.chat) throw new HttpError(404, "chat is not enabled on this daemon");
     return this.o.chat;
+  }
+
+  private memory(): CompanyMemory {
+    if (!this.o.memory) throw new HttpError(404, "company memory is not enabled on this daemon");
+    return this.o.memory;
   }
 
   /** SSE turn: headers go out with the first event, so validation errors still answer as plain JSON. */

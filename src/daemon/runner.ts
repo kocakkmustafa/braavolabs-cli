@@ -1,4 +1,5 @@
 import type { DaemonStore } from "./store";
+import type { CompanyMemory } from "./memory";
 import { budgetBlock, checkBudgets } from "./budget";
 import { collectStream } from "../core/stream";
 import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
@@ -29,6 +30,8 @@ export interface RunnerDeps extends ProviderDeps {
   monitorRoot?: string;
   /** Markdown company memory (default ~/.braavo/memory). */
   memoryRoot?: string;
+  /** Company memory (plan 4.1–4.3): snapshots, related notes, the task journal and git commits. */
+  memory?: CompanyMemory;
   /** Desktop/phone notification for a finding; failures are ignored. */
   notify?: (title: string, body: string) => void;
 }
@@ -164,7 +167,8 @@ async function runWebRoutine(store: DaemonStore, routine: Routine, agent: Agent,
   } else note = `no summary: ${call.message}`;
 
   const at = new Date().toISOString();
-  appendFinding(deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at, title: routine.name, pages: changed, summary });
+  appendFinding(deps.memory?.root ?? deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at, title: routine.name, pages: changed, summary });
+  deps.memory?.commit(`${agent.id}: findings/${agent.role}.md`);
   store.activity({ companyId: routine.company_id, actor: agent.id, verb: "found-change", objectType: "routine", objectId: routine.id, summary: `${changed.length} of ${urls.length} pages changed` });
   const firstLine = (summary ?? signalLines(changed[0]).join("; ")).split("\n").find(l => l.trim())?.replace(/^[-*•]\s*/, "").slice(0, 180) ?? "";
   try { deps.notify?.(`${agent.name}: ${changed.length} change${changed.length > 1 ? "s" : ""}`, firstLine); } catch { /* notification is best effort */ }
