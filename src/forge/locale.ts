@@ -444,6 +444,8 @@ const rows = [
 ["Goal added: {0}","Hedef eklendi: {0}","Objetivo agregado: {0}","Objetivo adicionado: {0}","Ziel hinzugefügt: {0}","Objectif ajouté : {0}","目標を追加しました: {0}","تمت إضافة الهدف: {0}"],
 ["Goal started: {0}","Hedef başladı: {0}","Objetivo iniciado: {0}","Objetivo iniciado: {0}","Ziel gestartet: {0}","Objectif lancé : {0}","目標を開始しました: {0}","بدأ الهدف: {0}"],
 ["No goals yet.","Henüz hedef yok.","Aún no hay objetivos.","Ainda não há objetivos.","Noch keine Ziele.","Aucun objectif pour l’instant.","まだ目標はありません。","لا توجد أهداف بعد."],
+["Trigger added: {0}","Tetikleyici eklendi: {0}","Disparador agregado: {0}","Gatilho adicionado: {0}","Auslöser hinzugefügt: {0}","Déclencheur ajouté : {0}","トリガーを追加しました: {0}","تمت إضافة المشغّل: {0}"],
+["No triggers yet.","Henüz tetikleyici yok.","Aún no hay disparadores.","Ainda não há gatilhos.","Noch keine Auslöser.","Aucun déclencheur pour l’instant.","まだトリガーはありません。","لا توجد مشغّلات بعد."],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

@@ -451,11 +451,19 @@ braavo company task add "Draft the launch post" --agent Writer
 braavo company memory edit company.md --text @about.md    # company memory (see below)
 braavo company memory core Writer --text "Sign posts as YULA Lab."
 braavo company memory search "launch checklist"
+braavo company hire-cli gemini --workdir ~/code/app --approvals edits   # your own Claude Code / Codex / Gemini CLI as an employee (ACP)
+braavo company approvals ; braavo company approve <id> [--deny]           # what CLI employees wait for
+braavo company goal add "Launch the pricing page" --run                   # the General Manager plans, delegates and re-plans
+braavo company trigger add rss https://rival.example/feed --agent "Market Analyst" --every 1h
+braavo company trigger add files ~/Invoices --agent "Finance Tracker" --pattern "*.pdf"
 ```
 
 - Models come only from your own keys and local models (Ollama, LM Studio). An agent with neither opens in `error` and `init` lists what it needs.
 - Watch routines check pages model-free; the model is called only when a price, plan, promotion or release changed. Findings are appended to `~/.braavo/memory/<company>/findings/<role>.md` and shown as a macOS notification (and on the phone with `daemon run --relay`).
 - Calendar routines (e.g. Monday 09:00) run in the time zone you give; after sleep the latest missed run happens once.
+- **CLI employees** run tasks through the Agent Client Protocol in their own folder with their own sign-in (Gemini: `gemini --acp`; Claude Code and Codex through the `claude-code-acp` / `codex-acp` adapters; launchers can be changed in `~/.braavo/adapters.json`). Reads run; edits run under `--approvals edits`; commands, deletes and fetches wait for your approval (panel, phone or `braavo company approve`) and are refused after 10 minutes. Tool calls, diffs and decisions are kept as task events (`braavo company task show <id>`).
+- **Goals:** the manager keeps a task ledger (facts, assumptions, plan) and a progress ledger, runs the steps as tasks, re-plans after two steps without progress and stops as `STALLED` after three re-plans. The ledger is mirrored to `notes/goal-<id>.md`.
+- **Triggers** open a task when a feed has a new item, a page's text changes (read through the agent browser policy) or a matching file appears in a folder; the first check only records what is there, outside text is fenced as untrusted, and each trigger opens at most 20 tasks a day.
 - **Agent browser:** a task that links to pages gets their text, read under the URL policy in `~/.braavo/browser.json` (`allow`, `deny` host patterns such as `example.com` or `*.gov`; banking, payment and government sites are denied by default; local and private addresses are never read) and fenced as untrusted content the agent must not take instructions from.
 - **Company memory** lives in `~/.braavo/memory/<company>/` as plain Markdown (open it in Obsidian or any editor): `company.md`, `departments/<name>.md`, `agents/<agent>/core.md` (≤2000 characters) and `agents/<agent>/notes.md`. An agent reads its company, department and core notes as a snapshot taken when a conversation starts; a task also gets the notes that match it, and a finished task is added to the agent's `notes.md`. Every change is committed to a git repository in that folder (when git is installed) and indexed for full-text search. Long conversations are folded past about 24k tokens: the durable facts go into the agent's journal first, then the older turns become a summary (messages are never deleted). Every night a "Consolidate memory" routine moves old journal entries to `agents/<agent>/archive/<yyyy-mm>.md` and, when the agent has a usable model, summarises them. Optional meaning search: `braavo company memory embed nomic-embed-text` (any Ollama embedding model) adds local embeddings fused with the keyword results; while the model is off or unreachable, search stays keyword-only.
 

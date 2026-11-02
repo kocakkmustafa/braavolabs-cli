@@ -397,4 +397,6 @@ export const extraRows = [
 ["Goal added: {0}","Obiettivo aggiunto: {0}","Sasaran ditambahkan: {0}","목표를 추가했습니다: {0}","Dodano cel: {0}","लक्ष्य जोड़ा गया: {0}","已添加目标：{0}"],
 ["Goal started: {0}","Obiettivo avviato: {0}","Sasaran dimulai: {0}","목표를 시작했습니다: {0}","Rozpoczęto cel: {0}","लक्ष्य शुरू हुआ: {0}","目标已开始：{0}"],
 ["No goals yet.","Ancora nessun obiettivo.","Belum ada sasaran.","아직 목표가 없습니다.","Brak celów.","अभी कोई लक्ष्य नहीं है।","暂无目标。"],
+["Trigger added: {0}","Trigger aggiunto: {0}","Pemicu ditambahkan: {0}","트리거를 추가했습니다: {0}","Dodano wyzwalacz: {0}","ट्रिगर जोड़ा गया: {0}","已添加触发器：{0}"],
+["No triggers yet.","Ancora nessun trigger.","Belum ada pemicu.","아직 트리거가 없습니다.","Brak wyzwalaczy.","अभी कोई ट्रिगर नहीं है।","暂无触发器。"],
 ] as const;
