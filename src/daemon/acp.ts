@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * CLI employees (plan 3.1): the user's own Claude Code, Codex or Gemini CLI as an agent
@@ -49,19 +49,39 @@ export function loadAdapters(file: string): Record<WorkerEngine, Adapter> {
 export const APPROVAL_POLICIES = ["ask", "edits", "readonly"] as const;
 export type ApprovalPolicy = (typeof APPROVAL_POLICIES)[number];
 
-const READ_KINDS = new Set(["read", "search", "think"]);
+const READ_KINDS = new Set(["read", "search"]);
 const EDIT_KINDS = new Set(["edit", "move"]);
+
+/** Real location of a path that may not exist yet (a new file): resolve the nearest existing parent. */
+function realLocation(p: string): string {
+  let cur = resolve(p); const rest: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try { return join(realpathSync(cur), ...rest.reverse()); }
+    catch { const parent = dirname(cur); if (parent === cur) return resolve(p); rest.push(basename(cur)); cur = parent; }
+  }
+  return resolve(p);
+}
+
+/** Inside the working folder after symlinks are followed (a link inside pointing outside is outside). */
+export function insideFolder(workdir: string, p: string): boolean {
+  const root = realLocation(workdir);
+  const r = relative(root, realLocation(resolve(workdir, p)));
+  return r === "" || (!r.startsWith("..") && !isAbsolute(r));
+}
 
 /**
  * What the policy says about one tool call, before anyone is asked:
  * - readonly: reads, searches and thinking run; everything else is refused.
  * - ask (default): reads run; edits, commands, deletes, fetches wait for the user.
  * - edits: reads and edits inside the working folder run; commands, deletes, fetches wait.
- * A path outside the working folder is never auto-allowed.
+ * A path outside the working folder (symlinks followed), or no reported path at all, is never
+ * auto-allowed.
  */
 export function policyDecision(policy: ApprovalPolicy, kind: string | undefined, paths: string[], workdir: string): "allow" | "reject" | "ask" {
-  const inside = paths.every(p => { const r = relative(workdir, resolve(workdir, p)); return r === "" || (!r.startsWith("..") && !isAbsolute(r)); });
   const k = kind ?? "other";
+  if (k === "think") return "allow";
+  // A read or edit with no reported path could touch anything: never auto-allowed.
+  const inside = paths.length > 0 && paths.every(p => insideFolder(workdir, p));
   if (READ_KINDS.has(k) && inside) return "allow";
   if (policy === "readonly") return "reject";
   if (policy === "edits" && EDIT_KINDS.has(k) && inside) return "allow";
@@ -132,6 +152,8 @@ export interface WorkerTurn {
 export interface WorkerResult { stopReason: string; text: string; error?: string }
 
 const ACP_PROTOCOL_VERSION = 1;
+/** A looping agent cannot flood the approval queue: later permission requests in the turn are refused. */
+export const MAX_PERMISSIONS_PER_TURN = 30;
 
 export class AcpError extends Error {}
 
@@ -148,6 +170,7 @@ export async function runWorkerTurn(t: WorkerTurn): Promise<WorkerResult> {
   const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   let text = "";
   let sessionId = "";
+  let asked = 0;
   let stderr = "";
   const send = (m: object) => { try { child.stdin.write(`${JSON.stringify(m)}\n`); } catch { /* process gone */ } };
   const request = (method: string, params: unknown) => new Promise<any>((res, rej) => {
@@ -159,12 +182,16 @@ export async function runWorkerTurn(t: WorkerTurn): Promise<WorkerResult> {
   const decide = async (params: any) => {
     const tc = params?.toolCall ?? {};
     const req: PermissionRequest = { id: clip(tc.toolCallId, 200), title: clip(tc.title, 300) || clip(tc.kind, 40) || "tool", tool: clip(tc.kind, 40) || "other", paths: (Array.isArray(tc.locations) ? tc.locations : []).map((l: any) => clip(l?.path, 500)).filter(Boolean) };
-    const verdict = policyDecision(t.policy, req.tool, req.paths, t.cwd);
-    const { decision, by } = verdict === "ask" ? await t.ask(req) : { decision: verdict, by: "policy" as const };
-    t.onEvent({ kind: "permission", id: req.id, title: req.title, tool: req.tool, decision, by });
     const options: Array<{ optionId: string; kind: string }> = Array.isArray(params?.options) ? params.options : [];
     const pick = (kinds: string[]) => kinds.map(k => options.find(o => o.kind === k)).find(Boolean);
-    const option = decision === "allow" ? pick(["allow_once", "allow_always"]) : pick(["reject_once", "reject_always"]);
+    asked += 1;
+    const verdict = asked > MAX_PERMISSIONS_PER_TURN ? "reject" : policyDecision(t.policy, req.tool, req.paths, t.cwd);
+    let { decision, by } = verdict === "ask" ? await t.ask(req) : { decision: verdict, by: "policy" as const };
+    // Only one-time grants: an "always" option would let the agent skip us for every later call of that tool.
+    const allowOnce = pick(["allow_once"]);
+    if (decision === "allow" && !allowOnce) { decision = "reject"; by = "policy"; }
+    t.onEvent({ kind: "permission", id: req.id, title: req.title, tool: req.tool, decision, by });
+    const option = decision === "allow" ? allowOnce : pick(["reject_once", "reject_always"]);
     return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } };
   };
 

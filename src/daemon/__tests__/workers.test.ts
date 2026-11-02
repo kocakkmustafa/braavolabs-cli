@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { DaemonStore } from "../store";
 import { Daemon } from "../server";
 import { runTask } from "../tasks";
-import { DEFAULT_ADAPTERS, loadAdapters, policyDecision, runWorkerTurn, toEvents } from "../acp";
+import { DEFAULT_ADAPTERS, insideFolder, loadAdapters, policyDecision, runWorkerTurn, toEvents } from "../acp";
+import { symlinkSync } from "node:fs";
 import { ApprovalCenter, type WorkerDeps } from "../workers";
 
 const FAKE = join(__dirname, "fixtures", "fake-acp-agent.cjs");
@@ -38,9 +39,26 @@ describe("approval policy (3.1)", () => {
     expect(policyDecision("edits", "edit", ["../other/a.ts"], w)).toBe("ask");
     expect(policyDecision("edits", "execute", [], w)).toBe("ask");
     expect(policyDecision("edits", "read", ["/etc/hosts"], w)).toBe("ask");
-    expect(policyDecision("readonly", "search", [], w)).toBe("allow");
+    expect(policyDecision("readonly", "search", ["src"], w)).toBe("allow");
+    expect(policyDecision("readonly", "search", [], w)).toBe("reject");
     expect(policyDecision("readonly", "edit", ["notes.md"], w)).toBe("reject");
     expect(policyDecision("readonly", "fetch", [], w)).toBe("reject");
+    // No reported path: could be anything.
+    expect(policyDecision("edits", "read", [], w)).toBe("ask");
+    expect(policyDecision("readonly", "read", [], w)).toBe("reject");
+    expect(policyDecision("readonly", "think", [], w)).toBe("allow");
+  });
+
+  it("follows symlinks: a link inside the folder that points outside is outside", () => {
+    const work = mkdtempSync(join(tmpdir(), "braavo-link-"));
+    const outside = mkdtempSync(join(tmpdir(), "braavo-out-"));
+    writeFileSync(join(outside, "secret.txt"), "x");
+    symlinkSync(outside, join(work, "escape"));
+    expect(insideFolder(work, "notes/new.md")).toBe(true);
+    expect(insideFolder(work, "escape/secret.txt")).toBe(false);
+    expect(insideFolder(work, "escape/new-file.txt")).toBe(false);
+    expect(policyDecision("edits", "edit", ["escape/secret.txt"], work)).toBe("ask");
+    expect(policyDecision("ask", "read", [join(outside, "secret.txt")], work)).toBe("ask");
   });
 
   it("maps ACP updates to events and reads launcher overrides", () => {
@@ -131,6 +149,41 @@ describe("CLI employee tasks over ACP", () => {
     expect(signed.text).toMatch(/^Done: notes updated/);
     const unsigned = await runWorkerTurn(base);
     expect(unsigned.error).toMatch(/Authentication required — sign in with the CLI once/);
+  });
+
+  it("never grants 'always', and refuses permission floods within one turn", async () => {
+    const { runWorkerTurn: run, MAX_PERMISSIONS_PER_TURN } = await import("../acp");
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    // A scripted agent: asks with only an "allow_always" option, then floods requests.
+    const fake = () => {
+      const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined, exitCode: null as number | null, kill: () => true });
+      let buf = ""; const replies: any[] = [];
+      const send = (m: object) => child.stdout.write(`${JSON.stringify(m)}\n`);
+      child.stdin.on("data", async (c: Buffer) => {
+        buf += c.toString(); let i: number;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+          if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1 } });
+          else if (m.method === "session/new") send({ jsonrpc: "2.0", id: m.id, result: { sessionId: "s" } });
+          else if (m.method === "session/prompt") {
+            send({ jsonrpc: "2.0", id: 900, method: "session/request_permission", params: { sessionId: "s", toolCall: { toolCallId: "a", kind: "read", locations: [{ path: "x.md" }] }, options: [{ optionId: "always", kind: "allow_always" }] } });
+            for (let k = 0; k < MAX_PERMISSIONS_PER_TURN + 5; k++) send({ jsonrpc: "2.0", id: 1000 + k, method: "session/request_permission", params: { sessionId: "s", toolCall: { toolCallId: `f${k}`, kind: "read", locations: [{ path: "x.md" }] }, options: [{ optionId: "once", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }] } });
+            setTimeout(() => send({ jsonrpc: "2.0", id: m.id, result: { stopReason: "end_turn" } }), 50);
+          } else if (m.id !== undefined && m.method === undefined) replies.push(m);
+        }
+      });
+      return { child, replies };
+    };
+    const f = fake();
+    const events: any[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "braavo-flood-"));
+    await run({ command: "x", args: [], cwd: dir, prompt: "p", policy: "edits", onEvent: e => events.push(e), ask: async () => ({ decision: "allow", by: "user" }), spawnImpl: () => f.child as never });
+    expect(f.replies.find(r => r.id === 900).result).toEqual({ outcome: { outcome: "cancelled" } });
+    const perms = events.filter(e => e.kind === "permission");
+    expect(perms[0]).toMatchObject({ decision: "reject", by: "policy" });
+    expect(perms.filter(p => p.decision === "allow")).toHaveLength(MAX_PERMISSIONS_PER_TURN - 1);
+    expect(perms.slice(MAX_PERMISSIONS_PER_TURN).every(p => p.decision === "reject")).toBe(true);
   });
 
   it("closes approvals left pending by a previous daemon", () => {
