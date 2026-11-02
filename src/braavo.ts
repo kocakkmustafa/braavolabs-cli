@@ -1924,18 +1924,29 @@ async function main(): Promise<void> {
       };
       if (conversationId && (chosen || effort)) await client.json("PATCH", `/conversations/${encodeURIComponent(conversationId)}`, { ...(chosen ?? {}), ...(effort ? { effort } : {}) });
 
+      // Plan 5.9: --speak (or /speak in the prompt) reads each answer aloud with the system voice.
+      const { speak, speechCommand } = await import("./forge/speak");
+      let speaking = has(flags, "speak");
+      const voiceCommand = () => {
+        const c = speechCommand();
+        if (!c) { console.error(t("Speech is not available on this system (needs say, spd-say, espeak or PowerShell).")); speaking = false; }
+        return c;
+      };
+      if (speaking) voiceCommand();
       const send = async (content: string): Promise<void> => {
         conversationId ??= await newConversation();
         const controller = new AbortController();
         const onInt = () => controller.abort();
         process.once("SIGINT", onInt);
         let ended = false;
+        let answer = "";
         try {
           await client.turn(conversationId, content, ev => {
-            if (ev.type === "delta") process.stdout.write(ev.text);
+            if (ev.type === "delta") { answer += ev.text; process.stdout.write(ev.text); }
             else if (ev.type === "error") process.stderr.write(`\n${ev.error}\n`);
             else if (ev.type === "done") { ended = true; process.stdout.write(ev.stopReason === "aborted" ? ` ${t("(stopped)")}\n` : "\n"); }
           }, controller.signal);
+          if (speaking && answer.trim() && !controller.signal.aborted) await speak(answer, { command: speechCommand(), signal: controller.signal });
         } catch (error) {
           if (controller.signal.aborted) { if (!ended) process.stdout.write(` ${t("(stopped)")}\n`); return; }
           if (error instanceof DaemonRequestError) die(error.message);
@@ -1956,11 +1967,17 @@ async function main(): Promise<void> {
       }
       const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "› " });
       console.log(t("Chat on your computer · /new, /exit"));
+      console.log(t("/speak reads answers aloud; dictate with your system's dictation (macOS: press Fn twice)."));
       rl.prompt();
       for await (const line of rl) {
         const text = line.trim();
         if (text === "/exit") break;
         if (text === "/new") { conversationId = undefined; rl.prompt(); continue; }
+        if (text === "/speak" || text === "/speak on" || text === "/speak off") {
+          speaking = text !== "/speak off" && (text === "/speak on" || !speaking) && Boolean(voiceCommand());
+          console.error(speaking ? "/speak on" : "/speak off");
+          rl.prompt(); continue;
+        }
         // FK-4: the same slash commands the phone and desktop chat understand.
         const slashModel = /^\/model\s+(\S+)$/.exec(text);
         if (slashModel) {

@@ -36,7 +36,7 @@ export const COMMAND_HELP = [
 ["monitor", "braavo monitor add <url> [--every 6h] [--notify price,plans,promo,release,text] [--label <text>] | list | rm <id> | check [<id>] [--due] [--summarize] | log <id>", "Watch web pages for changes; a model runs only when something changed"],
 ["code", "braavo code <task> [--dir <path>] [--model PROVIDER/model] [--plan] [--yes] [--allow-web <domains>] [--review-model P/m] [--project-hooks] [--shell] | undo", "Edit code with your own model: plan, diff, undo"],
 ["company", "braavo company init <name> [--templates all|id,...] [--watch <urls>|@file] | show | tui | memory | hire | set <agent> [--model PROVIDER/model] [--effort <e>] [--pause|--resume] | watch <name> --urls <urls>|@file | run <routine> | findings | prices", "Run your local company: agents, panel and watch routines"],
-["chat", "braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <id>|last] | list | show <id> | search <text> | export <id> [--format md|json] [--out <file>]", "Chat through the local daemon"],
+["chat", "braavo chat [<message>] [--model PROVIDER/model] [--effort low|medium|high] [--continue <id>|last] [--speak] | list | show <id> | search <text> | export <id> [--format md|json] [--out <file>]", "Chat through the local daemon"],
 ["daemon", "braavo daemon run [--relay] | start [--relay] | stop | status | install [--relay] [--dry-run] | uninstall [--json]", "Run the local daemon: agents, schedules and the local API"],
 ["approve", "braavo approve <approvalId> [--deny] [--reason <text>] --yes [--json]", "Approve or reject a pending action"],
 ["pause", "braavo pause <runId> --yes [--json]", "Pause a run"],
