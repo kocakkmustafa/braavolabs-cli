@@ -34,6 +34,8 @@ export interface RunnerDeps extends ProviderDeps {
   memory?: CompanyMemory;
   /** Agent browser (plan 5.1): pages a task links to, read under the URL policy. */
   browser?: { read(url: string): Promise<{ url: string; title: string; text: string; truncated: boolean }> };
+  /** CLI employees (plan 3.1): tasks of agents whose engine is claude-code, codex or gemini. */
+  worker?: import("./workers").WorkerDeps;
   /** Skills (plan 5.3): an agent's task runs with its skills' instructions. */
   skills?: { promptFor(names: string[]): string };
   /** Desktop/phone notification for a finding; failures are ignored. */

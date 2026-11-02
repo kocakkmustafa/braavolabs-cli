@@ -6,6 +6,10 @@ import { ChatError, type ChatEvent, type ChatService } from "./chat";
 import { MemoryError, type CompanyMemory } from "./memory";
 import { isSkillName, SkillError, type SkillRegistry } from "./skills";
 import { BrowseError, type BrowserPolicy, type Page } from "./browse";
+import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
+import type { ApprovalCenter } from "./workers";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { CompanyError, hire, panel, updateAgent } from "./company";
 import { AGENT_TEMPLATES } from "../core/templates";
 /**
@@ -50,6 +54,8 @@ export interface DaemonOptions {
   memory?: CompanyMemory;
   /** Agent browser (plan 5.1): URL policy and read-only page fetches; browser routes answer 404 without it. */
   browser?: { policy(): BrowserPolicy; setPolicy(p: BrowserPolicy): void; read(url: string): Promise<Page> };
+  /** CLI employees' approval queue (plan 3.1); approval routes answer 404 without it. */
+  approvals?: ApprovalCenter;
   /** Skills (plan 5.3); skill routes answer 404 without it. */
   skills?: SkillRegistry;
 }
@@ -59,7 +65,10 @@ export type DaemonEvent =
   | { type: "agent.status"; agentId: string; status: string }
   | { type: "company.changed"; companyId: string }
   | { type: "conversation.changed"; conversationId: string }
-  | { type: "task.changed"; taskId: string; companyId: string };
+  | { type: "task.changed"; taskId: string; companyId: string }
+  | { type: "task.event"; taskId: string; kind: string }
+  | { type: "approval.requested"; approvalId: string; companyId: string }
+  | { type: "approval.decided"; approvalId: string; companyId: string; status: string };
 
 class HttpError extends Error { constructor(readonly status: number, message: string, readonly code?: string) { super(message); } }
 
@@ -250,6 +259,50 @@ export class Daemon {
           });
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, { agent });
+        }
+        case "POST /companies/:id/workers": {
+          // Plan 3.1: hire the user's own Claude Code, Codex or Gemini CLI as an employee.
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          if (!isWorkerEngine(body.engine)) throw new HttpError(400, "engine must be claude-code, codex or gemini");
+          if (typeof body.workdir !== "string" || !isAbsolute(body.workdir) || !existsSync(body.workdir)) throw new HttpError(400, "workdir must be an existing absolute folder");
+          const policy = body.approvalPolicy ?? "ask";
+          if (!(APPROVAL_POLICIES as readonly unknown[]).includes(policy)) throw new HttpError(400, "approvalPolicy must be ask, edits or readonly");
+          const manager = body.reportsToAgentId ?? null;
+          if (manager !== null) {
+            const m = store.getAgent(String(manager));
+            if (!m || m.company_id !== id) throw new HttpError(400, "reportsToAgentId must be an agent of this company");
+          }
+          const names: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI" };
+          const agent = store.createAgent({
+            companyId: id, name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : names[body.engine],
+            role: typeof body.role === "string" && body.role.trim() ? body.role.trim().slice(0, 80) : "engineer", title: typeof body.title === "string" ? body.title.slice(0, 80) : undefined,
+            provider: "ACP", model: body.engine, engine: body.engine, reportsToAgentId: manager,
+            systemPrompt: typeof body.systemPrompt === "string" ? body.systemPrompt.slice(0, 20_000) : undefined,
+          });
+          store.setWorker(agent.id, { workdir: body.workdir, approvalPolicy: policy });
+          store.activity({ companyId: id, actor: "user", verb: "hired-worker", objectType: "agent", objectId: agent.id, summary: `${agent.name} (${body.engine}) in ${body.workdir}` });
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 201, { agent: store.getAgent(agent.id) });
+        }
+        case "GET /tasks/:id/events": {
+          if (!store.getTask(id)) throw new HttpError(404, "task not found");
+          return this.json(res, 200, { events: store.taskEvents(id, Number(url.searchParams.get("after") ?? 0) || 0) });
+        }
+        case "GET /companies/:id/approvals": {
+          const status = url.searchParams.get("status") ?? undefined;
+          return this.json(res, 200, { approvals: store.listApprovals(id, status).map(a => ({ ...a, paths: JSON.parse(a.paths) })) });
+        }
+        case "POST /approvals/:id": {
+          if (!this.o.approvals) throw new HttpError(404, "approvals are not enabled on this daemon");
+          const approval = store.getApproval(id);
+          if (!approval) throw new HttpError(404, "approval not found");
+          const body = await readJson(req);
+          if (body.decision !== "allow" && body.decision !== "reject") throw new HttpError(400, "decision must be allow or reject");
+          if (!this.o.approvals.decide(id, body.decision)) throw new HttpError(409, `approval is already ${store.getApproval(id)?.status}`);
+          const decided = store.getApproval(id)!;
+          this.emit({ type: "approval.decided", approvalId: id, companyId: decided.company_id, status: decided.status });
+          return this.json(res, 200, { approval: { ...decided, paths: JSON.parse(decided.paths) } });
         }
         case "GET /templates":
           return this.json(res, 200, { templates: AGENT_TEMPLATES.map(t => ({ id: t.id, names: t.names, role: t.role, domain: t.domain, reportsTo: t.reportsTo, tier: t.tier, effort: t.effort, routines: t.routines.map(r => ({ key: r.key, names: r.names, rrule: r.rrule, preflight: r.preflight.type })) })) });

@@ -1548,7 +1548,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1633,6 +1633,33 @@ async function main(): Promise<void> {
         });
         return;
       }
+      if (sub === "hire-cli") {
+        // Plan 3.1: your own Claude Code, Codex or Gemini CLI as an employee, over ACP.
+        const engine = positionals[1];
+        const workdir = flag(flags, "workdir");
+        if (!engine || !workdir) usage(companyUsage);
+        const { resolve } = await import("node:path");
+        const manager = flag(flags, "reports-to");
+        const managerId = manager ? (await call<any>("GET", `/companies/${companyId}/panel`)).agents.find((a: any) => a.id === manager || a.name.toLowerCase() === manager.toLowerCase() || a.role === manager)?.id : undefined;
+        const { agent } = await call<{ agent: any }>("POST", `/companies/${companyId}/workers`, {
+          engine, workdir: resolve(workdir!), name: flag(flags, "name"), role: flag(flags, "role"), approvalPolicy: flag(flags, "approvals") ?? "ask",
+          ...(managerId ? { reportsToAgentId: managerId } : {}),
+        });
+        emit(flags, agent, () => t("CLI employee hired: {0}", `${agent.name} · ${agent.engine} · ${agent.workdir} · ${agent.approval_policy}`));
+        return;
+      }
+      if (sub === "approvals") {
+        const { approvals } = await call<{ approvals: Array<{ id: string; title: string; tool: string; paths: string[]; status: string; created_at: string }> }>("GET", `/companies/${companyId}/approvals?status=pending`);
+        emit(flags, approvals, () => approvals.length ? approvals.map(a => `${a.id}  ${a.tool.padEnd(8)} ${a.title.slice(0, 80)}${a.paths.length ? ` · ${a.paths.join(", ").slice(0, 80)}` : ""}  ${when(a.created_at)}`).join("\n") : t("No approvals waiting."));
+        return;
+      }
+      if (sub === "approve") {
+        const ref = positionals[1];
+        if (!ref) usage(companyUsage);
+        const { approval } = await call<{ approval: { id: string; status: string; title: string } }>("POST", `/approvals/${encodeURIComponent(ref!)}`, { decision: has(flags, "deny") ? "reject" : "allow" });
+        emit(flags, approval, () => t("Approval {0}: {1}", approval.title, statusText(approval.status)));
+        return;
+      }
       if (sub === "hire") {
         const result = await call<any>("POST", `/companies/${companyId}/hire`, await hireBody());
         emit(flags, result, () => reportHire(result));
@@ -1693,6 +1720,10 @@ async function main(): Promise<void> {
             return;
           }
         }
+        const workdirFlag = flag(flags, "workdir");
+        if (workdirFlag !== undefined) { const { resolve } = await import("node:path"); body.workdir = resolve(workdirFlag); }
+        const approvalsFlag = flag(flags, "approvals");
+        if (approvalsFlag !== undefined) body.approvalPolicy = approvalsFlag;
         const agentBudget = flag(flags, "budget");
         if (agentBudget !== undefined) {
           const v = agentBudget === "none" ? null : Number(agentBudget);
@@ -1766,7 +1797,20 @@ async function main(): Promise<void> {
         }
         if (action === "show") {
           const tk = await findTask(positionals[2]);
-          emit(flags, tk, () => [taskLine(tk), tk.body ? `\n${tk.body}` : "", tk.result ? `\n${tk.result}` : ""].filter(Boolean).join("\n"));
+          // Plan 3.1: a CLI employee's run leaves structured events (tool calls, diffs, approvals, plan).
+          const { events } = await call<{ events: Array<{ kind: string; data: any }> }>("GET", `/tasks/${tk.id}/events`);
+          const eventLine = (e: { kind: string; data: any }) => {
+            const d = e.data ?? {};
+            switch (e.kind) {
+              case "tool_call": return `  ▸ ${d.tool} · ${d.title}${d.paths?.length ? ` · ${d.paths.join(", ")}` : ""}`;
+              case "tool_update": return d.status === "completed" || d.status === "failed" ? `    ${d.status}${d.text ? ` · ${String(d.text).split("\n")[0].slice(0, 100)}` : ""}` : "";
+              case "diff": return `  ± ${d.path} (${d.oldText === null ? "new" : `${String(d.oldText).split("\n").length}→${String(d.newText).split("\n").length} lines`})`;
+              case "permission": return `  ${d.decision === "allow" ? "✓" : "✗"} ${d.tool} · ${d.title} (${d.by})`;
+              case "plan": return `  plan: ${(d.entries ?? []).map((x: any) => `${x.status === "completed" ? "✓" : "·"} ${x.content}`).join(" | ").slice(0, 300)}`;
+              default: return "";
+            }
+          };
+          emit(flags, { ...tk, events }, () => [taskLine(tk), tk.body ? `\n${tk.body}` : "", ...(events.length ? ["", ...events.map(eventLine).filter(Boolean)] : []), tk.result ? `\n${tk.result}` : ""].filter(Boolean).join("\n"));
           return;
         }
         if (action === "run") {
@@ -2050,7 +2094,16 @@ async function main(): Promise<void> {
         const { runTask } = await import("./daemon/tasks");
         const { loadPriceOverrides } = await import("./daemon/pricing");
         store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
-        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser }) });
+                // Plan 3.1: CLI employees (the user's own Claude Code / Codex / Gemini CLI over ACP) and their approval queue.
+        const { ApprovalCenter } = await import("./daemon/workers");
+        const { loadAdapters } = await import("./daemon/acp");
+        const approvals = new ApprovalCenter(store, { notify, onRequest: (approvalId, companyId) => daemon?.emit({ type: "approval.requested", approvalId, companyId }) });
+        const worker = {
+          keys, notify, memory, approvals, adapters: loadAdapters(`${CONFIG_DIR}/adapters.json`),
+          context: (agent: { id: string }) => [memory.snapshot(agent.id), skills.promptFor(store.agentSkills(agent.id))].filter(Boolean).join("\n\n"),
+          onEvent: (taskId: string, e: { kind: string }) => daemon?.emit({ type: "task.event", taskId, kind: e.kind }),
+        };
+        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

@@ -1,6 +1,9 @@
 import type { AgentRow, DaemonStore } from "./store";
 import { budgetLine } from "./budget";
 import { departmentOf } from "./memory";
+import { APPROVAL_POLICIES } from "./acp";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { hireFromTemplates, TEMPLATE_IDS, type TemplateId, type UserModels } from "../core/templates";
 import { orgTree, validateOrg, type OrgNode } from "../core/company";
 import { AGENT_EFFORTS } from "../core/effort";
@@ -78,7 +81,7 @@ export function hire(store: DaemonStore, companyId: string, req: HireRequest, mo
 
 export interface PanelAgent {
   id: string; name: string; role: string; title: string | null; provider: string; model: string; effort: string | null; status: string;
-  reportsToAgentId: string | null; budgetUsdMonthly: number | null; department: string; skills: string[]; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
+  reportsToAgentId: string | null; budgetUsdMonthly: number | null; department: string; skills: string[]; engine: string; workdir: string | null; approvalPolicy: string; month: { inputTokens: number; outputTokens: number; usd: number; runs: number };
   /** Share of the agent's monthly budget used (null when it has no budget). */
   budgetRatio: number | null;
 }
@@ -94,6 +97,7 @@ export function panel(store: DaemonStore, companyId: string, now = new Date()) {
     return {
       id: a.id, name: a.name, role: a.role, title: a.title, provider: a.provider, model: a.model, effort: a.effort, status: a.status,
       reportsToAgentId: a.reports_to_agent_id, budgetUsdMonthly: a.budget_usd_monthly, department: departmentOf(a), skills: store.agentSkills(a.id),
+      engine: a.engine, workdir: a.workdir, approvalPolicy: a.approval_policy,
       month: { inputTokens: c?.input_tokens ?? 0, outputTokens: c?.output_tokens ?? 0, usd: c?.usd ?? 0, runs: c?.runs ?? 0 },
       budgetRatio: a.budget_usd_monthly && a.budget_usd_monthly > 0 ? (c?.usd ?? 0) / a.budget_usd_monthly : a.budget_usd_monthly === 0 ? 1 : null,
     };
@@ -125,6 +129,14 @@ export function updateAgent(store: DaemonStore, agentId: string, body: Record<st
   const agent = store.getAgent(agentId);
   if (!agent) throw new CompanyError(404, "agent not found");
   const patch: Parameters<DaemonStore["updateAgent"]>[1] = {};
+  const worker = agent.engine !== "native";
+  if (worker && (body.provider !== undefined || body.model !== undefined)) throw new CompanyError(400, "a CLI employee uses its own CLI's model; change it in that CLI");
+  if (body.workdir !== undefined || body.approvalPolicy !== undefined) {
+    if (!worker) throw new CompanyError(400, "workdir and approvalPolicy are for CLI employees");
+    if (body.workdir !== undefined && (typeof body.workdir !== "string" || !isAbsolute(body.workdir) || !existsSync(body.workdir))) throw new CompanyError(400, "workdir must be an existing absolute folder");
+    if (body.approvalPolicy !== undefined && !(APPROVAL_POLICIES as readonly unknown[]).includes(body.approvalPolicy)) throw new CompanyError(400, "approvalPolicy must be ask, edits or readonly");
+    store.setWorker(agentId, { workdir: body.workdir as string | undefined, approvalPolicy: body.approvalPolicy as string | undefined });
+  }
   if (body.provider !== undefined || body.model !== undefined) {
     const provider = body.provider ?? agent.provider; const model = body.model ?? agent.model;
     if (!isAIProvider(provider)) throw new CompanyError(400, "unknown provider");
@@ -155,7 +167,7 @@ export function updateAgent(store: DaemonStore, agentId: string, body: Record<st
   if (body.status !== undefined && !wantsPause && !wantsResume) throw new CompanyError(400, "status can be set to paused or idle");
   const provider = patch.provider ?? agent.provider;
   if (wantsPause) patch.status = "paused";
-  else if (wantsResume || agent.status !== "paused") patch.status = agent.status === "running" ? "running" : canUse(provider) ? "idle" : "error";
+  else if (wantsResume || agent.status !== "paused") patch.status = agent.status === "running" ? "running" : worker || canUse(provider) ? "idle" : "error";
   store.updateAgent(agentId, patch);
   store.activity({ companyId: agent.company_id, actor: "user", verb: "updated-agent", objectType: "agent", objectId: agentId, summary: agent.name });
   return store.getAgent(agentId)!;

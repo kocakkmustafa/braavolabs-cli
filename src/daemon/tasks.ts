@@ -7,6 +7,7 @@ import { prepareCall, redact } from "./provider";
 import type { RunnerDeps } from "./runner";
 import { withMemory } from "./memory";
 import { UNTRUSTED_NOTE, untrusted, urlsIn } from "./browse";
+import { runWorkerTask } from "./workers";
 
 /**
  * Tasks (plan 2.3): one-off work for one agent, outside routines and pipelines.
@@ -33,6 +34,8 @@ export async function runTask(store: DaemonStore, taskId: string, deps: RunnerDe
   const wait = (note: string): TaskRunResult => { store.updateTask(task.id, { note }); return { outcome: "waiting", note }; };
   if (!agent) return wait("no agent assigned");
   if (agent.status === "paused") return wait(`${agent.name} is paused`);
+  // Plan 3.1: a CLI employee works through its own Claude Code / Codex / Gemini CLI over ACP.
+  if (agent.engine !== "native") return deps.worker ? runWorkerTask(store, task, agent, deps.worker, now) : wait("CLI employees are not enabled on this daemon");
   if (agent.status === "error") return wait(`${agent.name} needs setup: add a key or pull a local model (braavo setup)`);
   const blocked = budgetBlock(store, task.company_id, agent.id, now());
   if (blocked) return wait(blocked);
