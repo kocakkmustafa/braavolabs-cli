@@ -59,7 +59,8 @@ function defaultDeps(): KeyStoreDeps {
   return {
     platform: process.platform,
     dir: CONFIG_DIR,
-    exec: (args) => execFileSync("security", args, { encoding: "utf8" }),
+    // stderr piped: a missing item ("could not be found in the keychain") is an answer, not output.
+    exec: (args) => execFileSync("security", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
     fs: {
       readFileSync: (p) => readFileSync(p, "utf8"),
       writeFileSync: (p, data) => writeFileSync(p, data),

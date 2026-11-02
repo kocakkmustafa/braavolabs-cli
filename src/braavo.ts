@@ -1208,6 +1208,69 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "github": {
+      // Plan 5.4: sign in with the Braavolabs GitHub App (OAuth device flow) for repository
+      // triggers. The token stays in the OS keychain; nothing goes to a Braavolabs server.
+      const gh = await import("./daemon/github");
+      const keys = makeKeyStore();
+      const ghFetch = fetch as unknown as import("./daemon/github").FetchLike;
+      const save = (auth: import("./daemon/github").GithubAuth) => keys.add(gh.GITHUB_TOKEN_KEY, JSON.stringify(auth));
+      const sub = positionals[0] ?? "status";
+      if (sub === "login") {
+        const clientId = gh.githubClientId();
+        const code = await gh.startDeviceFlow(clientId, ghFetch).catch((error: Error) => die(error.message));
+        ui.info(t("Open {0} and enter the code: {1}", code.verification_uri, code.user_code));
+        const auth = await gh.finishDeviceFlow(clientId, code, ghFetch).catch((error: Error) => die(error.message));
+        auth.login = await gh.whoAmI(auth.access, ghFetch);
+        save(auth);
+        if (!keys.secure) ui.warn(t("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform."));
+        emit(flags, { signedIn: true, login: auth.login ?? null }, () => t("Signed in to GitHub as {0}", auth.login ?? "?"));
+        return;
+      }
+      if (sub === "logout") {
+        try { keys.remove(gh.GITHUB_TOKEN_KEY); } catch { /* already gone */ }
+        emit(flags, { signedIn: false }, () => t("Signed out of GitHub."));
+        return;
+      }
+      if (sub === "status") {
+        const token = await gh.currentToken(() => keys.get(gh.GITHUB_TOKEN_KEY), save, gh.githubClientId(), ghFetch);
+        const login = token ? await gh.whoAmI(token, ghFetch) : undefined;
+        emit(flags, { signedIn: !!login, login: login ?? null }, () => (login ? t("Signed in to GitHub as {0}", login) : t("Not signed in to GitHub. Run: braavo github login")));
+        return;
+      }
+      usage("usage: braavo github login | logout | status");
+    }
+    case "slack": {
+      // Plan 5.4: the user's own Slack app (Socket Mode). Both tokens go to the OS keychain;
+      // they are read from a hidden prompt or the environment, never from flags (shell history).
+      const sl = await import("./daemon/slack");
+      const keys = makeKeyStore();
+      const slFetch = fetch as unknown as import("./daemon/github").FetchLike;
+      const sub = positionals[0] ?? "status";
+      if (sub === "connect") {
+        const bot = (process.env.BRAAVO_SLACK_BOT_TOKEN ?? (await promptHidden(t("Slack bot token (xoxb-…): ")))).trim();
+        const app = (process.env.BRAAVO_SLACK_APP_TOKEN ?? (await promptHidden(t("Slack app token (xapp-…): ")))).trim();
+        if (!bot.startsWith("xoxb-") || !app.startsWith("xapp-")) usage("usage: braavo slack connect  (bot token xoxb-…, app-level token xapp-… with connections:write)");
+        const who = await sl.slackAuthTest(bot, slFetch).catch((error: Error) => die(error.message));
+        keys.add(sl.SLACK_BOT_KEY, bot);
+        keys.add(sl.SLACK_APP_KEY, app);
+        if (!keys.secure) ui.warn(t("Stored in ~/.braavo/keys.json (chmod 600) — no OS keychain on this platform."));
+        emit(flags, { connected: true, team: who.team, bot: who.user }, () => t("Connected to Slack: {0}", `${who.team} · @${who.user}`));
+        return;
+      }
+      if (sub === "disconnect") {
+        for (const k of [sl.SLACK_BOT_KEY, sl.SLACK_APP_KEY]) try { keys.remove(k); } catch { /* already gone */ }
+        emit(flags, { connected: false }, () => t("Disconnected from Slack."));
+        return;
+      }
+      if (sub === "status") {
+        const bot = keys.get(sl.SLACK_BOT_KEY);
+        const who = bot ? await sl.slackAuthTest(bot, slFetch).catch(() => undefined) : undefined;
+        emit(flags, { connected: !!who, team: who?.team ?? null, bot: who?.user ?? null }, () => (who ? t("Connected to Slack: {0}", `${who.team} · @${who.user}`) : t("Not connected to Slack. Run: braavo slack connect")));
+        return;
+      }
+      usage("usage: braavo slack connect | disconnect | status");
+    }
     case "keys": {
       const sub = positionals[0];
       const store = makeKeyStore();
@@ -1642,7 +1705,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | goal add <title> [--body <text>] [--manager <agent>] [--run] | goal list | goal show|run <id> | trigger add rss|web <url> --agent <a> [--every 30m] | trigger add files <folder> --agent <a> [--pattern *.pdf] [--title <t>] [--body <b>] | trigger list | trigger check|on|off|rm <id> | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | tui | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | set <agent> --skills <a,b>|none | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> | hire-cli <claude-code|codex|gemini> --workdir <path> [--name <n>] [--approvals ask|edits|readonly] [--reports-to <agent>] | approvals | approve <id> [--deny] | goal add <title> [--body <text>] [--manager <agent>] [--run] | goal list | goal show|run <id> | trigger add rss|web <url> --agent <a> [--every 30m] | trigger add files <folder> --agent <a> [--pattern *.pdf] [--title <t>] [--body <b>] | trigger add github <owner/repo> --agent <a> [--events issues,pull_request,release,workflow_run] [--webhook] [--every 5m] | trigger add slack --agent <a> [--events mention,dm] [--channels C0123ABCD,...] | trigger list | trigger check|on|off|rm <id> | set <agent> --workdir <path> --approvals ask|edits|readonly | memory [list|search <words> [--scope <scope>]|cat <path>|edit <path> --text <text>|@file|core <agent> --text <text>|@file|embed <ollama-model>|off] [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1781,19 +1844,26 @@ async function main(): Promise<void> {
         usage(companyUsage);
       }
       if (sub === "trigger") {
-        // Plan 5.4: rss <url> | web <url> | files <folder> → a task for --agent when something new happens.
+        // Plan 5.4: rss <url> | web <url> | files <folder> | github <owner/repo> | slack → a task for --agent when something new happens.
         const action = positionals[1] ?? "list";
         if (action === "add") {
           const kind = positionals[2]; const target = positionals[3];
-          if (!kind || !target || !flag(flags, "agent")) usage(companyUsage);
+          if (!kind || (!target && kind !== "slack") || !flag(flags, "agent")) usage(companyUsage);
           const { resolve } = await import("node:path");
           const every = flag(flags, "every");
           const minutes = every ? (/^(\d+)h$/.exec(every) ? Number(/^(\d+)h$/.exec(every)![1]) * 60 : Number(every.replace(/m$/, ""))) : undefined;
-          const { trigger } = await call<{ trigger: any }>("POST", `/companies/${companyId}/triggers`, {
+          const { trigger, webhook } = await call<{ trigger: any; webhook?: { path: string; secret: string } }>("POST", `/companies/${companyId}/triggers`, {
             kind, agent: flag(flags, "agent"), name: flag(flags, "name"), title: flag(flags, "title"), body: flag(flags, "body"),
-            ...(kind === "files" ? { path: resolve(target!), pattern: flag(flags, "pattern") } : { url: target, ...(minutes ? { everyMinutes: minutes } : {}) }),
+            ...(kind === "files" ? { path: resolve(target!), pattern: flag(flags, "pattern") }
+              : kind === "slack" ? { ...(flag(flags, "events") ? { events: flag(flags, "events") } : {}), ...(flag(flags, "channels") ? { channels: flag(flags, "channels") } : {}) }
+              : kind === "github" ? { repo: target, ...(flag(flags, "events") ? { events: flag(flags, "events") } : {}), mode: has(flags, "webhook") ? "webhook" : "poll", ...(minutes ? { everyMinutes: minutes } : {}) }
+              : { url: target, ...(minutes ? { everyMinutes: minutes } : {}) }),
           });
-          emit(flags, trigger, () => t("Trigger added: {0}", `${trigger.name}  ${trigger.id}`));
+          const port = runningDaemon(daemonPaths())?.port;
+          emit(flags, webhook ? { ...trigger, webhook } : trigger, () => [
+            t("Trigger added: {0}", `${trigger.name}  ${trigger.id}`),
+            ...(webhook ? [t("Webhook address on this computer: {0}", `http://127.0.0.1:${port ?? "<port>"}${webhook.path}`), t("Webhook secret (shown once): {0}", webhook.secret)] : []),
+          ].join("\n"));
           return;
         }
         if (action === "list") {
@@ -2275,8 +2345,42 @@ async function main(): Promise<void> {
         });
         // Plan 5.4: rss / web-change / folder triggers open tasks (staggered polls, folder watches).
         const { TriggerEngine } = await import("./daemon/triggers");
-        const triggers = new TriggerEngine(store, { policy: browser.policy, notify, onTask: (taskId, companyId) => daemon?.emit({ type: "task.changed", taskId, companyId }) });
-        daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, triggers, runGoal: goals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
+        // GitHub triggers: the user's token and each webhook secret live in the keychain (`braavo github login`).
+        const gh = await import("./daemon/github");
+        const ghFetch = fetch as unknown as import("./daemon/github").FetchLike;
+        const github = {
+          token: () => gh.currentToken(() => keys.get(gh.GITHUB_TOKEN_KEY), auth => keys.add(gh.GITHUB_TOKEN_KEY, JSON.stringify(auth)), gh.githubClientId(), ghFetch),
+          secret: (id: string) => keys.get(gh.webhookSecretKey(id)),
+          saveSecret: (id: string, secret: string) => keys.add(gh.webhookSecretKey(id), secret),
+          removeSecret: (id: string) => keys.remove(gh.webhookSecretKey(id)),
+          fetch: ghFetch,
+        };
+        // Slack triggers: the user's own Slack app over Socket Mode; tokens in the keychain (`braavo slack connect`).
+        const sl = await import("./daemon/slack");
+        let slackSocket: import("./daemon/slack").SlackSocket | undefined;
+        const slack = {
+          start: () => {
+            slackSocket ??= new sl.SlackSocket({ appToken: () => keys.get(sl.SLACK_APP_KEY), fetch: ghFetch, log: line => console.error(line) }, m => { triggers.onSlack(m); });
+            slackSocket.start();
+          },
+          stop: () => { slackSocket?.stop(); slackSocket = undefined; },
+          status: () => (slackSocket ? `${slackSocket.status}${slackSocket.note ? ` (${slackSocket.note})` : ""}` : "off"),
+        };
+        const triggers = new TriggerEngine(store, { policy: browser.policy, notify, github, slack, onTask: (taskId, companyId) => daemon?.emit({ type: "task.changed", taskId, companyId }) });
+        // A Slack-triggered task's answer goes back to its thread only after the user approves it.
+        const replyToSlack = (taskId: string) => sl.replyAfterTask(taskId, {
+          store, replyFor: id => triggers.slackReplyFor(id), ask: (agent, id, req) => approvals.ask(agent, id, req),
+          botToken: () => keys.get(sl.SLACK_BOT_KEY), fetch: ghFetch, notify,
+        });
+        daemon = new Daemon({
+          store, token, version, chat, memory, skills, browser, approvals, triggers, runGoal: goals,
+          runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }),
+          runTask: async taskId => {
+            const result = await runTask(store, taskId, { keys, notify, memory, skills, browser, worker });
+            void replyToSlack(taskId).catch(() => undefined);
+            return result;
+          },
+        });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         // Plan 4.4: companies hired before consolidation existed get their nightly routine now.

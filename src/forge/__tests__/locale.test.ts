@@ -25,8 +25,8 @@ describe("fourteen explicit CLI locales", () => {
     }
   });
 
-  it("documents all 44 actual commands without translating their syntax", () => {
-    expect(COMMAND_HELP).toHaveLength(44);
+  it("documents all 46 actual commands without translating their syntax", () => {
+    expect(COMMAND_HELP).toHaveLength(46);
     for (const locale of LOCALES) {
       setLocale(locale); const help = renderHelp(makeUi({ tty: false }));
       for (const [_command, syntax, description] of COMMAND_HELP) {

@@ -14,8 +14,19 @@ development history remains grouped by date.
   file) and the signed revocation list all check out. The daemon checks the
   revocation list daily; a revoked skill is switched off, taken off every agent
   and reported in a notification.
+- GitHub triggers: `braavo company trigger add github <owner/repo>` opens tasks
+  for new issues, pull requests, comments, reviews, releases, discussions and
+  failed workflow runs. Polling (Events API with ETags) by default; `--webhook`
+  gives the trigger an HMAC-checked address on the daemon and a one-time secret.
+  `braavo github login | status | logout` signs in with the Braavolabs GitHub
+  App's device flow; the token stays in the OS keychain.
+- Slack triggers: `braavo company trigger add slack` turns mentions of your
+  Slack app and direct messages to it into tasks over Socket Mode (no public
+  address). The answer is posted to the thread only after you approve it.
+  `braavo slack connect | status | disconnect` keeps the tokens in the keychain.
 
 ### Changed
+- The macOS keychain lookup no longer prints `security`'s "item not found" line.
 - `direct` and `fix --via direct` default Anthropic to
   `claude-sonnet-5-5` (claude-3-5-sonnet is retired) and allow 4096 output
   tokens, since current models think before answering.
