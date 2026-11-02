@@ -1,4 +1,5 @@
 import type { ConversationRow, ConversationSummary, DaemonStore, MessageRow } from "./store";
+import { checkBudgets } from "./budget";
 import { AI_PROVIDERS, isAIProvider, LOCAL_PROVIDERS, type AIProviderType, type ChatMessage } from "../core/providers";
 import { AGENT_EFFORTS } from "../core/effort";
 import { suggestModel, type ModelSuggestion, type ModelTier } from "../core/templates";
@@ -214,6 +215,7 @@ export class ChatService {
 
       if (inputTokens || outputTokens) emit({ type: "usage", inputTokens, outputTokens });
       this.store.recordCost({ companyId: c.company_id ?? undefined, agentId: c.agent_id ?? undefined, runId: id, provider: c.provider, model: c.model, inputTokens, outputTokens });
+      if (c.company_id) checkBudgets(this.store, c.company_id, c.agent_id ?? undefined, new Date().toISOString());
       const messageId = text ? this.store.addMessage(id, "assistant", text, { stopReason }) : null;
       if (failed) emit({ type: "error", error: failed, code: "provider" });
       emit({ type: "done", messageId, stopReason });

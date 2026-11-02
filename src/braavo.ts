@@ -1494,7 +1494,7 @@ async function main(): Promise<void> {
         catch (error) { if (error instanceof DaemonRequestError) die(error.message); throw error; }
       };
       const sub = positionals[0] ?? "show";
-      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] [--company <id>] [--json]";
+      const companyUsage = "usage: braavo company init <name> [--mission <text>] [--templates all|id,...] [--watch <urls>|@file] [--release-watch <urls>|@file] [--timezone <tz>] | show | hire [...] | set <agent> [--model PROVIDER/model] [--effort low|medium|high|default] [--pause|--resume] | watch <name> --urls <urls>|@file [--every 6h] | run <routine> | findings [--role <role>] | prices [--url <url>] | budget <usd|none> | set <agent> --budget <usd|none> | task add <title> --agent <name> [--body <text>] [--priority <n>] | task list [--status OPEN|RUNNING|DONE|FAILED|CANCELLED] | task show|run|cancel|reopen <id> [--company <id>] [--json]";
       /** Comma list or @file (every http(s) URL in it, e.g. a KAYNAKLAR.md), deduplicated, at most 20. */
       const urlList = async (value: string | undefined): Promise<string[]> => {
         if (!value) return [];
@@ -1549,18 +1549,26 @@ async function main(): Promise<void> {
       if (sub === "show") {
         emit(flags, p, () => {
           const byId = new Map(p.agents.map((a: any) => [a.id, a]));
-          const out = [`${p.company.name} · ${t("{0} agents", p.agents.length)} · ${tokens(p.month.inputTokens)}/${tokens(p.month.outputTokens)} tokens`];
+          const pct = (r: number | null) => (r === null || r === undefined ? "" : ` (${Math.round(r * 100)}%)`);
+          const budget = p.company.monthlyBudgetUsd !== null ? ` / $${p.company.monthlyBudgetUsd.toFixed(2)}${pct(p.month.budgetRatio)}` : "";
+          const out = [`${p.company.name} · ${t("{0} agents", p.agents.length)} · $${p.month.usd.toFixed(2)}${budget} · ${tokens(p.month.inputTokens)}/${tokens(p.month.outputTokens)} tokens`];
+          if (p.month.unpricedCalls) out.push(t("{0} calls on unpriced models (set prices in ~/.braavo/prices.json)", p.month.unpricedCalls));
           const walk = (nodes: any[], prefix: string) => nodes.forEach((n, i) => {
             const a: any = byId.get(n.id); const lastNode = i === nodes.length - 1;
             // An agent in error has no usable model yet (K3: nothing is defaulted); its stored model is only a placeholder.
             const model = a.status === "error" ? "— (braavo setup)" : `${a.provider}/${a.model}`;
-            out.push(`${prefix}${lastNode ? "└─" : "├─"} ${a.name}  ${model} · ${a.effort ?? "default"} · ${a.status}${a.month.runs ? ` · ${a.month.runs}×` : ""}`);
+            const spend = a.budgetUsdMonthly !== null ? ` · $${a.month.usd.toFixed(2)}/$${a.budgetUsdMonthly.toFixed(2)}${pct(a.budgetRatio)}` : a.month.usd ? ` · $${a.month.usd.toFixed(2)}` : "";
+            out.push(`${prefix}${lastNode ? "└─" : "├─"} ${a.name}  ${model} · ${a.effort ?? "default"} · ${a.status}${a.month.runs ? ` · ${a.month.runs}×` : ""}${spend}`);
             walk(n.children, `${prefix}${lastNode ? "   " : "│  "}`);
           });
           walk(p.tree, "");
           if (p.routines.length) {
             out.push("", t("Routines"));
             for (const r of p.routines) out.push(`  ${r.name} · ${(byId.get(r.agentId) as any)?.name ?? "?"} · ${t("next")} ${when(r.nextFireAt)}${r.last ? ` · ${t("last")} ${r.last.outcome}${r.last.note ? ` (${String(r.last.note).slice(0, 80)})` : ""}` : ""}`);
+          }
+          if (p.tasks && p.tasks.open + p.tasks.running + p.tasks.done + p.tasks.failed > 0) {
+            out.push("", `${t("Tasks")} · ${p.tasks.open} open · ${p.tasks.running} running · ${p.tasks.done} done · ${p.tasks.failed} failed`);
+            for (const tk of p.tasks.recent.slice(0, 5)) out.push(`  ${tk.id.slice(0, 11)}  ${tk.status.padEnd(9)} ${String(tk.title).slice(0, 60)}${tk.note ? ` · ${String(tk.note).slice(0, 60)}` : ""}`);
           }
           if (p.activity.length) {
             out.push("", t("Recent activity"));
@@ -1580,6 +1588,12 @@ async function main(): Promise<void> {
         if (effort) body.effort = effort === "default" ? null : effort;
         if (has(flags, "pause")) body.status = "paused";
         if (has(flags, "resume")) body.status = "idle";
+        const agentBudget = flag(flags, "budget");
+        if (agentBudget !== undefined) {
+          const v = agentBudget === "none" ? null : Number(agentBudget);
+          if (v !== null && (!Number.isFinite(v) || v < 0)) usage(companyUsage);
+          body.budgetUsdMonthly = v;
+        }
         const { agent: updated } = await call<{ agent: any }>("PATCH", `/agents/${agent.id}`, body);
         emit(flags, updated, () => t("Agent updated: {0}", `${updated.name} · ${updated.provider}/${updated.model} · ${updated.effort ?? "default"} · ${updated.status}`));
         return;
@@ -1606,6 +1620,63 @@ async function main(): Promise<void> {
         if (!routine) die(t("Agent or routine not found: {0}", positionals.slice(1).join(" ")));
         const result = await call<{ outcome: string; note?: string }>("POST", `/routines/${routine.id}/run`);
         emit(flags, result, () => `${routine.name}: ${result.outcome}${result.note ? ` · ${result.note}` : ""}`);
+        return;
+      }
+      if (sub === "budget") {
+        // Plan 2.9: company monthly budget in USD; 80% warns, 100% pauses every agent.
+        const raw = positionals[1];
+        if (!raw) usage(companyUsage);
+        const v = raw === "none" ? null : Number(raw);
+        if (v !== null && (!Number.isFinite(v) || v < 0)) usage(companyUsage);
+        const { company } = await call<{ company: any }>("PATCH", `/companies/${companyId}`, { monthlyBudgetUsd: v });
+        emit(flags, company, () => t("Budget set: {0}", v === null ? "—" : `$${v.toFixed(2)}/month`));
+        return;
+      }
+      if (sub === "task") {
+        // Plan 2.3: one-off work for one agent; the daemon runs open tasks one at a time.
+        const action = positionals[1] ?? "list";
+        const taskLine = (tk: any) => `${tk.id.slice(0, 11)}  ${String(tk.status).padEnd(9)} ${String(tk.title).slice(0, 70)}${tk.assignee_agent_id ? ` · ${(p.agents.find((a: any) => a.id === tk.assignee_agent_id) as any)?.name ?? "?"}` : ""}${tk.note ? ` · ${String(tk.note).slice(0, 80)}` : ""}`;
+        const findTask = async (ref: string | undefined) => {
+          if (!ref) usage(companyUsage);
+          const { tasks } = await call<{ tasks: any[] }>("GET", `/companies/${companyId}/tasks`);
+          const hit = tasks.find(tk => tk.id === ref || tk.id.startsWith(ref!));
+          if (!hit) die(t("Agent or routine not found: {0}", ref!));
+          return hit;
+        };
+        if (action === "add") {
+          const title = positionals.slice(2).join(" ").trim();
+          if (!title) usage(companyUsage);
+          const priority = flag(flags, "priority");
+          const { task } = await call<{ task: any }>("POST", `/companies/${companyId}/tasks`, {
+            title, body: flag(flags, "body"), assignee: flag(flags, "agent") ?? null, ...(priority !== undefined ? { priority: Number(priority) } : {}),
+          });
+          emit(flags, task, () => t("Task added: {0}", taskLine(task)));
+          return;
+        }
+        if (action === "list") {
+          const status = flag(flags, "status");
+          const { tasks } = await call<{ tasks: any[] }>("GET", `/companies/${companyId}/tasks${status ? `?status=${encodeURIComponent(status.toUpperCase())}` : ""}`);
+          emit(flags, { tasks }, () => (tasks.length ? tasks.map(taskLine).join("\n") : t("No tasks yet.")));
+          return;
+        }
+        if (action === "show") {
+          const tk = await findTask(positionals[2]);
+          emit(flags, tk, () => [taskLine(tk), tk.body ? `\n${tk.body}` : "", tk.result ? `\n${tk.result}` : ""].filter(Boolean).join("\n"));
+          return;
+        }
+        if (action === "run") {
+          const tk = await findTask(positionals[2]);
+          const result = await call<{ outcome: string; note?: string; task: any }>("POST", `/tasks/${tk.id}/run`);
+          emit(flags, result, () => `${taskLine(result.task)}${result.task.result ? `\n\n${result.task.result}` : ""}`);
+          return;
+        }
+        if (action === "cancel" || action === "reopen") {
+          const tk = await findTask(positionals[2]);
+          const { task } = await call<{ task: any }>("PATCH", `/tasks/${tk.id}`, { status: action === "cancel" ? "CANCELLED" : "OPEN" });
+          emit(flags, task, () => taskLine(task));
+          return;
+        }
+        usage(companyUsage);
         return;
       }
       if (sub === "prices") {
@@ -1779,7 +1850,10 @@ async function main(): Promise<void> {
           }
           relayAudit?.(`${title}: ${body}`);
         };
-        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys, notify }) });
+        const { runTask } = await import("./daemon/tasks");
+        const { loadPriceOverrides } = await import("./daemon/pricing");
+        store.priceOverrides = loadPriceOverrides(`${CONFIG_DIR}/prices.json`);
+        daemon = new Daemon({ store, token, version, chat, runRoutine: routineId => runRoutine(store, routineId, { keys, notify }), runTask: taskId => runTask(store, taskId, { keys, notify }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
         daemon.startTicking();

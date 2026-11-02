@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { DaemonStore } from "./store";
+import { DaemonStore, TASK_STATUSES } from "./store";
 import { firstFireAt, isSupportedRrule, planTick, TICK_MS, type TickAction } from "./scheduler";
 import { ChatError, type ChatEvent, type ChatService } from "./chat";
 import { CompanyError, hire, panel, updateAgent } from "./company";
@@ -24,6 +24,12 @@ const MAX_IMPORT_BODY_BYTES = 16 * 1024 * 1024;
 const PROVIDERS = new Set(["ANTHROPIC", "OPENAI", "GOOGLE", "MISTRAL", "GROQ", "OPENROUTER", "DEEPSEEK", "KIMI", "QWEN", "CEREBRAS", "ZHIPU", "OLLAMA", "LMSTUDIO", "CUSTOM"]);
 const EFFORTS = new Set(["none", "low", "medium", "high", "max"]);
 
+/** An agent of the company by id or (case-insensitive) name. */
+function resolveAgent(store: DaemonStore, companyId: string, ref: string) {
+  const agents = store.listAgents(companyId);
+  return agents.find(a => a.id === ref) ?? agents.find(a => a.name.toLowerCase() === ref.trim().toLowerCase());
+}
+
 export interface DaemonOptions {
   store: DaemonStore;
   token: string;
@@ -35,13 +41,16 @@ export interface DaemonOptions {
   notify?: (event: DaemonEvent) => void;
   /** Chat engine (plan 1.2); chat routes answer 404 without it. */
   chat?: ChatService;
+  /** Runs one task (plan 2.3); without it tasks are stored but never run. */
+  runTask?: (taskId: string) => Promise<{ outcome: string; note?: string }>;
 }
 
 export type DaemonEvent =
   | { type: "routine.executed"; routineId: string; outcome: string; scheduledFor: string; catchUp: boolean }
   | { type: "agent.status"; agentId: string; status: string }
   | { type: "company.changed"; companyId: string }
-  | { type: "conversation.changed"; conversationId: string };
+  | { type: "conversation.changed"; conversationId: string }
+  | { type: "task.changed"; taskId: string; companyId: string };
 
 class HttpError extends Error { constructor(readonly status: number, message: string, readonly code?: string) { super(message); } }
 
@@ -122,7 +131,28 @@ export class Daemon {
       }
       await this.execute(action.routineId, action.scheduledFor, action.catchUp, action.nextFireAt);
     }
+    await this.runTasks();
     return actions;
+  }
+
+  private taskBusy = false;
+  /** Runs at most one task per pass; tasks whose agent cannot run yet are noted and passed over. */
+  async runTasks(): Promise<{ taskId: string; outcome: string } | null> {
+    if (!this.o.runTask || this.taskBusy) return null;
+    this.taskBusy = true;
+    try {
+      for (const task of this.o.store.runnableTasks(10)) {
+        const result = await this.o.runTask(task.id);
+        this.emit({ type: "task.changed", taskId: task.id, companyId: task.company_id });
+        if (result.outcome !== "waiting" && result.outcome !== "skipped") {
+          this.emit({ type: "company.changed", companyId: task.company_id });
+          return { taskId: task.id, outcome: result.outcome };
+        }
+      }
+      return null;
+    } finally {
+      this.taskBusy = false;
+    }
   }
 
   /** Run a routine now, outside its schedule (API "run now"); the schedule itself is unchanged. */
@@ -232,6 +262,77 @@ export class Daemon {
           this.emit({ type: "agent.status", agentId: agent.id, status: agent.status });
           this.emit({ type: "company.changed", companyId: agent.company_id });
           return this.json(res, 200, { agent });
+        }
+        case "PATCH /companies/:id": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          if (body.monthlyBudgetUsd !== undefined) {
+            const v = body.monthlyBudgetUsd;
+            if (v !== null && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1_000_000)) throw new HttpError(400, "monthlyBudgetUsd must be 0–1000000 or null");
+            store.setCompanyBudget(id, v as number | null);
+            store.activity({ companyId: id, actor: "user", verb: "budget-set", objectType: "company", objectId: id, summary: v === null ? "company budget removed" : `company budget $${(v as number).toFixed(2)}/month` });
+          }
+          this.emit({ type: "company.changed", companyId: id });
+          return this.json(res, 200, { company: store.getCompany(id) });
+        }
+        case "GET /companies/:id/tasks": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const status = url.searchParams.get("status") ?? undefined;
+          if (status && !(TASK_STATUSES as readonly string[]).includes(status)) throw new HttpError(400, "unknown status");
+          return this.json(res, 200, { tasks: store.listTasks(id, status) });
+        }
+        case "POST /companies/:id/tasks": {
+          if (!store.getCompany(id)) throw new HttpError(404, "company not found");
+          const body = await readJson(req);
+          const assignee = body.assignee === undefined || body.assignee === null ? null : resolveAgent(store, id, String(body.assignee));
+          if (body.assignee !== undefined && body.assignee !== null && !assignee) throw new HttpError(400, "assignee must be an agent of this company (id or name)");
+          const priority = body.priority === undefined ? 0 : Number(body.priority);
+          if (!Number.isInteger(priority) || priority < -10 || priority > 10) throw new HttpError(400, "priority must be an integer from -10 to 10");
+          const task = store.createTask({
+            companyId: id, title: str(body.title, "title", 300), body: typeof body.body === "string" ? body.body.slice(0, 20_000) : undefined,
+            assigneeAgentId: assignee?.id ?? null, createdBy: "user", priority, origin: body.origin === "chat" ? "chat" : "manual",
+          });
+          store.activity({ companyId: id, actor: "user", verb: "task-created", objectType: "task", objectId: task.id, summary: task.title.slice(0, 120) });
+          this.emit({ type: "task.changed", taskId: task.id, companyId: id });
+          return this.json(res, 201, { task });
+        }
+        case "GET /tasks/:id": {
+          const task = store.getTask(id);
+          if (!task) throw new HttpError(404, "task not found");
+          return this.json(res, 200, { task });
+        }
+        case "PATCH /tasks/:id": {
+          const task = store.getTask(id);
+          if (!task) throw new HttpError(404, "task not found");
+          const body = await readJson(req);
+          if (body.status !== undefined) {
+            // Cancel an open task; reopen a finished, failed or cancelled one. A running task is left to finish.
+            if (body.status === "CANCELLED" && task.status === "OPEN") store.updateTask(id, { status: "CANCELLED", endedAt: new Date().toISOString() });
+            else if (body.status === "OPEN" && ["DONE", "FAILED", "CANCELLED"].includes(task.status)) store.updateTask(id, { status: "OPEN", note: null, lockedByRunId: null });
+            else throw new HttpError(409, `cannot move a ${task.status} task to ${String(body.status)}`);
+          }
+          if (body.assignee !== undefined) {
+            if (task.status === "RUNNING") throw new HttpError(409, "cannot reassign a running task");
+            const assignee = body.assignee === null ? null : resolveAgent(store, task.company_id, String(body.assignee));
+            if (body.assignee !== null && !assignee) throw new HttpError(400, "assignee must be an agent of this company (id or name)");
+            store.updateTask(id, { assigneeAgentId: assignee?.id ?? null });
+          }
+          this.emit({ type: "task.changed", taskId: id, companyId: task.company_id });
+          return this.json(res, 200, { task: store.getTask(id) });
+        }
+        case "POST /tasks/:id/run": {
+          const task = store.getTask(id);
+          if (!task) throw new HttpError(404, "task not found");
+          if (!this.o.runTask) throw new HttpError(404, "tasks are not enabled");
+          if (this.taskBusy) throw new HttpError(409, "another task is running; try again shortly");
+          this.taskBusy = true;
+          try {
+            const result = await this.o.runTask(id);
+            this.emit({ type: "task.changed", taskId: id, companyId: task.company_id });
+            return this.json(res, 200, { ...result, task: store.getTask(id) });
+          } finally {
+            this.taskBusy = false;
+          }
         }
         case "GET /companies/:id/routines":
           return this.json(res, 200, { routines: store.listRoutines(id) });
