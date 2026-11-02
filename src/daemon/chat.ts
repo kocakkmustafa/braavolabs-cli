@@ -1,6 +1,8 @@
 import type { ConversationRow, ConversationSummary, DaemonStore, MessageRow } from "./store";
 import { budgetBlock, checkBudgets } from "./budget";
 import { withMemory } from "./memory";
+import { compactIfNeeded, historyFor } from "./compaction";
+import { collectStream } from "../core/stream";
 import { AI_PROVIDERS, isAIProvider, LOCAL_PROVIDERS, type AIProviderType, type ChatMessage } from "../core/providers";
 import { AGENT_EFFORTS } from "../core/effort";
 import { suggestModel, type ModelSuggestion, type ModelTier } from "../core/templates";
@@ -36,7 +38,9 @@ export interface ChatDeps extends ProviderDeps {
   ollamaHost?: string;
   lmStudioHost?: string;
   /** Company memory (plan 4.1): an agent conversation starts with a frozen snapshot of it. */
-  memory?: { snapshot(agentId: string): string };
+  memory?: { snapshot(agentId: string): string; journal?(agentId: string, title: string, text: string, at: string): void };
+  /** Plan 4.4: fold a conversation's older part past this many (estimated) tokens. */
+  compactAtTokens?: number;
   /** Skills (plan 5.3): an agent conversation freezes its skills' instructions at the start. */
   skills?: { promptFor(names: string[]): string };
 }
@@ -222,13 +226,29 @@ export class ChatService {
       emit({ type: "message", id: userId, role: "user" });
       this.onChange(id);
 
-      const history: ChatMessage[] = this.store.messages(id)
-        .filter(m => (m.role === "user" || m.role === "assistant") && m.content)
-        .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+      // Plan 4.4: a long conversation is folded first — the agent's memory gets the durable bits
+      // (silent flush), the older turns become a summary; the turn continues on the full history if that fails.
+      try {
+        await compactIfNeeded(this.store, id, {
+          complete: async (system, user) => {
+            const r = await collectStream(call.stream({ system, messages: [{ role: "user", content: user }] }, AbortSignal.any([controller.signal, AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)])));
+            return { text: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+          },
+          journal: agent && this.deps.memory?.journal ? (title, text) => this.deps.memory!.journal!(agent.id, title, text, new Date().toISOString()) : undefined,
+          onCost: (inputTokens, outputTokens) => this.store.recordCost({ companyId: c.company_id ?? undefined, agentId: c.agent_id ?? undefined, runId: id, provider: c.provider!, model: c.model!, inputTokens, outputTokens }),
+          limitTokens: this.deps.compactAtTokens,
+        });
+      } catch { /* not fatal */ }
+      const folded = historyFor(this.store, id);
+      const history: ChatMessage[] = folded.messages;
+      const system = [
+        agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "", [], c.skills_snapshot ?? "") : undefined,
+        folded.summary ? `## Earlier in this conversation (summary)\n${folded.summary}` : undefined,
+      ].filter(Boolean).join("\n\n") || undefined;
       let text = ""; let inputTokens = 0; let outputTokens = 0; let stopReason = "other"; let failed: string | undefined;
       try {
         const turnSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)]);
-        for await (const ev of call.stream({ system: agent ? withMemory(agent.system_prompt, c.memory_snapshot ?? "", [], c.skills_snapshot ?? "") : undefined, messages: history }, turnSignal)) {
+        for await (const ev of call.stream({ system, messages: history }, turnSignal)) {
           if (ev.type === "text") { text += ev.text; emit({ type: "delta", text: ev.text }); }
           else if (ev.type === "reasoning") emit({ type: "reasoning", text: ev.text });
           else if (ev.type === "usage") { inputTokens = ev.inputTokens; outputTokens = ev.outputTokens; }

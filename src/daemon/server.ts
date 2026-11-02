@@ -8,6 +8,7 @@ import { isSkillName, SkillError, type SkillRegistry } from "./skills";
 import { BrowseError, type BrowserPolicy, type Page } from "./browse";
 import { APPROVAL_POLICIES, isWorkerEngine } from "./acp";
 import type { ApprovalCenter } from "./workers";
+import { ensureConsolidationRoutine } from "./compaction";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { CompanyError, hire, panel, updateAgent } from "./company";
@@ -315,6 +316,8 @@ export class Daemon {
           const body = await readJson(req);
           const models = this.o.chat ? await this.o.chat.userModels() : { keys: new Set<never>() };
           const result = hire(store, id, body, models, this.now());
+          // Plan 4.4: every company with agents gets its nightly memory consolidation.
+          if (this.o.memory) ensureConsolidationRoutine(store, id, this.now());
           this.emit({ type: "company.changed", companyId: id });
           return this.json(res, 201, result);
         }

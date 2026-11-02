@@ -2106,6 +2106,9 @@ async function main(): Promise<void> {
         daemon = new Daemon({ store, token, version, chat, memory, skills, browser, approvals, runRoutine: routineId => runRoutine(store, routineId, { keys, notify, memory, skills }), runTask: taskId => runTask(store, taskId, { keys, notify, memory, skills, browser, worker }) });
         const port = await daemon.listen(0);
         writeState(paths, { pid: process.pid, port, startedAt: new Date().toISOString(), version });
+        // Plan 4.4: companies hired before consolidation existed get their nightly routine now.
+        const { ensureConsolidationRoutine } = await import("./daemon/compaction");
+        for (const company of store.listCompanies()) ensureConsolidationRoutine(store, company.id);
         daemon.startTicking();
         console.log(t("Daemon running · pid {0} · port {1}", process.pid, port));
         // Opt-in phone chat over the cloud relay (docs/DAEMON-CHAT.md §4); outbound connections only.
