@@ -8,6 +8,12 @@ development history remains grouped by date.
 ## Unreleased
 
 ### Added
+- Community skills: `braavo skills search | info | install | update | remove |
+  report | check`. A package is installed only when the registry's ed25519
+  signature, the signed manifest (name, version, hashes of the bundle and every
+  file) and the signed revocation list all check out. The daemon checks the
+  revocation list daily; a revoked skill is switched off, taken off every agent
+  and reported in a notification.
 - GitHub triggers: `braavo company trigger add github <owner/repo>` opens tasks
   for new issues, pull requests, comments, reviews, releases, discussions and
   failed workflow runs. Polling (Events API with ETags) by default; `--webhook`

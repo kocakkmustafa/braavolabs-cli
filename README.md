@@ -642,6 +642,22 @@ braavo mcp call fs read_file --json '{"path":"…"}' --timeout 30000
 - **stderr** from the server is streamed through verbatim in steel for debugging, and is **never** parsed as JSON-RPC — only stdout carries protocol messages.
 - A tool result with `isError: true` is printed through the molten error line and braavo exits non-zero.
 
+#### Community skills
+
+```bash
+braavo skills search "weekly report"
+braavo skills info weekly-report
+braavo skills install weekly-report          # shows SKILL.md, files, trust and reports, then asks
+braavo skills update                         # newer versions, with the SKILL.md diff, each confirmed
+braavo skills report weekly-report --reason "asks for keys" --high
+braavo skills check                          # fetch the revocation list now
+braavo skills remove weekly-report --yes
+```
+
+- Packages come from the Braavolabs skill registry. Nothing is written unless the registry's ed25519 signature verifies with the key built into this CLI, the manifest names the skill and version you asked for, the bundle and every file match their signed SHA-256, and the version is not revoked.
+- Installed skills go to `~/.braavo/skills/<name>/` with a `.braavo-skill.json` lock; a skill you wrote yourself is never overwritten. Scripts in a skill are listed, never run.
+- The daemon checks the signed revocation list a minute after it starts and then daily. A revoked skill is switched off at once (it disappears from every prompt), removed from your agents, and you get a notification; its files stay until you run `braavo skills remove`.
+
 #### Your company as an MCP server
 
 `braavo mcp serve` speaks MCP over stdio, so Claude Code, Codex, Cursor or any MCP client can use your local company: `company_panel`, `list_tasks`, `create_task` (optionally `run`), `run_task`, `get_task`, `ask_agent`, `read_page`, `list_skills`, `search_memory`, `read_memory`, `write_memory`, `list_companies`. Every tool is a call to the running daemon on loopback, so budgets and the agents' own models apply.
