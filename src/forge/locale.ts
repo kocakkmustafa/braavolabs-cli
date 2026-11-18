@@ -551,6 +551,7 @@ const rows = [
 ["↑↓ select · ←→ change · esc back","↑↓ seç · ←→ değiştir · esc geri","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back"],
 ["↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ görev · tab sekme · b bağlan · ? yardım · q çık","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit"],
 ["Paused {0} agents","{0} ajan duraklatıldı","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents"],
+["Tool {0} · {1} files","Araç {0} · {1} dosya","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files"],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

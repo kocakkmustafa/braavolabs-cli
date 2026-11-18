@@ -147,7 +147,7 @@ describe("board keys", () => {
     const o = press(ready(), "o");
     expect(o.action).toBeUndefined();
     expect(o.state.confirm).toMatchObject({ kind: "approve", id: "ap1" });
-    expect(text(o.state, 100, 30).join("\n")).toContain("◆ Approve: Bülteni 2.418 aboneye gönder?  [⏎] yes  [esc] cancel");
+    expect(text(o.state, 100, 30).join("\n")).toContain("◆ Approve: Bülteni 2.418 aboneye gönder? Tool Mailchimp · 2 files  [⏎] yes  [esc] cancel");
     expect(press(o.state, "\r").action).toEqual({ type: "approval", id: "ap1", decision: "allow" });
     expect(press(o.state, "\u001b").action).toBeUndefined();
     expect(press(o.state, "o").action).toBeUndefined();

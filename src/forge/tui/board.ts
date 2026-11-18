@@ -9,7 +9,7 @@
 import { getLocale, statusText, t } from "../locale";
 import { wrapTerminalText } from "../terminal-text";
 import type { TuiAgent, TuiTask } from "../company-tui";
-import { SYMBOL, fitLine, kindWord, lineWidth, logoLines, paint, statusSpans, type Kind, type Line, type Span, type Theme } from "./theme";
+import { SYMBOL, fitLine, kindWord, lineWidth, logoLines, paint, sanitize, shorten, statusSpans, type Kind, type Line, type Span, type Theme } from "./theme";
 
 export interface BoardApproval { id: string; title: string; tool: string; paths: string[]; created_at: string }
 export interface BoardConversation { id: string; title: string; lastMessage: string | null; messageCount: number; updatedAt: string }
@@ -23,7 +23,7 @@ export type Tab = "chat" | "company" | "code";
 export const TABS: Tab[] = ["chat", "company", "code"];
 export type Overlay = null | "help" | "settings" | "changes";
 export interface Settings { theme: "auto" | "dark" | "light"; color: "auto" | "off"; logo: "show" | "hide" }
-export type Confirm = { kind: "approve" | "reject"; id: string; label: string } | { kind: "stop-all"; label: string };
+export type Confirm = { kind: "approve" | "reject"; id: string; label: string; tool: string; files: number } | { kind: "stop-all"; label: string };
 
 export type BoardAction =
   | { type: "approval"; id: string; decision: "allow" | "reject" }
@@ -49,7 +49,7 @@ export const initialBoard = (loggedIn: boolean): BoardState => ({
 });
 
 const KEY = { up: "\u001b[A", down: "\u001b[B", left: "\u001b[D", right: "\u001b[C", enter: "\r", esc: "\u001b", tab: "\t", shiftTab: "\u001b[Z", backspace: "\u007f", ctrlC: "\u0003" } as const;
-const clean = (text: unknown): string => String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+const clean = sanitize;
 const clamp = (i: number, n: number) => (n <= 0 ? 0 : Math.min(Math.max(i, 0), n - 1));
 
 // ---- items -----------------------------------------------------------------------------------------------
@@ -205,7 +205,7 @@ export function reduceBoard(state: BoardState, key: string): Result {
     case "b": return { state: { ...state, notice: t("Reconnecting…") }, action: { type: "reconnect" } };
     case "o": case "r":
       if (item?.kind !== "approval") return notice(state, t("Select an approval first."));
-      return { state: { ...state, notice: "", confirm: { kind: key === "o" ? "approve" : "reject", id: item.approval.id, label: clean(item.approval.title).slice(0, 80) } } };
+      return { state: { ...state, notice: "", confirm: { kind: key === "o" ? "approve" : "reject", id: item.approval.id, label: shorten(item.approval.title, 80), tool: shorten(item.approval.tool, 30), files: item.approval.paths.length } } };
     case "d":
       if (item?.kind === "approval" && item.approval.paths.length) return { state: { ...state, overlay: "changes", changesCursor: 0, notice: "" } };
       return notice(state, t("No changes to show."));
@@ -364,7 +364,8 @@ export function renderBoard(state: BoardState, size: { cols: number; rows: numbe
   out.push(...bodyFrame(state, size, theme, body));
   out.push(paint(fitLine([[state.notice, "t2"]], cols, false), theme));
   if (state.confirm) {
-    const question = state.confirm.kind === "stop-all" ? t("Pause all agents?") : state.confirm.kind === "approve" ? t("Approve: {0}?", state.confirm.label) : t("Reject: {0}?", state.confirm.label);
+    const c = state.confirm;
+    const question = c.kind === "stop-all" ? t("Pause all agents?") : `${c.kind === "approve" ? t("Approve: {0}?", c.label) : t("Reject: {0}?", c.label)} ${t("Tool {0} · {1} files", c.tool, c.files)}`;
     out.push(paint(fitLine([[`${SYMBOL.approval} `, "approval"], [question, "t1"], ["  "], keyCap("⏎", theme, true), [` ${t("yes")}  `, "t2"], keyCap("esc", theme), [` ${t("cancel")}`, "t2"]], cols, false), theme));
   } else if (state.mode === "write") out.push(paint(fitLine([["› ", "t3"], [state.input, "t1"], ["▌", "t3"]], cols, false), theme));
   else out.push(paint(fitLine([["› ", "t3"], [placeholder(state), "t4"]], cols, false), theme));

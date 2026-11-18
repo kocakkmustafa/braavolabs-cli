@@ -74,9 +74,23 @@ export function paint(line: Line, theme: Theme, tone?: "listbg" | "selbg" | "car
 export const plainText = (line: Line): string => line.map(([text]) => text).join("");
 export const lineWidth = (line: Line): number => line.reduce((n, [text]) => n + terminalWidth(text), 0);
 
+/**
+ * Outside text (daemon, models, tools) → one safe line: C0/C1 controls and Unicode format characters
+ * (bidi overrides/isolates, zero-width, BOM, Arabic letter mark, Mongolian vowel separator) become spaces or vanish,
+ * so a title cannot be reordered or hidden on screen.
+ */
+export const sanitize = (text: unknown): string =>
+  String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/[\p{Cf}\u180e\u2028\u2029]/gu, "");
+/** `sanitize`, then cut to `max` characters with a visible "…" when something was dropped. */
+export function shorten(text: unknown, max: number): string {
+  const clean = sanitize(text);
+  const chars = [...clean];
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : clean;
+}
+
 /** Cut a line to `width` cells (ellipsis on the cut) and pad it with spaces to exactly `width`; control characters are removed. */
 export function fitLine(line: Line, width: number, pad = true, padStyle?: Style): Line {
-  const clean = line.map(([text, style]) => [text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), style] as Span);
+  const clean = line.map(([text, style]) => [sanitize(text), style] as Span);
   const total = lineWidth(clean);
   let out: Line;
   if (total <= width) out = clean;

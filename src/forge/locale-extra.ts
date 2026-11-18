@@ -504,4 +504,5 @@ export const extraRows = [
 ["↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back","↑↓ select · ←→ change · esc back"],
 ["↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit"],
 ["Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents"],
+["Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files"],
 ] as const;

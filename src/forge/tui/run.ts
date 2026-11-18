@@ -4,7 +4,7 @@
  */
 import { t } from "../locale";
 import { initialBoard, reduceBoard, renderBoard, withData, withMessages, withOffline, wantedConversation, type BoardAction, type BoardData, type BoardMessage, type BoardState } from "./board";
-import { detectTheme } from "./theme";
+import { detectTheme, sanitize } from "./theme";
 import { openTerminal, type TermInput, type TermOutput, type TermProcess } from "./term";
 
 export interface BoardIo {
@@ -20,7 +20,7 @@ export interface BoardIo {
   pollMs?: number;
 }
 
-const oneLine = (e: unknown) => String(e instanceof Error ? e.message : e).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, 300);
+const oneLine = (e: unknown) => sanitize(e instanceof Error ? e.message : e).slice(0, 300);
 
 export async function runBoard(io: BoardIo): Promise<void> {
   const base = detectTheme(io.env ?? process.env, io.output);
