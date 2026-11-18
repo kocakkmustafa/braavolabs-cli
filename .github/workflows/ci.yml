@@ -22,7 +22,18 @@ jobs:
       # missing, so a type error or a bin that fails to start could pass CI.
       - run: pnpm test
       - run: pnpm run lint
-      - run: pnpm audit --audit-level=moderate
+      # Tek istisna: GHSA-fc5q-39xc-vjpf (picomatch ReDoS). Yalnız dev yolu:
+      # `pnpm why picomatch` → vitest/vite@7 > tinyglobby > fdir > picomatch (yayın
+      # paketine girmez); yamalı sürüm yok (npm latest 4.0.7 de etkili).
+      # Advisory: https://github.com/advisories/GHSA-fc5q-39xc-vjpf
+      # Son tarih 2026-12-18: sonrasında istisna kalkar, tam denetim çalışır.
+      # Başka hiçbir advisory susturulmaz.
+      - run: |
+          if [ "$(date -u +%F)" \> "2026-12-18" ]; then
+            pnpm audit --audit-level=moderate
+          else
+            pnpm audit --audit-level=moderate --ignore GHSA-fc5q-39xc-vjpf
+          fi
       - run: pnpm build
       # Runs the actual built artifact. `pnpm build` succeeding does not prove
       # the published bin starts — this is the cheapest possible proof it does.
