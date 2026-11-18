@@ -476,6 +476,11 @@ const rows = [
 ["Connected to Slack: {0}","Slack'e bağlandı: {0}","Conectado a Slack: {0}","Conectado ao Slack: {0}","Mit Slack verbunden: {0}","Connecté à Slack : {0}","Slack に接続しました: {0}","تم الاتصال بـ Slack: {0}"],
 ["Disconnected from Slack.","Slack bağlantısı kesildi.","Desconectado de Slack.","Desconectado do Slack.","Von Slack getrennt.","Déconnecté de Slack.","Slack との接続を解除しました。","تم قطع الاتصال بـ Slack."],
 ["Not connected to Slack. Run: braavo slack connect","Slack'e bağlı değil. Çalıştır: braavo slack connect","No estás conectado a Slack. Ejecuta: braavo slack connect","Você não está conectado ao Slack. Execute: braavo slack connect","Nicht mit Slack verbunden. Ausführen: braavo slack connect","Non connecté à Slack. Exécutez : braavo slack connect","Slack に接続していません。実行: braavo slack connect","غير متصل بـ Slack. شغّل: braavo slack connect"],
+["done","bitti","done","done","done","done","done","done"],
+["failed","hata","failed","failed","failed","failed","failed","failed"],
+["needs approval","onay bekliyor","needs approval","needs approval","needs approval","needs approval","needs approval","needs approval"],
+["queued","sırada","queued","queued","queued","queued","queued","queued"],
+["working","çalışıyor","working","working","working","working","working","working"],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

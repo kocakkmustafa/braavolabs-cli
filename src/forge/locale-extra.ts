@@ -429,4 +429,9 @@ export const extraRows = [
 ["Connected to Slack: {0}","Connesso a Slack: {0}","Terhubung ke Slack: {0}","Slack에 연결됨: {0}","Połączono ze Slack: {0}","Slack से जुड़ गया: {0}","已连接 Slack：{0}"],
 ["Disconnected from Slack.","Disconnesso da Slack.","Terputus dari Slack.","Slack 연결을 해제했습니다.","Rozłączono ze Slack.","Slack से कनेक्शन हटाया गया।","已断开 Slack 连接。"],
 ["Not connected to Slack. Run: braavo slack connect","Non connesso a Slack. Esegui: braavo slack connect","Belum terhubung ke Slack. Jalankan: braavo slack connect","Slack에 연결되지 않았습니다. 실행: braavo slack connect","Brak połączenia ze Slack. Uruchom: braavo slack connect","Slack से नहीं जुड़ा है। चलाएँ: braavo slack connect","尚未连接 Slack。运行：braavo slack connect"],
+["done","done","done","done","done","done","done"],
+["failed","failed","failed","failed","failed","failed","failed"],
+["needs approval","needs approval","needs approval","needs approval","needs approval","needs approval","needs approval"],
+["queued","queued","queued","queued","queued","queued","queued"],
+["working","working","working","working","working","working","working"],
 ] as const;
