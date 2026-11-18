@@ -437,7 +437,9 @@ async function main(): Promise<void> {
     if (!cfg.token) die(t("Not logged in. Run: braavo login"), EXIT.AUTH);
   }
 
-  const { cmd, positionals, flags } = parseArgs(language.argv);
+  // `braavo --no-tui` alone is the plain no-argument behaviour (help); anything else parses as before.
+  const bareNoTui = language.argv.length === 1 && language.argv[0] === "--no-tui";
+  const { cmd, positionals, flags } = parseArgs(bareNoTui ? [] : language.argv);
   if (language.missing) usage(t("--lang requires a language code."));
   if (language.unsupported) console.error(ui.fail(t("Unsupported language {0}; using en.", language.unsupported)));
   if (Object.keys(flags).some(key => key.startsWith("reasoning-effort="))) usage(t("Use --reasoning-effort low|medium|high (separate flag and value)"));
@@ -448,6 +450,12 @@ async function main(): Promise<void> {
   }
   if (cmd === "--version" || cmd === "-v") {
     console.log((require("../package.json") as { version: string }).version);
+    return;
+  }
+  if (!cmd && language.argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
+    // Interactive terminal, no arguments: the full-screen board. Pipes, scripts and --no-tui keep the help text below.
+    const { launchBoard } = await import("./forge/tui/launch");
+    await launchBoard({ loggedIn: Boolean(loadConfig().token) });
     return;
   }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h" || (flags.help === true && (cmd !== "spawn" || positionals.length === 0) && (language.argv.indexOf("--") < 0 || language.argv.indexOf("--help") < language.argv.indexOf("--")))) {
