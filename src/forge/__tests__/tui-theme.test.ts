@@ -35,7 +35,7 @@ describe("tui theme detection", () => {
 describe("tui status colours", () => {
   it("uses the approved ANSI 256 codes on dark and light terminals", () => {
     const dark = { working: 179, approval: 146, error: 174, done: 247, queued: 243 };
-    const light = { working: 136, approval: 61, error: 131, done: 242, queued: 245 };
+    const light = { working: 130, approval: 61, error: 131, done: 242, queued: 243 };
     for (const k of kinds) {
       expect(paintSpan("x", k, COLOR)).toBe(`\u001b[38;5;${dark[k]}mx\u001b[0m`);
       expect(paintSpan("x", k, LIGHT)).toBe(`\u001b[38;5;${light[k]}mx\u001b[0m`);

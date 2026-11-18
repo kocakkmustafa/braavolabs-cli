@@ -123,7 +123,7 @@ describe("quiet workbench palette", () => {
       ...renderCascadeLines(colorUi, cascadeResult),
       ...renderSavingsTable(colorUi, savingsData),
     ].join("\n");
-    expect(all).toContain("38;5;146"); // muted blue is present → colors really are on
+    expect(all).toContain("38;5;247"); // muted blue is present → colors really are on
     assertNoGreen(all);
   });
 

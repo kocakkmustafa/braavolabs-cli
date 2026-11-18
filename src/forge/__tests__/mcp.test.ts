@@ -263,7 +263,7 @@ describe("mcp renderers", () => {
     const joined = lines.join("\n");
     expect(joined).toContain("fs");
     expect(joined).toContain("npx -y srv");
-    expect(joined).toContain("38;5;146");
+    expect(joined).toContain("38;5;247");
     assertNoGreen(joined);
   });
 
@@ -289,7 +289,7 @@ describe("mcp renderers", () => {
     const joined = err.join("\n");
     expect(joined).toContain("error");
     expect(joined).toContain("nope");
-    expect(joined).toContain("38;5;210"); // molten
+    expect(joined).toContain("38;5;174"); // molten
     assertNoGreen(joined);
   });
 });

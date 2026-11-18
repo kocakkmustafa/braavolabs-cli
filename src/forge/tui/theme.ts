@@ -17,9 +17,9 @@ export type Line = Span[];
 export interface Theme { color: boolean; light: boolean }
 
 export const SYMBOL: Record<Kind, string> = { working: "●", approval: "◆", error: "■", done: "✓", queued: "○" };
-/** Dark / light terminal: working 179/136 · approval 146/61 · error 174/131 · done 247/242 · queued 243/245. */
-const KIND_CODE: Record<Kind, [number, number]> = { working: [179, 136], approval: [146, 61], error: [174, 131], done: [247, 242], queued: [243, 245] };
-const TEXT_CODE: Record<"t1" | "t2" | "t3" | "t4", [number, number]> = { t1: [252, 235], t2: [250, 239], t3: [247, 242], t4: [244, 245] };
+/** Dark / light terminal: working 179/130 · approval 146/61 · error 174/131 · done 247/242 · queued 243/243 (light tones >= 4.5:1 on white). */
+const KIND_CODE: Record<Kind, [number, number]> = { working: [179, 130], approval: [146, 61], error: [174, 131], done: [247, 242], queued: [243, 243] };
+const TEXT_CODE: Record<"t1" | "t2" | "t3" | "t4", [number, number]> = { t1: [252, 235], t2: [250, 239], t3: [247, 242], t4: [244, 243] };
 /** List tone #171615 → 233 and selected #24221F → 235 (dark); #EFECE7 → 255 and #E2DED8 → 254 (light). */
 const LIST_BG: [number, number] = [233, 255];
 const SEL_BG: [number, number] = [235, 254];

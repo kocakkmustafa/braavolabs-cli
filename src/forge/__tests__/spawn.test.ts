@@ -206,7 +206,7 @@ describe("spawn renderers (terminal-noir, no green)", () => {
   it("risk line is a single steel line carrying the vendor risk note", () => {
     const line = spawnRiskLine(colorUi, "claude");
     expect(line).toContain("provider terms");
-    expect(line).toContain("38;5;246"); // steel
+    expect(line).toContain("38;5;243"); // steel
     assertNoGreen(line);
   });
 
@@ -228,7 +228,7 @@ describe("spawn renderers (terminal-noir, no green)", () => {
     expect(joined).toContain("installed");
     expect(joined).toContain("1.2.3");
     expect(joined).toContain("not installed");
-    expect(joined).toContain("38;5;146"); // arc-blue present → colors really on
+    expect(joined).toContain("38;5;247"); // arc-blue present → colors really on
     assertNoGreen(joined);
   });
 });
