@@ -1,8 +1,8 @@
 /**
  * braavo quiet workbench UI — restrained ANSI palette + face/edge coin.
  *
- * Explicit light/dark palettes use blue for primary/success, bronze for
- * highlight, red for errors and gray for secondary text. Unknown system
+ * Ilık Grafit ANSI 256 (dark/light): primary = done 247/242, highlight = working 179/136,
+ * error 174/131, secondary = queued 243/245. No green, no blue. Unknown system
  * backgrounds preserve the user's default foreground.
  *
  * Generated colors disable on redirected streams, in dumb terminals, or when
@@ -14,8 +14,8 @@ import { fitTerminalLine } from "./terminal-text";
 export type TerminalTheme = "light" | "dark" | "system";
 // Foregrounds only. The terminal background and user configuration are never changed.
 const PALETTES = {
-  dark: { primary: 146, highlight: 180, error: 210, secondary: 246 },
-  light: { primary: 24, highlight: 94, error: 124, secondary: 239 },
+  dark: { primary: 247, highlight: 179, error: 174, secondary: 243 },
+  light: { primary: 242, highlight: 136, error: 131, secondary: 245 },
 };
 function paletteFor(theme: string | undefined, background: string | undefined) {
   const explicit = theme?.trim().toLowerCase();

@@ -29,6 +29,7 @@ import { emit, requireConfirmation, ConfirmationRequiredError } from "./forge/ou
 import { runDoctor, humanDoctorCheck } from "./forge/doctor";
 import { verifyEvidenceChain, humanChainReason } from "./forge/audit";
 import { makeUi, Ui } from "./forge/ui";
+import { detectTheme } from "./forge/tui/theme";
 import {
   ApiError,
   SessionChangedError,
@@ -1655,12 +1656,14 @@ async function main(): Promise<void> {
       if (reviewer && !reviewer.ok) die(reviewer.message);
       const root = resolve(flag(flags, "dir") ?? process.cwd());
       const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-      const color = (code: number, text: string) => (process.stdout.isTTY ? `\x1b[${code}m${text}\x1b[0m` : text);
-      const paint = (diff: string) => diff.split("\n").map(l => (l.startsWith("+") && !l.startsWith("+++") ? color(32, l) : l.startsWith("-") && !l.startsWith("---") ? color(31, l) : l.startsWith("@@") ? color(36, l) : l)).join("\n");
+      // Ilık Grafit ANSI 256 (dark/light): diff add 153/25, remove 217/131, hunk + secondary 247/242, review ok 247/242, risky 179/136.
+      const codeTheme = detectTheme(process.env, process.stdout);
+      const color = (dark: number, light: number, text: string) => (codeTheme.color ? `\x1b[38;5;${codeTheme.light ? light : dark}m${text}\x1b[0m` : text);
+      const paint = (diff: string) => diff.split("\n").map(l => (l.startsWith("+") && !l.startsWith("+++") ? color(153, 25, l) : l.startsWith("-") && !l.startsWith("---") ? color(217, 131, l) : l.startsWith("@@") ? color(247, 242, l) : l)).join("\n");
       let applyAll = has(flags, "yes"); let warned = false;
       const approve = async (change: { diff: string; review?: { verdict: string; reason: string } }): Promise<boolean> => {
         console.log(`\n${paint(change.diff)}`);
-        if (change.review) console.log(color(change.review.verdict === "ok" ? 32 : 33, `review: ${change.review.verdict} · ${change.review.reason}`));
+        if (change.review) console.log(change.review.verdict === "ok" ? color(247, 242, `review: ${change.review.verdict} · ${change.review.reason}`) : color(179, 136, `review: ${change.review.verdict} · ${change.review.reason}`));
         // A risky review always asks a human, even with --yes; without a terminal it is refused.
         const risky = change.review?.verdict === "risky";
         if (applyAll && !risky) return true;
@@ -1692,7 +1695,7 @@ async function main(): Promise<void> {
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
           if (ev.type === "text") process.stdout.write(ev.text);
-          else if (ev.type === "tool") console.error(color(2, `· ${ev.name} ${ev.summary}`));
+          else if (ev.type === "tool") console.error(color(243, 245, `· ${ev.name} ${ev.summary}`));
         },
       });
       process.stdout.write("\n");
