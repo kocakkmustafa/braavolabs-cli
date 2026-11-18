@@ -165,7 +165,7 @@ describe("board keys", () => {
   it("! asks first, then pauses every agent that is not paused", () => {
     const r = press(ready(), "!");
     expect(r.action).toBeUndefined();
-    expect(text(r.state, 100, 30).join("\n")).toContain("Pause all agents?");
+    expect(text(r.state, 100, 30).join("\n")).toContain("Pause 4 agents?");
     expect(press(r.state, "\r").action).toEqual({ type: "pause-all", agentIds: ["a1", "a2", "a3", "a4"] });
     expect(press(r.state, "x").action).toBeUndefined();
   });

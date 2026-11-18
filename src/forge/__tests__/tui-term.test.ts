@@ -46,7 +46,7 @@ describe("tui terminal layer", () => {
     expect(keys).toEqual(["o", "\u001b[A"]); expect(resized).toBe(1);
     expect(term.size()).toEqual({ cols: 100, rows: 30 });
     output.columns = 5; output.rows = 2;
-    expect(term.size()).toEqual({ cols: 20, rows: 6 });
+    expect(term.size()).toEqual({ cols: 5, rows: 2 });
     output.written = "";
     term.draw(["one", "two"]);
     expect(output.written).toBe("\u001b[Hone\u001b[K\r\ntwo\u001b[K\u001b[J");

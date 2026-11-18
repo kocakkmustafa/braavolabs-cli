@@ -81,6 +81,26 @@ export const lineWidth = (line: Line): number => line.reduce((n, [text]) => n + 
  */
 export const sanitize = (text: unknown): string =>
   String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/[\p{Cf}\u180e\u2028\u2029]/gu, "");
+/**
+ * Like `sanitize` but for multi-line text (chat, task results): line breaks and tabs stay (tab = two spaces),
+ * ESC/CSI/OSC introducers, \r, other controls and format characters are removed.
+ */
+export const sanitizeText = (text: unknown): string =>
+  String(text ?? "").replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\p{Cf}\u180e\u2028\u2029]/gu, "");
+/** Hard-wrap multi-line text to `width` cells, keeping blank lines and indentation (code blocks stay readable). */
+export function wrapPlain(text: string, width: number): string[] {
+  const w = Math.max(width, 4);
+  const out: string[] = [];
+  for (const raw of sanitizeText(text).split("\n")) {
+    let line = "";
+    for (const { segment } of new Intl.Segmenter("en", { granularity: "grapheme" }).segment(raw)) {
+      if (line && terminalWidth(line + segment) > w) { out.push(line); line = ""; }
+      line += segment;
+    }
+    out.push(line);
+  }
+  return out;
+}
 /** `sanitize`, then cut to `max` characters with a visible "…" when something was dropped. */
 export function shorten(text: unknown, max: number): string {
   const clean = sanitize(text);

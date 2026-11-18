@@ -505,4 +505,8 @@ export const extraRows = [
 ["↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit"],
 ["Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents"],
 ["Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files"],
+["Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?"],
+["Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed"],
+["Terminal too small","Terminal too small","Terminal too small","Terminal too small","Terminal too small","Terminal too small","Terminal too small"],
+["To {0}","To {0}","To {0}","To {0}","To {0}","To {0}","To {0}"],
 ] as const;

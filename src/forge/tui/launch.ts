@@ -50,9 +50,12 @@ export async function launchBoard(opts: { loggedIn: boolean }): Promise<void> {
           return t("Approval {0}: {1}", approval.title, statusText(approval.status));
         }
         case "pause-all": {
-          let paused = 0;
-          for (const id of action.agentIds) { await client.json("PATCH", `/agents/${encodeURIComponent(id)}`, { status: "paused" }); paused += 1; }
-          return t("Paused {0} agents", paused);
+          // Every agent is tried; a failure does not stop the rest, and the count of failures is reported.
+          let paused = 0; let failed = 0;
+          for (const id of action.agentIds) {
+            try { await client.json("PATCH", `/agents/${encodeURIComponent(id)}`, { status: "paused" }); paused += 1; } catch { failed += 1; }
+          }
+          return failed ? t("Paused {0} agents, {1} failed", paused, failed) : t("Paused {0} agents", paused);
         }
         case "task-add": {
           if (!companyId) throw new Error(t("No company yet. Create one: braavo company init <name>"));

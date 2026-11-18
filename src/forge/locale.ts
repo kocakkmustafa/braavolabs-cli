@@ -552,6 +552,10 @@ const rows = [
 ["↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ görev · tab sekme · b bağlan · ? yardım · q çık","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit","↑↓ task · tab switch · b reconnect · ? help · q quit"],
 ["Paused {0} agents","{0} ajan duraklatıldı","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents","Paused {0} agents"],
 ["Tool {0} · {1} files","Araç {0} · {1} dosya","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files","Tool {0} · {1} files"],
+["Pause {0} agents?","{0} ajan duraklatılsın mı?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?","Pause {0} agents?"],
+["Paused {0} agents, {1} failed","{0} ajan duraklatıldı, {1} hata","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed","Paused {0} agents, {1} failed"],
+["Terminal too small","Terminal çok küçük","Terminal too small","Terminal too small","Terminal too small","Terminal too small","Terminal too small","Terminal too small"],
+["To {0}","Alıcı: {0}","To {0}","To {0}","To {0}","To {0}","To {0}","To {0}"],
 ] as const;
 
 export const catalogue = Object.fromEntries(LOCALES.map(locale => [locale, {}])) as Record<Locale, Record<string, string>>;

@@ -9,7 +9,7 @@
 import { getLocale, statusText, t } from "../locale";
 import { wrapTerminalText } from "../terminal-text";
 import type { TuiAgent, TuiTask } from "../company-tui";
-import { SYMBOL, fitLine, kindWord, lineWidth, logoLines, paint, sanitize, shorten, statusSpans, type Kind, type Line, type Span, type Theme } from "./theme";
+import { SYMBOL, fitLine, kindWord, lineWidth, logoLines, paint, sanitize, sanitizeText, shorten, statusSpans, wrapPlain, type Kind, type Line, type Span, type Theme } from "./theme";
 
 export interface BoardApproval { id: string; title: string; tool: string; paths: string[]; created_at: string }
 export interface BoardConversation { id: string; title: string; lastMessage: string | null; messageCount: number; updatedAt: string }
@@ -23,7 +23,7 @@ export type Tab = "chat" | "company" | "code";
 export const TABS: Tab[] = ["chat", "company", "code"];
 export type Overlay = null | "help" | "settings" | "changes";
 export interface Settings { theme: "auto" | "dark" | "light"; color: "auto" | "off"; logo: "show" | "hide" }
-export type Confirm = { kind: "approve" | "reject"; id: string; label: string; tool: string; files: number } | { kind: "stop-all"; label: string };
+export type Confirm = { kind: "approve" | "reject"; id: string; label: string; tool: string; files: number } | { kind: "stop-all"; label: string; agentIds: string[] };
 
 export type BoardAction =
   | { type: "approval"; id: string; decision: "allow" | "reject" }
@@ -35,7 +35,11 @@ export type BoardAction =
 export interface BoardState {
   data: BoardData | null;
   messages: BoardMessage[]; messagesFor: string | null;
-  tab: Tab; cursor: Record<Tab, number>; detail: boolean;
+  tab: Tab; cursor: Record<Tab, number>; anchor: Record<Tab, string | null>; detail: boolean;
+  /** Who a typed line goes to, fixed when writing starts (an id, not a list position). */
+  target: { kind: "conversation" | "agent"; id: string; name: string } | null;
+  /** An action is running: no second decision until it has finished and the data was reloaded. */
+  pending: boolean;
   overlay: Overlay; settings: Settings; settingsRow: number; changesCursor: number;
   mode: "keys" | "write"; input: string; confirm: Confirm | null;
   online: boolean; notice: string;
@@ -43,7 +47,7 @@ export interface BoardState {
 }
 
 export const initialBoard = (loggedIn: boolean): BoardState => ({
-  data: null, messages: [], messagesFor: null, tab: "company", cursor: { chat: 0, company: 0, code: 0 }, detail: false,
+  data: null, messages: [], messagesFor: null, tab: "company", cursor: { chat: 0, company: 0, code: 0 }, anchor: { chat: null, company: null, code: null }, detail: false, target: null, pending: false,
   overlay: null, settings: { theme: "auto", color: "auto", logo: "show" }, settingsRow: 0, changesCursor: 0,
   mode: "keys", input: "", confirm: null, online: true, notice: "", splash: true, loaded: false, loggedIn,
 });
@@ -67,6 +71,8 @@ export function itemsFor(data: BoardData | null, tab: Tab): Item[] {
   if (tab === "code") return data.tasks.map(task => ({ kind: "task" as const, task }));
   return [...data.approvals.map(approval => ({ kind: "approval" as const, approval })), ...data.agents.map(agent => ({ kind: "agent" as const, agent }))];
 }
+export const itemId = (item: Item): string =>
+  item.kind === "conversation" ? `c:${item.conversation.id}` : item.kind === "approval" ? `p:${item.approval.id}` : item.kind === "agent" ? `a:${item.agent.id}` : `t:${item.task.id}`;
 export const selectedItem = (s: BoardState): Item | undefined => itemsFor(s.data, s.tab)[s.cursor[s.tab]];
 const upper = (text: string) => text.toLocaleUpperCase(getLocale());
 
@@ -112,12 +118,15 @@ export function counts(data: BoardData | null): Record<"working" | "approval" | 
 // ---- data in ----------------------------------------------------------------------------------------------
 
 export function withData(state: BoardState, data: BoardData): BoardState {
-  const cursor = {
-    chat: clamp(state.cursor.chat, data.conversations.length),
-    company: clamp(state.cursor.company, data.approvals.length + data.agents.length),
-    code: clamp(state.cursor.code, data.tasks.length),
-  };
-  return { ...state, data, cursor, online: true, loaded: true, splash: state.splash && !(state.loggedIn) ? state.splash : false };
+  // The same item stays selected when the list moves under the cursor; if it is gone, the nearest position is used.
+  const cursor = { ...state.cursor }; const anchor = { ...state.anchor };
+  for (const tab of TABS) {
+    const items = itemsFor(data, tab);
+    const at = anchor[tab] === null ? -1 : items.findIndex(i => itemId(i) === anchor[tab]);
+    cursor[tab] = at >= 0 ? at : clamp(state.cursor[tab], items.length);
+    anchor[tab] = items[cursor[tab]] ? itemId(items[cursor[tab]]) : null;
+  }
+  return { ...state, data, cursor, anchor, online: true, loaded: true, splash: state.splash && !(state.loggedIn) ? state.splash : false };
 }
 export const withMessages = (state: BoardState, id: string, messages: BoardMessage[]): BoardState => ({ ...state, messages, messagesFor: id });
 export const withOffline = (state: BoardState, reason: string): BoardState => ({ ...state, online: false, loaded: true, notice: clean(reason).slice(0, 200) });
@@ -146,21 +155,22 @@ export function reduceBoard(state: BoardState, key: string): Result {
     const confirm = state.confirm;
     const next = { ...state, confirm: null, notice: "" };
     if (key !== KEY.enter) return { state: next };
-    if (confirm.kind === "stop-all") return { state: { ...next, notice: t("Working…") }, action: { type: "pause-all", agentIds: (state.data?.agents ?? []).filter(a => a.status !== "paused").map(a => a.id) } };
-    return { state: { ...next, notice: t("Working…") }, action: { type: "approval", id: confirm.id, decision: confirm.kind === "approve" ? "allow" : "reject" } };
+    if (state.pending) return { state: { ...next, notice: t("Working…") } };
+    if (confirm.kind === "stop-all") return { state: { ...next, pending: true, notice: t("Working…") }, action: { type: "pause-all", agentIds: confirm.agentIds } };
+    return { state: { ...next, pending: true, notice: t("Working…") }, action: { type: "approval", id: confirm.id, decision: confirm.kind === "approve" ? "allow" : "reject" } };
   }
 
   if (state.mode === "write") {
-    if (key === KEY.esc) return { state: { ...state, mode: "keys", input: "" } };
+    if (key === KEY.esc) return { state: { ...state, mode: "keys", input: "", target: null } };
     if (key === KEY.backspace) return { state: { ...state, input: [...state.input].slice(0, -1).join("") } };
     if (key === KEY.enter) {
       const text = state.input.trim();
-      const item = selectedItem(state);
-      const base = { ...state, mode: "keys" as const, input: "" };
-      if (!text) return { state: base };
-      if (item?.kind === "conversation") return { state: { ...base, notice: t("Working…") }, action: { type: "send", conversationId: item.conversation.id, text: text.slice(0, 4000) } };
-      if (item?.kind === "agent") return { state: { ...base, notice: t("Working…") }, action: { type: "task-add", agentId: item.agent.id, title: text.slice(0, 300) } };
-      return { state: base };
+      const target = state.target;
+      const base = { ...state, mode: "keys" as const, input: "", target: null };
+      if (!text || !target) return { state: base };
+      if (state.pending) return { state: { ...state, notice: t("Working…") } };
+      if (target.kind === "conversation") return { state: { ...base, pending: true, notice: t("Working…") }, action: { type: "send", conversationId: target.id, text: text.slice(0, 4000) } };
+      return { state: { ...base, pending: true, notice: t("Working…") }, action: { type: "task-add", agentId: target.id, title: text.slice(0, 300) } };
     }
     if (/^[^\u0000-\u001f\u007f-\u009f]+$/.test(key)) return { state: { ...state, input: (state.input + key).slice(0, 4000) } };
     return { state };
@@ -187,7 +197,10 @@ export function reduceBoard(state: BoardState, key: string): Result {
 
   const items = itemsFor(state.data, state.tab);
   const item = items[state.cursor[state.tab]];
-  const move = (d: number): Result => ({ state: { ...state, cursor: { ...state.cursor, [state.tab]: clamp(state.cursor[state.tab] + d, items.length) }, notice: "" } });
+  const move = (d: number): Result => {
+    const at = clamp(state.cursor[state.tab] + d, items.length);
+    return { state: { ...state, cursor: { ...state.cursor, [state.tab]: at }, anchor: { ...state.anchor, [state.tab]: items[at] ? itemId(items[at]) : null }, notice: "" } };
+  };
   const switchTab = (d: number): Result => ({ state: { ...state, tab: TABS[(TABS.indexOf(state.tab) + d + TABS.length) % TABS.length], detail: false, notice: "" } });
 
   switch (key) {
@@ -200,10 +213,12 @@ export function reduceBoard(state: BoardState, key: string): Result {
     case KEY.up: case "k": return move(-1);
     case KEY.down: case "j": return move(1);
     case KEY.enter:
-      if (item?.kind === "conversation" || item?.kind === "agent") return { state: { ...state, mode: "write", input: "", notice: "", detail: state.detail } };
+      if (item?.kind === "conversation") return { state: { ...state, mode: "write", input: "", notice: "", target: { kind: "conversation", id: item.conversation.id, name: shorten(item.conversation.title, 30) || "—" } } };
+      if (item?.kind === "agent") return { state: { ...state, mode: "write", input: "", notice: "", target: { kind: "agent", id: item.agent.id, name: shorten(item.agent.name, 30) } } };
       return { state: { ...state, detail: !state.detail } };
     case "b": return { state: { ...state, notice: t("Reconnecting…") }, action: { type: "reconnect" } };
     case "o": case "r":
+      if (state.pending) return notice(state, t("Working…"));
       if (item?.kind !== "approval") return notice(state, t("Select an approval first."));
       return { state: { ...state, notice: "", confirm: { kind: key === "o" ? "approve" : "reject", id: item.approval.id, label: shorten(item.approval.title, 80), tool: shorten(item.approval.tool, 30), files: item.approval.paths.length } } };
     case "d":
@@ -211,8 +226,9 @@ export function reduceBoard(state: BoardState, key: string): Result {
       return notice(state, t("No changes to show."));
     case "e": case "y": return notice(state, t("Not available in the CLI yet."));
     case "!":
+      if (state.pending) return notice(state, t("Working…"));
       if (!(state.data?.agents.length)) return notice(state, t("No agents yet."));
-      return { state: { ...state, notice: "", confirm: { kind: "stop-all", label: "" } } };
+      return { state: { ...state, notice: "", confirm: { kind: "stop-all", label: "", agentIds: state.data.agents.filter(a => a.status !== "paused").map(a => a.id) } } };
   }
   return { state };
 }
@@ -259,7 +275,7 @@ function detailLines(state: BoardState, item: Item | undefined, width: number, h
     else {
       const body: Line[] = [];
       for (const m of state.messages) {
-        const lines = wrap(m.content, width - 2);
+        const lines = wrapPlain(m.content, width - 2);
         lines.forEach((text, i) => body.push(m.role === "user" ? [[i === 0 ? "› " : "  ", "t3"], [text, "t2"]] : [[text, "t1"]]));
         body.push([]);
       }
@@ -270,7 +286,7 @@ function detailLines(state: BoardState, item: Item | undefined, width: number, h
   if (item.kind === "approval") {
     const a = item.approval;
     out.push(statusSpans("approval", t("Approval needed")).map(([text, style]) => [text, style === "approval" ? "approval" : style] as Span), []);
-    out.push(...wrap(a.title, width).map(text => [[text, "t1"]] as Line), []);
+    out.push(...wrapPlain(sanitize(a.title), width).map(text => [[text, "t1"]] as Line), []);
     out.push([[`${t("Tool")} `, "t4"], [clean(a.tool), "t2"]]);
     for (const p of a.paths.slice(0, Math.max(height - 9, 1))) out.push([[`${t("File")} `, "t4"], [clean(p), "t2"]]);
     out.push([], keys(["o", t("Approve"), true], ["r", t("Reject")], ...(a.paths.length ? [["d", t("Changes")] as [string, string]] : [])));
@@ -289,7 +305,7 @@ function detailLines(state: BoardState, item: Item | undefined, width: number, h
   const who = (state.data?.agents ?? []).find(a => a.id === tk.assignee_agent_id)?.name;
   out.push([[clean(tk.title), "bold"]], [], statusSpans(kind, wordFor(kind, tk.status)), [[who ? clean(who) : t("Unassigned"), "t3"]]);
   if (tk.note) out.push([[clean(tk.note), "t3"]]);
-  if (tk.result) out.push([], ...wrap(tk.result, width).slice(0, Math.max(height - 6, 1)).map(text => [[text, "t2"]] as Line));
+  if (tk.result) out.push([], ...wrapPlain(tk.result, width).slice(0, Math.max(height - 6, 1)).map(text => [[text, "t2"]] as Line));
   return out;
 }
 
@@ -352,6 +368,7 @@ function bodyFrame(state: BoardState, size: { cols: number; rows: number }, them
 export function renderBoard(state: BoardState, size: { cols: number; rows: number }, base: Theme): string[] {
   const theme = effectiveTheme(base, state.settings);
   const { cols, rows } = size;
+  if (cols < 20 || rows < 8) return [paint(fitLine([[t("Terminal too small"), "t2"]], Math.max(cols, 1), false), theme)].slice(0, Math.max(rows, 1));
   if (state.splash) return renderSplash(state, size, theme);
   if (state.overlay === "help") return renderHelp(size, theme);
   if (state.overlay === "settings") return renderSettings(state, size, theme);
@@ -365,9 +382,9 @@ export function renderBoard(state: BoardState, size: { cols: number; rows: numbe
   out.push(paint(fitLine([[state.notice, "t2"]], cols, false), theme));
   if (state.confirm) {
     const c = state.confirm;
-    const question = c.kind === "stop-all" ? t("Pause all agents?") : `${c.kind === "approve" ? t("Approve: {0}?", c.label) : t("Reject: {0}?", c.label)} ${t("Tool {0} · {1} files", c.tool, c.files)}`;
+    const question = c.kind === "stop-all" ? t("Pause {0} agents?", c.agentIds.length) : `${c.kind === "approve" ? t("Approve: {0}?", c.label) : t("Reject: {0}?", c.label)} ${t("Tool {0} · {1} files", c.tool, c.files)}`;
     out.push(paint(fitLine([[`${SYMBOL.approval} `, "approval"], [question, "t1"], ["  "], keyCap("⏎", theme, true), [` ${t("yes")}  `, "t2"], keyCap("esc", theme), [` ${t("cancel")}`, "t2"]], cols, false), theme));
-  } else if (state.mode === "write") out.push(paint(fitLine([["› ", "t3"], [state.input, "t1"], ["▌", "t3"]], cols, false), theme));
+  } else if (state.mode === "write") out.push(paint(fitLine([[`${t("To {0}", state.target?.name ?? "—")} `, "t3"], ["› ", "t3"], [state.input, "t1"], ["▌", "t3"]], cols, false), theme));
   else out.push(paint(fitLine([["› ", "t3"], [placeholder(state), "t4"]], cols, false), theme));
   out.push(paint(fitLine([[hintText(state), "t4"]], cols, false), theme));
   return out;

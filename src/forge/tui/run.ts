@@ -1,6 +1,10 @@
 /**
  * Driver of the board: owns the terminal, polls the daemon and turns keys into the injected actions.
  * Daemon access (`load`, `loadMessages`, `act`) is injected, so tests need neither a TTY nor a daemon.
+ *
+ * Every async result is merged into the CURRENT state after the await (`update`), never into a copy read before it:
+ * a refresh that finishes late must not undo a key pressed while it was running (an open confirm line, typed text,
+ * an overlay, the cursor).
  */
 import { t } from "../locale";
 import { initialBoard, reduceBoard, renderBoard, withData, withMessages, withOffline, wantedConversation, type BoardAction, type BoardData, type BoardMessage, type BoardState } from "./board";
@@ -11,6 +15,7 @@ export interface BoardIo {
   input: TermInput;
   output: TermOutput & { isTTY?: boolean };
   proc?: TermProcess;
+  stderr?: (text: string) => void;
   env?: NodeJS.ProcessEnv;
   loggedIn: boolean;
   load(): Promise<BoardData>;
@@ -24,28 +29,32 @@ const oneLine = (e: unknown) => sanitize(e instanceof Error ? e.message : e).sli
 
 export async function runBoard(io: BoardIo): Promise<void> {
   const base = detectTheme(io.env ?? process.env, io.output);
-  const term = openTerminal({ input: io.input, output: io.output, proc: io.proc });
+  const term = openTerminal({ input: io.input, output: io.output, proc: io.proc, stderr: io.stderr });
   let state: BoardState = initialBoard(io.loggedIn);
   let finish!: () => void;
   const done = new Promise<void>(resolve => { finish = resolve; });
   let loadingMessages: string | null = null;
+  let reloading = false;
   const draw = () => { if (!term.closed) term.draw(renderBoard(state, term.size(), base)); };
+  const update = (change: (current: BoardState) => BoardState) => { state = change(state); draw(); };
   const close = () => { clearInterval(timer); term.close(); finish(); };
+  term.onClose(close);
 
   const pullMessages = async () => {
     const id = wantedConversation(state);
     if (!id || loadingMessages === id) return;
     loadingMessages = id;
-    try { const messages = await io.loadMessages(id); state = withMessages(state, id, messages); }
-    catch (error) { state = { ...state, notice: oneLine(error), messagesFor: id, messages: [] }; }
+    try { const messages = await io.loadMessages(id); update(s => withMessages(s, id, messages)); }
+    catch (error) { const notice = oneLine(error); update(s => ({ ...s, notice, messagesFor: id, messages: [] })); }
     loadingMessages = null;
-    draw();
     void pullMessages();
   };
   const reload = async () => {
-    try { state = withData(state, await io.load()); }
-    catch (error) { state = withOffline(state, oneLine(error)); }
-    draw();
+    if (reloading) return;
+    reloading = true;
+    try { const data = await io.load(); update(s => withData(s, data)); }
+    catch (error) { const reason = oneLine(error); update(s => withOffline(s, reason)); }
+    reloading = false;
     void pullMessages();
   };
   const timer = setInterval(() => { if (!term.closed) void reload(); }, io.pollMs ?? 3000);
@@ -60,13 +69,15 @@ export async function runBoard(io: BoardIo): Promise<void> {
     const action = r.action;
     if (!action) return;
     void (async () => {
+      let line = t("Reconnecting…");
       if (action.type !== "reconnect") {
-        try { state = { ...state, notice: oneLine(await io.act(action)) }; }
-        catch (error) { state = { ...state, notice: oneLine(error) }; }
-      } else state = { ...state, notice: t("Reconnecting…") };
+        try { line = oneLine(await io.act(action)); } catch (error) { line = oneLine(error); }
+      }
+      // `pending` stays set until the action has finished AND the data was reloaded; the confirm line is already gone.
+      update(s => ({ ...s, notice: line, confirm: null }));
+      reloading = false;
       await reload();
-      if (action.type === "send" && state.messagesFor === action.conversationId) state = { ...state, messagesFor: null };
-      draw();
+      update(s => ({ ...s, pending: false, messagesFor: action.type === "send" && s.messagesFor === action.conversationId ? null : s.messagesFor }));
       void pullMessages();
     })();
   });
