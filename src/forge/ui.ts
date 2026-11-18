@@ -1,8 +1,8 @@
 /**
  * braavo quiet workbench UI — restrained ANSI palette + face/edge coin.
  *
- * Ilık Grafit ANSI 256 (dark/light): primary = done 247/242, highlight = working 179/136,
- * error 174/131, secondary = queued 243/245. No green, no blue. Unknown system
+ * Ilık Grafit ANSI 256 (dark/light): primary = done 247/242, highlight = working 179/130,
+ * error 174/131, secondary = queued 243/243. No green, no blue. Unknown system
  * backgrounds preserve the user's default foreground.
  *
  * Generated colors disable on redirected streams, in dumb terminals, or when
@@ -15,7 +15,7 @@ export type TerminalTheme = "light" | "dark" | "system";
 // Foregrounds only. The terminal background and user configuration are never changed.
 const PALETTES = {
   dark: { primary: 247, highlight: 179, error: 174, secondary: 243 },
-  light: { primary: 242, highlight: 136, error: 131, secondary: 245 },
+  light: { primary: 242, highlight: 130, error: 131, secondary: 243 },
 };
 function paletteFor(theme: string | undefined, background: string | undefined) {
   const explicit = theme?.trim().toLowerCase();

@@ -130,7 +130,7 @@ describe("approved coin terminal motion", () => {
     vi.stubEnv("BRAAVO_THEME", "invalid"); expect(makeUi({ tty: true }).primary("x")).toBe("\x1b[39mx\x1b[0m");
   });
 
-  it("keeps the Ilık Grafit light/dark palette readable (>= 3:1, design table values) without faint styling", () => {
+  it("keeps the Ilık Grafit light/dark palette text above 4.5:1 without faint styling", () => {
     function luminance(rgb: number[]) {
       const linear = rgb.map(c => { const s = c / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
       return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
@@ -144,7 +144,7 @@ describe("approved coin terminal motion", () => {
       const ui = makeUi({ tty: true, stderrTty: true, theme }); const bg = theme === "light" ? 1 : 0;
       for (const format of [ui.primary, ui.ember, ui.molten, ui.steel, ui.dim]) {
         const text = format("readable"); const code = Number(/38;5;(\d+)m/.exec(text)![1]); const fg = luminance(ansiRgb(code));
-        expect((Math.max(bg, fg) + 0.05) / (Math.min(bg, fg) + 0.05), `${theme}:${code}`).toBeGreaterThanOrEqual(3);
+        expect((Math.max(bg, fg) + 0.05) / (Math.min(bg, fg) + 0.05), `${theme}:${code}`).toBeGreaterThanOrEqual(4.5);
         expect(text).not.toContain("\x1b[2m");
       }
       expect(makeUi({ tty: false, stderrTty: false, theme }).primary("plain")).toBe("plain");

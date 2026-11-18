@@ -1663,7 +1663,7 @@ async function main(): Promise<void> {
       let applyAll = has(flags, "yes"); let warned = false;
       const approve = async (change: { diff: string; review?: { verdict: string; reason: string } }): Promise<boolean> => {
         console.log(`\n${paint(change.diff)}`);
-        if (change.review) console.log(change.review.verdict === "ok" ? color(247, 242, `review: ${change.review.verdict} · ${change.review.reason}`) : color(179, 136, `review: ${change.review.verdict} · ${change.review.reason}`));
+        if (change.review) console.log(change.review.verdict === "ok" ? color(247, 242, `review: ${change.review.verdict} · ${change.review.reason}`) : color(179, 130, `review: ${change.review.verdict} · ${change.review.reason}`));
         // A risky review always asks a human, even with --yes; without a terminal it is refused.
         const risky = change.review?.verdict === "risky";
         if (applyAll && !risky) return true;
@@ -1695,7 +1695,7 @@ async function main(): Promise<void> {
         root, task, call, plan: has(flags, "plan"), maxTurns: Math.min(Number(flag(flags, "max-turns")) || 25, 100), approve, checkpointDir, sessionId, signal: controller.signal,
         onEvent: ev => {
           if (ev.type === "text") process.stdout.write(ev.text);
-          else if (ev.type === "tool") console.error(color(243, 245, `· ${ev.name} ${ev.summary}`));
+          else if (ev.type === "tool") console.error(color(243, 243, `· ${ev.name} ${ev.summary}`));
         },
       });
       process.stdout.write("\n");
