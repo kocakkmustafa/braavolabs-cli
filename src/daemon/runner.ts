@@ -156,7 +156,7 @@ async function runRssRoutine(store: DaemonStore, routine: Routine, agent: Agent,
   const failed: string[] = []; let baseline = 0;
   for (const url of urls) {
     try {
-      const page = await fetchChecked(url, policy, { ...deps.rss?.browse, acceptHeader: "application/rss+xml,application/atom+xml,application/xml;q=0.9,text/xml;q=0.9,*/*;q=0.1", accept: /xml|rss|atom|text\/plain/i });
+      const page = await fetchChecked(url, policy, { ...deps.rss?.browse, acceptHeader: "application/rss+xml,application/atom+xml,application/xml;q=0.9,text/xml;q=0.9,*/*;q=0.1", accept: /xml|rss|atom|text\/plain/i, httpsOnly: true });
       const items = parseFeed(page.body);
       if (!items.length) { failed.push(url); continue; }
       const before = seen[url];
@@ -182,7 +182,10 @@ async function runRssRoutine(store: DaemonStore, routine: Routine, agent: Agent,
       checkBudgets(store, routine.company_id, agent.id, new Date().toISOString(), deps.notify);
     } catch (error) { note = `summary failed: ${redact(error instanceof Error ? error.message : String(error), call.apiKey, 120)}`; }
   } else note = `no summary: ${call.message}`;
-  const body = summary ?? shown.map(i => `- ${i.title}${i.link ? ` (${i.link})` : ""}`).join("\n");
+  // Fallback text is written to company memory: feed text is one short line, links only if http(s), fenced as untrusted.
+  const line = (t: string, n: number) => t.replace(/\s+/g, " ").trim().slice(0, n);
+  const okLink = (l: string) => { try { return /^https?:$/.test(new URL(l).protocol) ? line(l, 300) : ""; } catch { return ""; } };
+  const body = summary ?? untrusted({ url: urls[0], title: "feed items", truncated: false, text: shown.map(i => `- ${line(i.title, 200)}${okLink(i.link) ? ` (${okLink(i.link)})` : ""}`).join("\n") });
   appendFinding(deps.memory?.root ?? deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at: new Date().toISOString(), title: routine.name, pages: [], summary: body });
   deps.memory?.commit(`${agent.id}: findings/${agent.role}.md`);
   store.activity({ companyId: routine.company_id, actor: agent.id, verb: "found-change", objectType: "routine", objectId: routine.id, summary: `${fresh.length} new feed items` });
