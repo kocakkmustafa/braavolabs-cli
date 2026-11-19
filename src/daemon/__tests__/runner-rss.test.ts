@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,7 +53,7 @@ describe("rss preflight", () => {
   it("rejects loopback, private and unresolvable-to-public hosts", async () => {
     for (const u of ["https://localhost/f.xml", "https://127.0.0.1/f.xml", "https://10.0.0.5/f.xml", "https://169.254.169.254/latest"]) {
       const { store, rt, deps, transport } = setup([u], () => feed("a"));
-      expect(await runRoutine(store, rt.id, deps), u).toMatchObject({ outcome: "failed", note: "1 feeds · 1 failed" });
+      expect(await runRoutine(store, rt.id, deps), u).toMatchObject({ outcome: "failed", note: expect.stringMatching(/^1 feeds · 1 failed: [\w.]+ \(http 403\)$/) });
       expect(transport).not.toHaveBeenCalled();
     }
     const { store, rt, deps, transport } = setup(["https://evil.example/f.xml"], () => feed("a"));
@@ -74,7 +74,7 @@ describe("rss preflight hardening", () => {
     const { store, rt, deps, transport } = setup(["https://blog.example/feed.xml"], () => feed("a"));
     transport.mockImplementation(async () => ({ status: 302, headers: { location: "http://blog.example/feed.xml" }, body: "" }));
     const r = await runRoutine(store, rt.id, deps);
-    expect(r).toMatchObject({ outcome: "failed", note: "1 feeds · 1 failed" });
+    expect(r).toMatchObject({ outcome: "failed", note: expect.stringMatching(/^1 feeds · 1 failed: blog\.example \(http 403\)$/) });
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
@@ -93,5 +93,51 @@ describe("rss preflight hardening", () => {
     expect(md).not.toContain("javascript:");
     expect(md).toContain("(https://blog.example/y)");
     expect(md).toMatch(/<untrusted_web_content[\s\S]*<\/untrusted_web_content>/);
+  });
+});
+
+describe("rss preflight state", () => {
+  const seenFile = (deps: RunnerDeps, id: string) => join(deps.monitorRoot!, id.replace(/[^A-Za-z0-9_-]/g, ""), "rss-seen.json");
+
+  it("shows at most 30 new items per run and leaves the rest for the next run", async () => {
+    let xml = feed("base");
+    const { store, rt, deps } = setup(["https://blog.example/feed.xml"], () => xml);
+    await runRoutine(store, rt.id, deps);
+    xml = feed(...Array.from({ length: 35 }, (_, i) => `n${i}`), "base");
+    const r1 = await runRoutine(store, rt.id, deps);
+    expect(r1.note).toContain("30 new");
+    expect(r1.note).toContain("+5 more next run");
+    const r2 = await runRoutine(store, rt.id, deps);
+    expect(r2.outcome).toBe("changed");
+    expect(r2.note).toContain("5 new");
+    expect((await runRoutine(store, rt.id, deps)).outcome).toBe("no-change");
+  });
+
+  it("does not advance seen when the finding cannot be saved, and leaves no temp file", async () => {
+    let xml = feed("a");
+    const { store, rt, deps } = setup(["https://blog.example/feed.xml"], () => xml);
+    await runRoutine(store, rt.id, deps);
+    const before = readFileSync(seenFile(deps, rt.id), "utf8");
+    xml = feed("b", "a");
+    const blocker = join(deps.monitorRoot!, "blocker");
+    writeFileSync(blocker, "x");
+    const r = await runRoutine(store, rt.id, { ...deps, memoryRoot: join(blocker, "inside") });
+    expect(r.outcome).toBe("failed");
+    expect(r.note).toContain("finding not saved");
+    expect(readFileSync(seenFile(deps, rt.id), "utf8")).toBe(before);
+    expect(readdirSync(join(deps.monitorRoot!, rt.id.replace(/[^A-Za-z0-9_-]/g, ""))).filter(f => f.endsWith(".tmp"))).toEqual([]);
+    expect((await runRoutine(store, rt.id, deps)).outcome).toBe("changed");
+  });
+
+  it("re-baselines a feed whose stored state is not an array and names only the host of a failing feed", async () => {
+    const url = "https://blog.example/feed.xml?token=SECRET";
+    const { store, rt, deps, transport } = setup([url], () => feed("a"));
+    await runRoutine(store, rt.id, deps);
+    writeFileSync(seenFile(deps, rt.id), JSON.stringify({ [url]: "oops" }));
+    expect((await runRoutine(store, rt.id, deps)).note).toBe("1 feeds · 1 baseline");
+    transport.mockImplementation(async () => ({ status: 500, headers: {}, body: "" }));
+    const f = await runRoutine(store, rt.id, deps);
+    expect(f.note).toBe("1 feeds · 1 failed: blog.example (http 502)");
+    expect(f.note).not.toContain("SECRET");
   });
 });
