@@ -175,7 +175,7 @@ const defaultLookup = async (host: string) => (await dnsLookup(host, { all: true
  * followed by hand (each hop checked again), body capped. `accept` lists the content types the
  * caller can use (any type when empty).
  */
-export async function fetchChecked(raw: string, policy: BrowserPolicy, deps: BrowseDeps & { accept?: RegExp; acceptHeader?: string } = {}): Promise<{ url: string; type: string; body: string }> {
+export async function fetchChecked(raw: string, policy: BrowserPolicy, deps: BrowseDeps & { accept?: RegExp; acceptHeader?: string; httpsOnly?: boolean } = {}): Promise<{ url: string; type: string; body: string }> {
   const transport = deps.transport ?? pinnedRequest;
   const lookup = deps.lookup ?? defaultLookup;
   const signal = AbortSignal.timeout(deps.timeoutMs ?? 20_000);
@@ -184,6 +184,7 @@ export async function fetchChecked(raw: string, policy: BrowserPolicy, deps: Bro
     const reason = blockedReason(current, policy);
     if (reason) throw new BrowseError(403, `${reason}: ${current.slice(0, 200)}`);
     const url = new URL(current);
+    if (deps.httpsOnly && url.protocol !== "https:") throw new BrowseError(403, `only https (a redirect may not downgrade): ${current.slice(0, 200)}`);
     const host = url.hostname.replace(/^\[|\]$/g, "");
     let address = host;
     if (!isIP(host)) {
