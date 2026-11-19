@@ -6,10 +6,12 @@ import { budgetBlock, checkBudgets } from "./budget";
 import { collectStream } from "../core/stream";
 import { DEFAULT_INFERENCE_TIMEOUT_MS } from "../forge/request-scope";
 import { effortNote, prepareCall, redact, type ProviderDeps } from "./provider";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { CONFIG_DIR } from "../forge/config";
+import { fetchChecked, loadPolicy, untrusted, UNTRUSTED_NOTE, type BrowseDeps, type BrowserPolicy } from "./browse";
+import { parseFeed } from "./triggers";
 import { checkMonitor, makeMonitorStore, summaryPrompt, type CheckOutcome, type MonitorDef, type NotifyKind } from "../forge/monitor";
 /**
  * Routine runner: one due routine → one model call for its agent (./provider).
@@ -22,7 +24,10 @@ import { checkMonitor, makeMonitorStore, summaryPrompt, type CheckOutcome, type 
  * the company's markdown memory and a notification goes out. Without a usable
  * model the raw signals are still recorded and notified.
  *
- * Not yet: tools/agent loop, rss/script preflight, per-model USD pricing
+ * RSS preflight: feeds are fetched model-free under the browser URL policy (https only, no private
+ * addresses, size/time limits); only unseen items reach the model (as untrusted content).
+ *
+ * Not yet: tools/agent loop, script preflight, per-model USD pricing
  * (cost events carry tokens, usd stays 0).
  */
 
@@ -40,6 +45,8 @@ export interface RunnerDeps extends ProviderDeps {
   worker?: import("./workers").WorkerDeps;
   /** Skills (plan 5.3): an agent's task runs with its skills' instructions. */
   skills?: { promptFor(names: string[]): string };
+  /** RSS preflight: browser URL policy (default ~/.braavo/browser.json) and fetch internals (tests). */
+  rss?: { policy?: BrowserPolicy; browse?: BrowseDeps };
   /** Desktop/phone notification for a finding; failures are ignored. */
   notify?: (title: string, body: string) => void;
 }
@@ -103,6 +110,7 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   try { preflight = JSON.parse(routine.preflight); } catch { preflight = {}; }
   if (preflight.type === "web") return runWebRoutine(store, routine, agent, preflight as { urls?: unknown; notify?: unknown }, deps, blocked);
   if (preflight.type === "consolidate") return runConsolidation(store, routine, agent, deps, blocked ?? (setupNeeded ? SETUP_NOTE : null));
+  if (preflight.type === "rss" && !blocked && !setupNeeded) return runRssRoutine(store, routine, agent, preflight as { urls?: unknown }, deps);
   if (blocked) return { outcome: "skipped-budget", note: blocked };
   if (setupNeeded) return { outcome: "failed", note: SETUP_NOTE };
   if (preflight.type !== "none") return { outcome: "skipped-preflight-unsupported", note: `preflight ${String(preflight.type)} not implemented` };
@@ -129,6 +137,57 @@ export async function runRoutine(store: DaemonStore, routineId: string, deps: Ru
   const note = [conversationId, `${result.inputTokens}/${result.outputTokens} tokens`, result.stopReason !== "end_turn" ? `stop ${result.stopReason}` : undefined, effortNote(call.effort)]
     .filter(Boolean).join(" · ");
   return { outcome: "ran", note };
+}
+
+const RSS_MAX_SEEN = 500;
+
+/** RSS preflight: unseen feed items (first run = baseline, nothing reported) go to the agent, fenced as untrusted. */
+async function runRssRoutine(store: DaemonStore, routine: Routine, agent: Agent, preflight: { urls?: unknown }, deps: RunnerDeps): Promise<RunResult> {
+  const urls = Array.isArray(preflight.urls) ? preflight.urls.filter((u): u is string => typeof u === "string").slice(0, 20) : [];
+  if (!urls.length) return { outcome: "failed", note: "rss preflight has no URLs" };
+  const insecure = urls.find(u => !/^https:\/\//i.test(u));
+  if (insecure) return { outcome: "failed", note: `rss preflight: https feeds only (${insecure.slice(0, 80)})` };
+  const dir = join(deps.monitorRoot ?? join(CONFIG_DIR, "monitor", "routines"), routine.id.replace(/[^A-Za-z0-9_-]/g, ""));
+  const stateFile = join(dir, "rss-seen.json");
+  let seen: Record<string, string[]> = {};
+  try { seen = JSON.parse(readFileSync(stateFile, "utf8")) as Record<string, string[]>; } catch { /* first run */ }
+  const policy = deps.rss?.policy ?? loadPolicy(join(CONFIG_DIR, "browser.json"));
+  const fresh: Array<{ feed: string; title: string; link: string; summary: string }> = [];
+  const failed: string[] = []; let baseline = 0;
+  for (const url of urls) {
+    try {
+      const page = await fetchChecked(url, policy, { ...deps.rss?.browse, acceptHeader: "application/rss+xml,application/atom+xml,application/xml;q=0.9,text/xml;q=0.9,*/*;q=0.1", accept: /xml|rss|atom|text\/plain/i });
+      const items = parseFeed(page.body);
+      if (!items.length) { failed.push(url); continue; }
+      const before = seen[url];
+      if (!before) baseline++;
+      else for (const i of items) if (!before.includes(i.id)) fresh.push({ feed: url, title: i.title || i.link, link: i.link, summary: i.summary });
+      seen[url] = [...items.map(i => i.id), ...(before ?? [])].filter((id, n, all) => all.indexOf(id) === n).slice(0, RSS_MAX_SEEN);
+    } catch { failed.push(url); }
+  }
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(stateFile, JSON.stringify(seen), { mode: 0o600 });
+  const counts = [`${urls.length} feeds`, baseline ? `${baseline} baseline` : undefined, failed.length ? `${failed.length} failed` : undefined].filter(Boolean).join(" · ");
+  if (!fresh.length) return { outcome: failed.length === urls.length ? "failed" : "no-change", note: counts };
+
+  const shown = fresh.slice(0, 30);
+  const prompt = [routine.prompt, "", UNTRUSTED_NOTE, ...shown.map(i => untrusted({ url: i.link || i.feed, title: i.title, text: i.summary, truncated: false }))].join("\n");
+  const call = prepareCall({ provider: agent.provider, model: agent.model, effort: agent.effort, effortRounding: agent.effort_rounding }, deps);
+  let summary: string | undefined; let note: string | undefined;
+  if (call.ok) {
+    try {
+      const r = await collectStream(call.stream({ system: agent.system_prompt || undefined, messages: [{ role: "user", content: prompt }] }, AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS)));
+      summary = r.text.trim() || undefined;
+      store.recordCost({ companyId: routine.company_id, agentId: agent.id, provider: agent.provider, model: agent.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens });
+      checkBudgets(store, routine.company_id, agent.id, new Date().toISOString(), deps.notify);
+    } catch (error) { note = `summary failed: ${redact(error instanceof Error ? error.message : String(error), call.apiKey, 120)}`; }
+  } else note = `no summary: ${call.message}`;
+  const body = summary ?? shown.map(i => `- ${i.title}${i.link ? ` (${i.link})` : ""}`).join("\n");
+  appendFinding(deps.memory?.root ?? deps.memoryRoot ?? join(CONFIG_DIR, "memory"), routine.company_id, agent.role, { at: new Date().toISOString(), title: routine.name, pages: [], summary: body });
+  deps.memory?.commit(`${agent.id}: findings/${agent.role}.md`);
+  store.activity({ companyId: routine.company_id, actor: agent.id, verb: "found-change", objectType: "routine", objectId: routine.id, summary: `${fresh.length} new feed items` });
+  try { deps.notify?.(`${agent.name}: ${fresh.length} new item${fresh.length > 1 ? "s" : ""}`, body.split("\n").find(l => l.trim())?.replace(/^[-*•]\s*/, "").slice(0, 180) ?? ""); } catch { /* best effort */ }
+  return { outcome: "changed", note: [counts, `${fresh.length} new`, note].filter(Boolean).join(" · ") };
 }
 
 type Routine = NonNullable<ReturnType<DaemonStore["getRoutine"]>>;
